@@ -12,8 +12,8 @@ from typing import Any
 
 import httpx
 from tonomyx.contracts.envelope import ResultEnvelope, ResultStatus, TaskEnvelope
-from tonomyx.de.executor import _arguments, _invented_numbers, _plain, _Record
-from tonomyx.tools.registry import ToolContext, ToolDenied, ToolNotFound, ToolRegistry
+from tonomyx.de.executor import OllamaExecutor, _arguments, _plain, _Record
+from tonomyx.tools.registry import ToolContext, ToolRegistry
 from tonomyx.tools.schema import tool_schemas
 
 from specdx.config import OLLAMA_URL
@@ -21,6 +21,12 @@ from specdx.interpreters.prompt import TellVariants, system_prompt
 from specdx.spec.tell import TellCorpus
 
 SEARCH_SPEC = "search_spec"
+SEARCH_K = 5
+# whole passages only, never a sliced JSON
+SEARCH_REPLY_LIMIT = 12000
+# Ollama's default context would silently drop history once search replies are this long
+NUM_CTX = 16384
+_REPLY_LIMIT = 4000
 SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -36,7 +42,6 @@ SEARCH_SCHEMA: dict[str, Any] = {
         },
     },
 }
-_REPLY_LIMIT = 4000
 
 
 class SpecInterpreterExecutor:
@@ -60,6 +65,7 @@ class SpecInterpreterExecutor:
         self.variant, self.seed, self.temperature = variant, seed, temperature
         self.base_url, self.max_steps, self.timeout = base_url, max_steps, timeout
         self.transport, self.suffix = transport, suffix
+        self._gated = OllamaExecutor(model, tools)
 
     def run(self, task: TaskEnvelope, ctx: ToolContext) -> ResultEnvelope:
         schemas = [*tool_schemas(self.tools, ctx.pack, names=ctx.token.tools), SEARCH_SCHEMA]
@@ -96,7 +102,7 @@ class SpecInterpreterExecutor:
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model, "messages": messages, "tools": schemas, "stream": False,
-            "options": {"temperature": self.temperature, "seed": self.seed},
+            "options": {"temperature": self.temperature, "seed": self.seed, "num_ctx": NUM_CTX},
         }
         if self.model.startswith("qwen3"):
             body["think"] = False
@@ -109,31 +115,48 @@ class SpecInterpreterExecutor:
         function = call.get("function") or {}
         name = str(function.get("name", ""))
         args: dict[str, Any] = {}
-        payload: Any
         try:
             args = _arguments(function.get("arguments"))
             if name == SEARCH_SPEC:
-                hits = self.corpus.search(str(args.get("query", "")), k=5)
-                payload = {"passages": [{"id": c.id, "text": c.text} for c in hits]}
+                hits = self.corpus.search(str(args.get("query", "")), k=SEARCH_K)
+                # Build payload passage by passage, adding only if it fits within SEARCH_REPLY_LIMIT
+                passages: list[dict[str, Any]] = []
+                for i, hit in enumerate(hits):
+                    passage = {"id": hit.id, "text": hit.text}
+                    # Always include the top passage, even if it exceeds limit
+                    if i == 0:
+                        payload_test = {"passages": [passage]}
+                        serialized = json.dumps(
+                            payload_test, ensure_ascii=False, default=str
+                        )
+                        if len(serialized) > SEARCH_REPLY_LIMIT:
+                            # Trim the text to fit and append "…"
+                            while len(passage["text"]) > 0:
+                                passage["text"] = passage["text"][:-1]
+                                payload_test = {"passages": [passage]}
+                                serialized = json.dumps(
+                                    payload_test, ensure_ascii=False, default=str
+                                )
+                                if len(serialized) <= SEARCH_REPLY_LIMIT:
+                                    passage["text"] += "…"
+                                    break
+                        passages.append(passage)
+                    else:
+                        # Try adding this passage
+                        payload_test = {"passages": passages + [passage]}
+                        serialized = json.dumps(payload_test, ensure_ascii=False, default=str)
+                        if len(serialized) <= SEARCH_REPLY_LIMIT:
+                            passages.append(passage)
+                        else:
+                            # Stop adding more passages
+                            break
+                payload = {"passages": passages}
                 record.calls.append({"name": name, "args": args, "outcome": "ok"})
+                content = json.dumps(payload, ensure_ascii=False, default=str)
+                return {"role": "tool", "tool_name": name, "content": content}
             else:
-                invented = _invented_numbers(name, args, ctx.pack.non_canon_columns)
-                if invented:
-                    raise ToolDenied(
-                        f"the canon leaves {', '.join(invented)} blank: pass null instead"
-                    )
-                with ctx.repo.conn.transaction():
-                    result = self.tools.invoke(name, ctx, **args)
-                record.ok(name, args, result)
-                payload = result
-        except ToolDenied as exc:
-            record.failed(name, args, "denied")
-            payload = {"error": "denied", "tool": name, "reason": str(exc)}
-        except ToolNotFound:
-            record.failed(name, args, "unknown")
-            payload = {"error": "unknown tool", "tool": name}
+                return self._gated._execute(call, ctx, record)
         except Exception as exc:  # noqa: BLE001 - the model is told what broke
-            record.failed(name, args, "error")
             payload = {"error": type(exc).__name__, "tool": name, "reason": str(exc)}
         content = json.dumps(payload, ensure_ascii=False, default=str)
         return {"role": "tool", "tool_name": name, "content": content[:_REPLY_LIMIT]}

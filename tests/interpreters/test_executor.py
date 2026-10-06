@@ -5,6 +5,7 @@ import httpx
 import pytest
 from tonomyx.contracts.clock import FixedClock
 from tonomyx.contracts.envelope import ResultStatus
+from tonomyx.de.executor import _Record
 from tonomyx.de.runtime import build_runtime
 from tonomyx.flow.case_0031 import open_case
 from tonomyx.tools.catalog import build_registry
@@ -71,7 +72,7 @@ def test_the_token_tools_and_search_spec_are_offered(run_de) -> None:
 def test_sampling_options_and_a_prompt_without_playbooks(run_de) -> None:
     transport, seen = _scripted(_say("Xong."))
     run_de(transport)
-    assert seen[0]["options"] == {"temperature": 0.7, "seed": 7}
+    assert seen[0]["options"] == {"temperature": 0.7, "seed": 7, "num_ctx": 16384}
     system = seen[0]["messages"][0]["content"]
     assert "search_spec" in system and "kiểm tra khả năng đáp ứng" in system
     assert "Hướng dẫn nghiệp vụ" not in system
@@ -119,3 +120,98 @@ def test_a_timeout_ends_the_step_not_the_case(db, pack, corpus) -> None:
     assert case.statuses["DE-SM-02:draft_quote"] == "error"
     assert "ollama call failed" in case.claims["DE-SM-02:draft_quote"]
     assert case.statuses["P2:decide_quote"] == "error"
+
+
+def test_search_reply_includes_all_passages_when_they_fit(pack) -> None:
+    """A corpus of 5 chunks each ~1500 chars → the reply parses as JSON and holds all 5 passages."""
+    from specdx.interpreters.executor import SEARCH_REPLY_LIMIT
+
+    # Create a mock corpus with small passages
+    class MockChunk:
+        def __init__(self, id_str, text):
+            self.id = id_str
+            self.text = text
+
+    class MockCorpus:
+        def search(self, query, k):
+            # Return 5 chunks of ~1500 chars each
+            text_1500 = "A" * 1500
+            return [
+                MockChunk("chunk-1", text_1500),
+                MockChunk("chunk-2", text_1500),
+                MockChunk("chunk-3", text_1500),
+                MockChunk("chunk-4", text_1500),
+                MockChunk("chunk-5", text_1500),
+            ]
+
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), MockCorpus(), load_variants()
+    )
+
+    # Simulate a search_spec call
+    call = {"function": {"name": "search_spec", "arguments": json.dumps({"query": "test"})}}
+    record = _Record()
+
+    class MockToolContext:
+        class MockPack:
+            non_canon_columns = {}
+        class MockRepo:
+            pass
+        pack = MockPack()
+        repo = MockRepo()
+
+    result = executor._execute(call, MockToolContext(), record)
+
+    # Verify the response parses as JSON
+    reply_json = json.loads(result["content"])
+    # Verify all 5 passages are included
+    assert len(reply_json["passages"]) == 5
+    # Verify the reply is within limits
+    assert len(result["content"]) <= SEARCH_REPLY_LIMIT
+
+
+def test_search_reply_handles_large_passages(pack) -> None:
+    """A corpus of 5 chunks each ~5000 chars → includes top passage, stays within limit."""
+    from specdx.interpreters.executor import SEARCH_REPLY_LIMIT
+
+    class MockChunk:
+        def __init__(self, id_str, text):
+            self.id = id_str
+            self.text = text
+
+    class MockCorpus:
+        def search(self, query, k):
+            # Return 5 chunks of ~5000 chars each
+            text_5000 = "B" * 5000
+            return [
+                MockChunk("chunk-1", text_5000),
+                MockChunk("chunk-2", text_5000),
+                MockChunk("chunk-3", text_5000),
+                MockChunk("chunk-4", text_5000),
+                MockChunk("chunk-5", text_5000),
+            ]
+
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), MockCorpus(), load_variants()
+    )
+
+    # Simulate a search_spec call
+    call = {"function": {"name": "search_spec", "arguments": json.dumps({"query": "test"})}}
+    record = _Record()
+
+    class MockToolContext:
+        class MockPack:
+            non_canon_columns = {}
+        class MockRepo:
+            pass
+        pack = MockPack()
+        repo = MockRepo()
+
+    result = executor._execute(call, MockToolContext(), record)
+
+    # Verify the response parses as JSON
+    reply_json = json.loads(result["content"])
+    # Verify at least the top passage is included
+    assert len(reply_json["passages"]) >= 1
+    # Verify the reply is within limits
+    assert len(result["content"]) <= SEARCH_REPLY_LIMIT
