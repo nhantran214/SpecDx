@@ -115,6 +115,10 @@ class PackDatabase:
         pack_dir = pack_dir.resolve()
         digest = pack_digest(pack_dir)
         if digest != self._digest:
+            self._digest = None
+            self._settings = None
+            self._pack = None
+            self._background = {}
             with psycopg.connect(self.url, row_factory=dict_row) as conn:
                 if _marker(conn) != digest:
                     drop_everything(conn)
@@ -151,7 +155,9 @@ class PackDatabase:
             try:
                 with conn.transaction():
                     write_rows(conn, self.pack, case)
-            except psycopg.Error:
+            except (psycopg.OperationalError, psycopg.InterfaceError):
+                raise
+            except psycopg.DatabaseError:
                 return None
             return capture_state(conn, self.pack, state.steps)
 

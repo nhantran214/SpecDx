@@ -21,7 +21,9 @@ def reconcile_value(conn: psycopg.Connection[dict[str, Any]], po: str) -> str:
     try:
         with conn.transaction():
             row = conn.execute("SELECT fn_reconcile(%s) AS r", (po,)).fetchone()
-    except psycopg.Error:
+    except (psycopg.OperationalError, psycopg.InterfaceError):
+        raise
+    except psycopg.DatabaseError:
         return ERROR
     return "" if row is None or row["r"] is None else str(row["r"])
 

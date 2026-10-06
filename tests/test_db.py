@@ -1,9 +1,11 @@
 import shutil
 
+import psycopg
 import pytest
 
 from specdx.config import BASE_PACK
 from specdx.db import pack_digest, split_background
+from specdx.observe.state import reconcile_value
 from specdx.types import State
 
 pytestmark = pytest.mark.db
@@ -21,8 +23,8 @@ def test_a_run_starts_from_master_data_and_background_rows(db) -> None:
 def test_whatever_a_run_writes_is_rolled_back(db) -> None:
     with db.isolated() as conn:
         conn.execute("INSERT INTO cases (case_id, tieu_de, trang_thai) VALUES ('C-X', 't', 's')")
-    with db.isolated() as conn:
-        assert conn.execute("SELECT count(*) AS n FROM cases").fetchone()["n"] == 0
+    with psycopg.connect(db.url) as other:
+        assert other.execute("SELECT count(*) FROM cases").fetchone()[0] == 0
 
 
 def test_the_golden_state_is_the_canon_end_state(golden) -> None:
@@ -62,3 +64,25 @@ def test_the_digest_changes_with_any_file(tmp_path) -> None:
     before = pack_digest(copy)
     (copy / "kb" / "KB-0001.md").write_text("changed", encoding="utf-8")
     assert pack_digest(copy) != before
+
+
+def test_use_recovers_from_failed_reload(db, tmp_path) -> None:
+    """After failed reload, use(BASE_PACK) reloads, not skipping due to cached state."""
+    broken = tmp_path / "pack"
+    shutil.copytree(BASE_PACK, broken)
+    (broken / "targets" / "postgres" / "guardrails.sql").write_text(
+        "THIS IS NOT SQL;", encoding="utf-8"
+    )
+    with pytest.raises(psycopg.Error):
+        db.use(broken)
+    db.use(BASE_PACK)
+    with db.isolated() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM cust").fetchone()["n"] > 0
+
+
+def test_reconcile_value_raises_on_closed_connection(db) -> None:
+    """reconcile_value raises on connection errors, not returning ERROR."""
+    conn = psycopg.connect(db.url)
+    conn.close()
+    with pytest.raises(psycopg.Error):
+        reconcile_value(conn, "PO-0015")
