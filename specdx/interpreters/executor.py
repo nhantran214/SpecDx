@@ -114,49 +114,53 @@ class SpecInterpreterExecutor:
     def _execute(self, call: dict[str, Any], ctx: ToolContext, record: _Record) -> dict[str, Any]:
         function = call.get("function") or {}
         name = str(function.get("name", ""))
+        # Route gated tools directly to vendored executor before parsing arguments
+        if name != SEARCH_SPEC:
+            return self._gated._execute(call, ctx, record)
+        # For search_spec, parse arguments and handle within this method
         args: dict[str, Any] = {}
         try:
             args = _arguments(function.get("arguments"))
-            if name == SEARCH_SPEC:
-                hits = self.corpus.search(str(args.get("query", "")), k=SEARCH_K)
-                # Build payload passage by passage, adding only if it fits within SEARCH_REPLY_LIMIT
-                passages: list[dict[str, Any]] = []
-                for i, hit in enumerate(hits):
-                    passage = {"id": hit.id, "text": hit.text}
-                    # Always include the top passage, even if it exceeds limit
-                    if i == 0:
-                        payload_test = {"passages": [passage]}
-                        serialized = json.dumps(
-                            payload_test, ensure_ascii=False, default=str
-                        )
-                        if len(serialized) > SEARCH_REPLY_LIMIT:
-                            # Trim the text to fit and append "…"
-                            while len(passage["text"]) > 0:
-                                passage["text"] = passage["text"][:-1]
-                                payload_test = {"passages": [passage]}
-                                serialized = json.dumps(
-                                    payload_test, ensure_ascii=False, default=str
-                                )
-                                if len(serialized) <= SEARCH_REPLY_LIMIT:
-                                    passage["text"] += "…"
-                                    break
+            hits = self.corpus.search(str(args.get("query", "")), k=SEARCH_K)
+            # Build payload passage by passage, adding only if it fits within SEARCH_REPLY_LIMIT
+            passages: list[dict[str, Any]] = []
+            for i, hit in enumerate(hits):
+                passage = {"id": hit.id, "text": hit.text}
+                # Always include the top passage, even if it exceeds limit
+                if i == 0:
+                    payload_test = {"passages": [passage]}
+                    serialized = json.dumps(
+                        payload_test, ensure_ascii=False, default=str
+                    )
+                    if len(serialized) > SEARCH_REPLY_LIMIT:
+                        # Trim the text to fit with "…"; include "…" in the length check
+                        while len(passage["text"]) > 0:
+                            passage["text"] = passage["text"][:-1]
+                            passage["text"] += "…"
+                            payload_test = {"passages": [passage]}
+                            serialized = json.dumps(
+                                payload_test, ensure_ascii=False, default=str
+                            )
+                            if len(serialized) <= SEARCH_REPLY_LIMIT:
+                                break
+                            # Remove "…" and try again
+                            passage["text"] = passage["text"][:-1]
+                    passages.append(passage)
+                else:
+                    # Try adding this passage
+                    payload_test = {"passages": passages + [passage]}
+                    serialized = json.dumps(payload_test, ensure_ascii=False, default=str)
+                    if len(serialized) <= SEARCH_REPLY_LIMIT:
                         passages.append(passage)
                     else:
-                        # Try adding this passage
-                        payload_test = {"passages": passages + [passage]}
-                        serialized = json.dumps(payload_test, ensure_ascii=False, default=str)
-                        if len(serialized) <= SEARCH_REPLY_LIMIT:
-                            passages.append(passage)
-                        else:
-                            # Stop adding more passages
-                            break
-                payload = {"passages": passages}
-                record.calls.append({"name": name, "args": args, "outcome": "ok"})
-                content = json.dumps(payload, ensure_ascii=False, default=str)
-                return {"role": "tool", "tool_name": name, "content": content}
-            else:
-                return self._gated._execute(call, ctx, record)
+                        # Stop adding more passages
+                        break
+            payload = {"passages": passages}
+            record.calls.append({"name": name, "args": args, "outcome": "ok"})
+            content = json.dumps(payload, ensure_ascii=False, default=str)
+            return {"role": "tool", "tool_name": name, "content": content}
         except Exception as exc:  # noqa: BLE001 - the model is told what broke
+            record.failed(name, args, "error")
             payload = {"error": type(exc).__name__, "tool": name, "reason": str(exc)}
-        content = json.dumps(payload, ensure_ascii=False, default=str)
-        return {"role": "tool", "tool_name": name, "content": content[:_REPLY_LIMIT]}
+            content = json.dumps(payload, ensure_ascii=False, default=str)
+            return {"role": "tool", "tool_name": name, "content": content[:_REPLY_LIMIT]}

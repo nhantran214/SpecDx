@@ -215,3 +215,81 @@ def test_search_reply_handles_large_passages(pack) -> None:
     assert len(reply_json["passages"]) >= 1
     # Verify the reply is within limits
     assert len(result["content"]) <= SEARCH_REPLY_LIMIT
+
+
+def test_malformed_gated_call_arguments_are_recorded(run_de) -> None:
+    """Malformed JSON in gated tool arguments is recorded in usage."""
+    transport, seen = _scripted(
+        _call("log_event", "{not json"),
+        _say("Xong."),
+    )
+    envelope, rows = run_de(transport)
+    # Check that the malformed call was recorded in usage
+    assert envelope.usage["tool_calls"][0]["name"] == "log_event"
+    assert envelope.usage["tool_calls"][0]["outcome"] == "error"
+
+
+def test_search_spec_corpus_error_is_recorded(db, pack) -> None:
+    """When corpus.search raises, the error is recorded in usage."""
+    class FailingCorpus:
+        """A corpus that raises on search."""
+        def search(self, query, k):
+            raise RuntimeError("corpus is broken")
+
+    transport, seen = _scripted(
+        _call("search_spec", {"query": "test"}),
+        _say("Xong."),
+    )
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), FailingCorpus(),
+        load_variants(), transport=transport, seed=7
+    )
+    with db.isolated() as conn:
+        runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
+        open_case(runtime.repo)
+        envelope = runtime.run("DE-OP-01", "check_availability", "CASE-0031",
+                              {"ma_so": "SO-0031"})
+    # Check that the search_spec error was recorded in usage
+    assert envelope.usage["tool_calls"][0]["name"] == "search_spec"
+    assert envelope.usage["tool_calls"][0]["outcome"] == "error"
+
+
+def test_oversized_top_passage_is_trimmed_with_ellipsis(pack) -> None:
+    """A corpus whose top chunk is ~20000 chars → reply is valid JSON, within limit, ends with …."""
+    from specdx.interpreters.executor import SEARCH_REPLY_LIMIT
+
+    class MockChunk:
+        def __init__(self, id_str, text):
+            self.id = id_str
+            self.text = text
+
+    class MockCorpus:
+        def search(self, query, k):
+            # Return a chunk much larger than SEARCH_REPLY_LIMIT
+            text_20000 = "X" * 20000
+            return [MockChunk("big-chunk", text_20000)]
+
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), MockCorpus(), load_variants()
+    )
+
+    # Simulate a search_spec call
+    call = {"function": {"name": "search_spec", "arguments": json.dumps({"query": "test"})}}
+    record = _Record()
+
+    class MockToolContext:
+        class MockPack:
+            non_canon_columns = {}
+        class MockRepo:
+            pass
+        pack = MockPack()
+        repo = MockRepo()
+
+    result = executor._execute(call, MockToolContext(), record)
+
+    # Verify the response parses as JSON
+    reply_json = json.loads(result["content"])
+    # Verify the reply is within limits
+    assert len(result["content"]) <= SEARCH_REPLY_LIMIT
+    # Verify the passage text ends with "…"
+    assert reply_json["passages"][0]["text"].endswith("…")
