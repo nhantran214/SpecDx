@@ -214,11 +214,15 @@ def describe(clause: Clause, scenario: Scenario) -> str:
     if clause.kind == "invariant" and clause.scope == "lifted":
         inv = p["invariant"]
         cond = inv["assert"].get("all", inv["assert"])
+        if "col" not in cond or "eq" not in cond:
+            return clause.description
         where = inv.get("where") or {}
-        where_str = ", ".join(f"{k} = {v}" for k, v in where.items()) if where else ""
-        eq = cond.get("eq", "")
-        col = cond.get("col", "")
-        return f"{clause.description} — {inv['table']} {where_str}: {col} = {eq}"
+        where_str = ", ".join(f"{k} = {v}" for k, v in where.items())
+        col = cond["col"]
+        eq = cond["eq"]
+        if where_str:
+            return f"{inv['table']} {where_str}: {col} = {eq}"
+        return f"{inv['table']}: {col} = {eq}"
     if clause.kind == "expectation":
         if p.get("eq"):
             return f"kỳ vọng {p['key']} = {p['eq']}"

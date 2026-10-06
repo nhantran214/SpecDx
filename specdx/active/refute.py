@@ -44,37 +44,27 @@ def _event(kind: str, ref: str, actor: str) -> dict[str, str]:
             "basis": REPAIR_BASIS, "at": REPAIR_AT}
 
 
+def _rows_key(rows, columns=None):
+    return sorted(
+        tuple(sorted((k, str(v)) for k, v in r.items() if columns is None or k in columns))
+        for r in rows
+    )
+
+
 def _facts_kept(candidate: State, start: State, scenario: Scenario) -> bool:
-    """Check that scenario facts are preserved (spec §3.6).
-
-    Protected tables must not change. GRN rows must match either the start state
-    or the scenario truth (ordered receipts).
+    """Repair never edits scenario facts: environment rows stay as they started, and the
+    receipts either stay as they started or become exactly the scenario's deliveries.
     """
-    # Protected tables must not change
     for table in PROTECTED_TABLES:
-        if sorted([dict(r) for r in candidate.tables.get(table, [])]) != \
-           sorted([dict(r) for r in start.tables.get(table, [])]):
+        if _rows_key(candidate.tables.get(table, [])) != _rows_key(start.tables.get(table, [])):
             return False
-
-    # GRN rows must match scenario deliveries or start state
-    truth = {(grn, PO): n for grn, n in scenario.deliveries()}
-    candidate_grns = {(r["ma_grn"], r["po"]): r["sl_nhan"]
-                      for r in candidate.tables.get("grn", [])
-                      if "ma_grn" in r and "po" in r and "sl_nhan" in r}
-    start_grns = {(r["ma_grn"], r["po"]): r["sl_nhan"]
-                  for r in start.tables.get("grn", [])
-                  if "ma_grn" in r and "po" in r and "sl_nhan" in r}
-
-    for (grn, po), sl_nhan in candidate_grns.items():
-        expected_sl_nhan = truth.get((grn, po))
-        # sl_nhan must match either the truth or what was in start
-        if expected_sl_nhan is not None and sl_nhan != str(expected_sl_nhan):
-            return False
-        if (expected_sl_nhan is None and (grn, po) in start_grns and
-                sl_nhan != start_grns[(grn, po)]):
-            return False
-
-    return True
+    cols = ("ma_grn", "po", "sl_nhan")
+    now = _rows_key(candidate.tables.get("grn", []), cols)
+    if now == _rows_key(start.tables.get("grn", []), cols):
+        return True
+    deliveries = [(g, PO, str(n)) for g, n in scenario.deliveries()]
+    truth = _rows_key([{"ma_grn": g, "po": po, "sl_nhan": s} for g, po, s in deliveries], cols)
+    return now == truth
 
 
 def propose(clause: Clause, state: State, scenario: Scenario) -> list[State]:

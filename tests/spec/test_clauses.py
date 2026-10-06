@@ -91,3 +91,13 @@ def test_describe_expectation_uses_scenario_values(clauses) -> None:
     desc_x14 = describe(pay, Scenario("x", 16, 14, 0))
     assert "13" in desc_x13
     assert "14" in desc_x14
+
+
+def test_describe_lifted_invariant_uses_scenario_not_canon(clauses) -> None:
+    inv = clauses["inv:po-15"]
+    assert inv.scope == "lifted"
+    desc_x16 = describe(inv, Scenario("x", 16, 13, 0))
+    desc_x17 = describe(inv, Scenario("x", 17, 14, 0))
+    assert "sl_dat = 16" in desc_x16
+    assert "sl_dat = 17" in desc_x17
+    assert "sl_dat = 15" not in desc_x16

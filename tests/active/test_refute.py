@@ -2,7 +2,12 @@ import dataclasses
 
 import pytest
 
-from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
+from specdx.active.refute import (
+    CombinedRefuter,
+    DirectedProbe,
+    SymbolicRepair,
+    _facts_kept,
+)
 from specdx.config import BASE_PACK
 from specdx.orchestrate.work_orders import load_work_orders
 from specdx.spec.clauses import Clause, ClauseSet
@@ -113,3 +118,24 @@ def test_repair_cannot_rewrite_scenario_facts(db, clauses, variant, golden) -> N
     mutant = ClauseSet([*clauses, extra], clauses.master, clauses.canon)
     target = frozenset({"inv:mut-grn"})
     assert SymbolicRepair(db, variant, mutant).search(target, two, [start]) is None
+
+
+def test_repair_can_fix_so_when_grn_starts_diverged(db, clauses, variant, golden) -> None:
+    tables = {t: [dict(r) for r in rows] for t, rows in golden.tables.items()}
+    tables["grn"] = [{"ma_grn": "GRN-0015", "po": "PO-0015", "sl_nhan": "10"}]
+    start = db.materialize(State(tables, {}, {s.id: "done" for s in STEPS}))
+    assert start is not None
+    modified = _done(start, {("so", "trang_thai"): "Đã duyệt"})
+    target = frozenset({"golden:so:SO-0031:trang_thai"})
+    found = SymbolicRepair(db, variant, clauses).search(target, GRN12, [modified])
+    assert found is not None
+    assert found.tables["grn"][0]["sl_nhan"] == "10"
+
+
+def test_facts_kept_with_protected_table_rows() -> None:
+    start = State({"ncr": [{"ma_ncr": "NCR-001", "mota": "test"}]})
+    candidate = State({"ncr": [{"ma_ncr": "NCR-001", "mota": "test"}]})
+    scenario = Scenario("test", 15, 12, 0)
+    assert _facts_kept(candidate, start, scenario)
+    changed = State({"ncr": [{"ma_ncr": "NCR-001", "mota": "changed"}]})
+    assert not _facts_kept(changed, start, scenario)
