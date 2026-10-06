@@ -46,11 +46,12 @@ def test_a_line_cut_inside_a_multibyte_character_is_skipped(tmp_path) -> None:
 def test_records_containing_unicode_line_separators_survive_a_reload(tmp_path) -> None:
     path = tmp_path / "runs.jsonl"
     cache = RunCache(path)
-    cache.put(_vb("k1", "a b"))
-    cache.put(_vb("k2", "c\u0085d"))
+    cache.put(_vb("k1", "a" + chr(0x2028) + "b"))
+    cache.put(_vb("k2", "c" + chr(0x85) + "d"))
     reloaded = RunCache(path)
-    assert reloaded.get("k1").claims == {"x": "a b"}
-    assert reloaded.get("k2").claims == {"x": "c\u0085d"}
+    assert reloaded.get("k1").claims == {"x": "a" + chr(0x2028) + "b"}
+    assert reloaded.get("k2").claims == {"x": "c" + chr(0x85) + "d"}
+    assert chr(0x2028).encode("utf-8") in path.read_bytes()
 
 
 def test_after_loading_truncated_file_put_then_reload_returns_record(tmp_path) -> None:
