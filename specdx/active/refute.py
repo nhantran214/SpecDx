@@ -14,11 +14,11 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from tonomyx.flow.case_0031 import CASE_ID
-from tonomyx.flow.handlers import SO, VINV
+from tonomyx.flow.handlers import PO, SO, VINV
 
 from specdx.db import PackDatabase
 from specdx.observe.state import ERROR
-from specdx.spec.clauses import PAID, Clause, ClauseSet
+from specdx.spec.clauses import PAID, Clause, ClauseSet, describe
 from specdx.spec.lifting import instantiate
 from specdx.types import Behaviour, InterpreterId, RefuteResult, Scenario, State
 from specdx.variant import SpecVariant
@@ -26,6 +26,7 @@ from specdx.variant import SpecVariant
 REPAIR_BASIS = "specdx repair"
 REPAIR_AT = "2026-09-01 02:00:00+00"
 GOAL = "Yêu cầu bổ sung: kết quả cuối cùng phải thỏa mọi điều sau: {items}."
+PROTECTED_TABLES = ("cases", "insp", "ncr", "ship")
 
 
 class RunnerLike(Protocol):
@@ -41,6 +42,39 @@ def _tables(state: State) -> dict[str, list[dict[str, str]]]:
 def _event(kind: str, ref: str, actor: str) -> dict[str, str]:
     return {"case_id": CASE_ID, "kind": kind, "ref": ref, "actor": actor,
             "basis": REPAIR_BASIS, "at": REPAIR_AT}
+
+
+def _facts_kept(candidate: State, start: State, scenario: Scenario) -> bool:
+    """Check that scenario facts are preserved (spec §3.6).
+
+    Protected tables must not change. GRN rows must match either the start state
+    or the scenario truth (ordered receipts).
+    """
+    # Protected tables must not change
+    for table in PROTECTED_TABLES:
+        if sorted([dict(r) for r in candidate.tables.get(table, [])]) != \
+           sorted([dict(r) for r in start.tables.get(table, [])]):
+            return False
+
+    # GRN rows must match scenario deliveries or start state
+    truth = {(grn, PO): n for grn, n in scenario.deliveries()}
+    candidate_grns = {(r["ma_grn"], r["po"]): r["sl_nhan"]
+                      for r in candidate.tables.get("grn", [])
+                      if "ma_grn" in r and "po" in r and "sl_nhan" in r}
+    start_grns = {(r["ma_grn"], r["po"]): r["sl_nhan"]
+                  for r in start.tables.get("grn", [])
+                  if "ma_grn" in r and "po" in r and "sl_nhan" in r}
+
+    for (grn, po), sl_nhan in candidate_grns.items():
+        expected_sl_nhan = truth.get((grn, po))
+        # sl_nhan must match either the truth or what was in start
+        if expected_sl_nhan is not None and sl_nhan != str(expected_sl_nhan):
+            return False
+        if (expected_sl_nhan is None and (grn, po) in start_grns and
+                sl_nhan != start_grns[(grn, po)]):
+            return False
+
+    return True
 
 
 def propose(clause: Clause, state: State, scenario: Scenario) -> list[State]:
@@ -155,7 +189,8 @@ class SymbolicRepair:
                 if cost == 0:
                     spent += 1
                     real = self.db.materialize(current)
-                    if real is not None and self._cost(real, scenario, targets, allowed) == 0:
+                    if (real is not None and self._cost(real, scenario, targets, allowed) == 0 and
+                        _facts_kept(real, start, scenario)):
                         return real
                     break
                 bad = self.clauses.violations(current, scenario)
@@ -168,6 +203,9 @@ class SymbolicRepair:
                 for candidate in proposals:
                     if spent >= self.budget:
                         break
+                    if not _facts_kept(candidate, start, scenario):
+                        spent += 1
+                        continue
                     spent += 1
                     c = self._cost(candidate, scenario, targets, allowed)
                     if c < best_cost:
@@ -196,7 +234,8 @@ class DirectedProbe:
     def search(
         self, targets: frozenset[str], scenario: Scenario, allowed: frozenset[str]
     ) -> Behaviour | None:
-        suffix = GOAL.format(items="; ".join(self.clauses[c].description for c in sorted(targets)))
+        items = "; ".join(describe(self.clauses[c], scenario) for c in sorted(targets))
+        suffix = GOAL.format(items=items)
         for interp in self.interpreters[: self.width]:
             for attempt in range(self.attempts):
                 b = self.runner.run(

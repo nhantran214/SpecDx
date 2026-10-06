@@ -201,6 +201,34 @@ def evaluate(
     raise ValueError(f"unknown clause kind {clause.kind!r}")
 
 
+def describe(clause: Clause, scenario: Scenario) -> str:
+    """Describe a clause using scenario-instantiated values.
+
+    Returns scenario-specific text shown to interpreters.
+    Vietnamese by design.
+    """
+    p = instantiate(clause.payload, scenario)
+    if clause.kind == "golden" and clause.scope == "lifted":
+        ident = ":".join(str(v) for v in p["key"].values())
+        return f"{p['table']} {ident}: {p['column']} = {p['value']}"
+    if clause.kind == "invariant" and clause.scope == "lifted":
+        inv = p["invariant"]
+        cond = inv["assert"].get("all", inv["assert"])
+        where = inv.get("where") or {}
+        where_str = ", ".join(f"{k} = {v}" for k, v in where.items()) if where else ""
+        eq = cond.get("eq", "")
+        col = cond.get("col", "")
+        return f"{clause.description} — {inv['table']} {where_str}: {col} = {eq}"
+    if clause.kind == "expectation":
+        if p.get("eq"):
+            return f"kỳ vọng {p['key']} = {p['eq']}"
+        members = p.get("members", [])
+        if members:
+            return f"kỳ vọng {p['key']} thuộc {{{', '.join(str(m) for m in members)}}}"
+        return clause.description
+    return clause.description
+
+
 class ClauseSet:
     """Every clause of one specification, with the rule for where each applies."""
 

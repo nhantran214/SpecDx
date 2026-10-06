@@ -95,3 +95,21 @@ def test_the_probe_refutes_and_results_are_memoised(clauses, variant, golden) ->
     again = refuter.refute(target, dataclasses.replace(GRN12, id="other"), [start])
     assert first.refuted and first.witness == "probe1"
     assert again == first and runner.calls == 1
+
+
+def test_repair_cannot_rewrite_scenario_facts(db, clauses, variant, golden) -> None:
+    two = Scenario("x", 15, 12, 0, grn_count=2)
+    tables = {t: [dict(r) for r in rows] for t, rows in golden.tables.items()}
+    tables["grn"] = [{"ma_grn": "GRN-0015", "po": "PO-0015", "sl_nhan": "6"},
+                     {"ma_grn": "GRN-0016", "po": "PO-0015", "sl_nhan": "6"}]
+    start = db.materialize(State(tables, {}, {s.id: "done" for s in STEPS}))
+    extra = Clause(
+        "inv:mut-grn", "invariant", "all", None, frozenset({"grn"}),
+        "GRN-0015 sl_nhan eq 7",
+        {"invariant": {"id": "mut-grn", "desc": "x", "table": "grn",
+                       "where": {"ma_grn": "GRN-0015"},
+                       "assert": {"col": "sl_nhan", "eq": "7"}}},
+    )
+    mutant = ClauseSet([*clauses, extra], clauses.master, clauses.canon)
+    target = frozenset({"inv:mut-grn"})
+    assert SymbolicRepair(db, variant, mutant).search(target, two, [start]) is None

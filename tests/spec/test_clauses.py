@@ -1,7 +1,7 @@
 import pytest
 
 from specdx.orchestrate.work_orders import load_work_orders
-from specdx.spec.clauses import ClauseSet, derive_outcome
+from specdx.spec.clauses import ClauseSet, derive_outcome, describe
 from specdx.types import Scenario, State
 
 STEPS = load_work_orders()
@@ -74,3 +74,20 @@ def test_a_missing_step_is_not_applicable_and_an_error_violates(clauses) -> None
     grn12 = Scenario("grn12", 15, 12, 0)
     assert rule.id not in clauses.violations(State({}, {}, {}), grn12)
     assert rule.id in clauses.violations(State({}, {}, {rule.payload["step"]: "error"}), grn12)
+
+
+def test_describe_lifted_golden_uses_scenario_values(clauses) -> None:
+    po = clauses["golden:po:PO-0015:sl_dat"]
+    desc_x16 = describe(po, Scenario("x", 16, 13, 0))
+    desc_x17 = describe(po, Scenario("x", 17, 14, 0))
+    assert "= 16" in desc_x16
+    assert "= 17" in desc_x17
+    assert "= 15" not in desc_x16
+
+
+def test_describe_expectation_uses_scenario_values(clauses) -> None:
+    pay = clauses["expect:pay_units"]
+    desc_x13 = describe(pay, Scenario("x", 16, 13, 0))
+    desc_x14 = describe(pay, Scenario("x", 16, 14, 0))
+    assert "13" in desc_x13
+    assert "14" in desc_x14
