@@ -16,7 +16,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-06-specdx-design.md`. Read §2–§4, §6, §9 and §11 before starting. §11 records clarifications made while writing this plan.
 
 **Pre-check (2026-10-06):** every code block of Tasks 1–19 was materialised in a scratch directory and run:
-- all 129 tests passed, the non-database ones and the database ones (against a temporary PostgreSQL 16);
+- all 130 tests passed, the non-database ones and the database ones (against a temporary PostgreSQL 16). One of them, the default-port check in `tests/test_vendor.py`, had to be deselected because the pre-check deliberately ran on another port;
 - `ruff check` is clean.
 
 Expected test counts in each task come from that run. If a count differs, re-read the task before changing code.
@@ -185,6 +185,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 work/
+.claude/
 ```
 
 `scripts/verify_vendor.sh`:
@@ -2310,7 +2311,7 @@ class SpecVariant:
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/spec/test_tell.py -q`
-Expected: `11 passed`. If `test_the_corpus_holds_every_source` fails on the BA chunk count, print `len(...)` and check that `pdftotext` extracted text, not images. The BA PDF holds about 32k words, so more than 50 chunks of 300 words.
+Expected: `10 passed`. If `test_the_corpus_holds_every_source` fails on the BA chunk count, print `len(...)` and check that `pdftotext` extracted text, not images. The BA PDF holds about 32k words, so more than 50 chunks of 300 words.
 
 - [ ] **Step 5: Commit**
 
@@ -6689,7 +6690,7 @@ Rules: `vendor/` is never edited, mutants live in `work/`, nothing is imported f
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/interpreters/test_paraphrase.py tests/eval/test_pilot.py tests/test_workbench.py tests/test_cli.py -q`
-Expected: `7 passed`.
+Expected: `8 passed`.
 
 - [ ] **Step 9: Run the whole suite and the linter**
 
