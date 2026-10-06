@@ -1,0 +1,12 @@
+{
+  "_note": "Pilot go/no-go gate (spec §4.8): two tool-capable families, development mutants only. Task 20 may swap the second family after the capability pilot.",
+  "models_by_family": {
+    "qwen": ["qwen3:14b", "qwen2.5:7b-instruct-q4_K_M"],
+    "llama": ["llama3.1:8b"]
+  },
+  "variants": [0, 1, 2],
+  "seeds": [1, 2, 3],
+  "budget": 200,
+  "dev_per_type": 5,
+  "rng_seed": 20261006
+}
