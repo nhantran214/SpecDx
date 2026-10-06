@@ -1,6 +1,6 @@
 from specdx.infer.items import ItemView
-from specdx.infer.latent import Observation, fit
-from specdx.infer.scores import diagnose
+from specdx.infer.latent import ItemPosterior, Observation, fit
+from specdx.infer.scores import _weak, diagnose
 from specdx.types import Behaviour, InterpreterId, RefuteResult, Scenario, State
 
 GOOD = ("g1", "g2", "g3", "g4")
@@ -46,7 +46,8 @@ def test_a_shared_violation_that_repair_refutes_is_hidden() -> None:
                                                     for m in BAD}
     b, v, views, post = _world(outputs)
     defects = diagnose(b, v, views, post, _Refuter(True), _diff)
-    assert defects[0].type == "hidden" and defects[0].location == ("c",)
+    found = [d for d in defects if d.type == "hidden"]
+    assert found and found[0].location == ("c",)
 
 
 def test_the_same_pattern_unrefuted_is_a_contradiction() -> None:
@@ -54,7 +55,8 @@ def test_the_same_pattern_unrefuted_is_a_contradiction() -> None:
                                                            for i in range(3)] for m in BAD}
     b, v, views, post = _world(outputs)
     defects = diagnose(b, v, views, post, _Refuter(False), _diff)
-    assert defects[0].type == "contradiction" and defects[0].location == ("c",)
+    found = [d for d in defects if d.type == "contradiction"]
+    assert found and found[0].location == ("c",)
 
 
 def test_competent_models_splitting_cleanly_is_ambiguity() -> None:
@@ -76,3 +78,55 @@ def test_no_weak_when_the_admissible_class_itself_violates() -> None:
     outputs = {m: [("A", {"c"})] * 3 for m in GOOD} | {m: [("W", set())] * 3 for m in BAD}
     b, v, views, post = _world(outputs)
     assert not [d for d in diagnose(b, v, views, post, _Refuter(True), _diff) if d.type == "weak"]
+
+
+def test_hidden_score_follows_the_posterior() -> None:
+    outputs = {m: [("K", {"c"})] * 3 for m in GOOD} | {m: [(f"E{i}", {f"n{i}"}) for i in range(3)]
+                                                    for m in BAD}
+    b, v, views, post = _world(outputs)
+    defects = diagnose(b, v, views, post, _Refuter(True), _diff)
+    found = [d for d in defects if d.type == "hidden"]
+    assert found
+    expected_score = sum(p for s, p in post.items["s1|step"].set_posterior.items() if "K" in s)
+    assert abs(found[0].score - expected_score) < 1e-9
+
+
+def test_weak_tie_break_is_deterministic() -> None:
+    views = [
+        ItemView("item", f"model|{i}", "model", "m", klass, frozenset(),
+                 _proj(klass))
+        for klass in ("A", "B", "C") for i in range(3)
+    ]
+    ip = ItemPosterior(
+        classes=("A", "B", "C"),
+        set_posterior={frozenset({"A"}): 1.0},
+        p_member={"A": 1.0, "B": 0.0, "C": 0.0},
+        p_ambiguous=0.0,
+        responsibility={},
+    )
+    result = _weak(ip, views, 2)
+    assert result == ("B", 1.0)
+
+
+def test_weak_union_score() -> None:
+    views = [
+        ItemView("item", f"model|{i}", "model", "m", klass, frozenset(),
+                 _proj(klass))
+        for klass in ("A", "B", "C") for i in range(3)
+    ]
+    ip = ItemPosterior(
+        classes=("A", "B", "C"),
+        set_posterior={
+            frozenset({"A"}): 0.5,
+            frozenset({"A", "B"}): 0.3,
+            frozenset({"A", "C"}): 0.2,
+        },
+        p_member={"A": 1.0, "B": 0.0, "C": 0.0},
+        p_ambiguous=0.0,
+        responsibility={},
+    )
+    result = _weak(ip, views, 2)
+    assert result is not None
+    klass, score = result
+    assert klass == "C"
+    assert score == 1.0

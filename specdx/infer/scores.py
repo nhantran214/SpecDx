@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import combinations
 
 from specdx.infer.hitting import soft_hitting_sets
 from specdx.infer.items import ItemView
@@ -45,22 +46,47 @@ def _scenario_of(item: str) -> str:
     return item.split("|", 1)[0]
 
 
+def _hidden_score(
+    clause: str, items: Iterable[str], posterior: Posterior,
+    by_item: Mapping[str, list[ItemView]],
+) -> float | None:
+    """Spec §3.4: the posterior mass of admissible sets holding a class whose only
+    step-relevant violation is this clause, maximised over the scenario's items."""
+    scores = []
+    for item in items:
+        ip = posterior.items.get(item)
+        views = by_item.get(item, [])
+        if ip is None or not any(clause in v.violated for v in views):
+            continue
+        hits = {v.klass for v in views if v.violated == frozenset({clause})}
+        scores.append(sum(p for s, p in ip.set_posterior.items() if s & hits))
+    return max(scores) if scores else None
+
+
 def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[str, float] | None:
     violated = {v.klass: v.violated for v in views}
-    if any(violated.get(k) for k in ip.map_set):
+    map_set = ip.map_set
+    if any(violated.get(k) for k in map_set):
         return None  # the admissible output itself fails a check: that is not a weak check
     counts = Counter(v.klass for v in views)
-    best: tuple[str, float] | None = None
-    for klass in {v.klass for v in views if not v.violated}:
-        if counts[klass] < min_runs or klass in ip.map_set:
-            continue
-        score = (
-            sum(p for s, p in ip.set_posterior.items() if klass not in s)
-            if klass in ip.classes else 1.0
-        )
-        if best is None or score > best[1]:
-            best = (klass, score)
-    return best
+    eligible = sorted(
+        k for k in {v.klass for v in views if not v.violated}
+        if counts[k] >= min_runs and k not in map_set
+    )
+    if not eligible:
+        return None
+
+    def outside(k: str) -> float:
+        if k not in ip.classes:
+            return 1.0
+        return sum(p for s, p in ip.set_posterior.items() if k not in s)
+
+    if any(k not in ip.classes for k in eligible):
+        score = 1.0
+    else:
+        score = sum(p for s, p in ip.set_posterior.items() if any(k not in s for k in eligible))
+    chosen = sorted(eligible, key=lambda k: (-outside(k), -counts[k], k))[0]
+    return chosen, score
 
 
 def diagnose(
@@ -78,11 +104,15 @@ def diagnose(
 ) -> list[Defect]:
     defects: list[Defect] = []
     weights = run_weights(views, posterior)
+    by_item: dict[str, list[ItemView]] = defaultdict(list)
+    for v in views:
+        by_item[v.item].append(v)
     groups: dict[str, list[Behaviour]] = defaultdict(list)
     for b in behaviours:
         if b.status == "ok":
             groups[b.scenario.id].append(b)
     for sid, group in groups.items():
+        scenario_items = sorted({v.item for v in views if _scenario_of(v.item) == sid})
         sets = [(violated[b.run_key], weights.get(b.run_key, 0.0)) for b in group]
         for hitting, support in soft_hitting_sets(sets, tau=tau):
             result = refuter.refute(hitting, group[0].scenario, group)
@@ -92,19 +122,23 @@ def diagnose(
                 defects.append(Defect("contradiction", location, (sid,), witnesses, support,
                                       f"unrefuted after {result.attempts} attempts"))
             elif len(hitting) == 1:
-                defects.append(Defect("hidden", location, (sid,), witnesses, support,
+                clause = next(iter(hitting))
+                score = _hidden_score(clause, scenario_items, posterior, by_item)
+                if score is None:
+                    score = support
+                defects.append(Defect("hidden", location, (sid,), witnesses, score,
                                       f"refuted by {result.witness}"))
-    by_item: dict[str, list[ItemView]] = defaultdict(list)
-    for v in views:
-        by_item[v.item].append(v)
     for item, ip in posterior.items.items():
         mine = by_item.get(item, [])
         projection = {v.klass: v.projection for v in mine}
         ranked = sorted(ip.p_member, key=lambda k: -ip.p_member[k])
         if ip.p_ambiguous >= ambig_threshold and len(ranked) >= 2:
-            fields = diff(projection[ranked[0]], projection[ranked[1]])
+            members = sorted(ip.map_set) if len(ip.map_set) >= 2 else ranked[:2]
+            fields = frozenset().union(
+                *(diff(projection[a], projection[b]) for a, b in combinations(members, 2))
+            )
             if fields:
-                witnesses = tuple(v.run_key for v in mine if v.klass in ranked[:2])
+                witnesses = tuple(v.run_key for v in mine if v.klass in members)
                 defects.append(Defect("ambiguity", tuple(sorted(fields)), (_scenario_of(item),),
                                       witnesses, ip.p_ambiguous, note=item))
         weak = _weak(ip, mine, weak_min_runs)
