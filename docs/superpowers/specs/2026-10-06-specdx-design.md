@@ -79,7 +79,7 @@ An executable business specification is **S = ⟨T, C, Π⟩**.
 - **C = {c₁ … cₘ} (Check)** is every clause that can be evaluated on a behaviour:
   - For S1: the 42 invariants in `invariants.json`, the expectations in `scenarios.json`, the golden state `seed_operational.sql`, the guardrail triggers and SQL policy functions, the event vocabulary, the scope table, and the blank-column list `cot_de_trong_khong_canon`.
   - For S2: each task's evaluation criteria (§4.1).
-- **Π** is the scenario space. For S1, π is a parameter vector (ordered quantity, received quantity, defective units, requested discount, GRNs per PO, late days, number of order lines). The canon fixes three points: `happy`, `discount8`, `grn12`. For S2, Π is the given task set.
+- **Π** is the scenario space. For S1, π is a parameter vector (ordered quantity, received quantity, requested discount, GRNs per PO). Facts that only the environment writes and no interpreter ever touches (defective units, late days, number of order lines) are fixed at their canon values, because varying them cannot change any interpreter's behaviour (§11). The canon fixes three points: `happy`, `discount8`, `grn12`. For S2, Π is the given task set.
 
 ### 2.2 Behaviours and spec-induced equivalence
 
@@ -163,8 +163,8 @@ If b ⊨ C'∖V(b), then V(b) is a **correction set**. By the hitting-set dualit
 1. Collect {V(b)}, each weighted by the behaviour's admissibility weight times θᵢ.
 2. Enumerate *soft* minimal hitting sets H up to size 3. H must hit at least a fraction (1 − τ) of the weighted mass. PySAT `Hitman` is used, or brute force below 100 clauses.
 3. Classify each H:
-   - |H| = 1, and the clause is satisfied elsewhere (for instance by the golden state, or by a behaviour on another scenario): a **Hidden requirement** candidate.
-   - |H| ≥ 2, and every clause of H is satisfied individually by some behaviour but never jointly: a **Contradiction** candidate, passed to refutation (§3.6).
+   - |H| = 1: passed to refutation (§3.6) on π. If a state in π satisfies the clause, it is a **Hidden requirement**; if none is found, it is a **Contradiction** of size 1 (§11, item 4).
+   - |H| ≥ 2, and every clause of H is satisfied individually by some behaviour but never jointly: a **Contradiction** candidate, passed to refutation (§3.6). If refuted, it is dropped.
 
 This needs no full SAT encoding of the specification.
 
@@ -184,12 +184,13 @@ This needs no full SAT encoding of the specification.
   - ordered quantity 15 gives received quantities 14, 15 and 16;
   - GRNs per PO ∈ {1, 2}.
 
-  Each scenario is materialised as seed data in a working copy of the specification.
+  A scenario enters a run as task inputs and environment events. It needs no copy of the specification; only mutants do.
 - **Acquisition.** Choose π to maximise the expected information gain about the defect hypotheses of §3.4. Exact EIG is intractable, so the method uses **Thompson sampling** with a Normal–Gamma posterior per scenario *cell*. A cell is the pair (set of active lifted clauses, boundary flags). The reward is the realised KL divergence between the posteriors after and before the run.
 - **Sequential escalation.** Each new π first runs a **pilot**: one interpreter per family (the family's highest-θ model, variant 0, seed 1; before any θ exists, the family's largest model). It is escalated to the full committee (all models × 3 variants × 3 seeds) only if the pilot yields at least one of:
   - a correction set not seen before;
-  - a class not seen before at that step;
-  - two or more classes among the pilot.
+  - two or more classes among the pilot at some step.
+
+  Class novelty across scenarios is not a trigger: a class key embeds the scenario's quantities, so every new scenario would look novel.
 - **Scope.** Synthesis applies to S1. On S2 the task set is fixed.
 
 ### 3.6 Component 5: refutation of contradiction candidates
@@ -281,10 +282,12 @@ Operators touch only artefacts the running system reads, so each mutation is exe
 
 | Type | S1 operators | S2 operators |
 |---|---|---|
-| Contradiction | Add an invariant conflicting with an existing one (`pay_units = ordered` beside `pay_units = received`); make a guardrail block a transition an expectation requires; revoke in `de_scope` a tool that a mandatory gate needs | Make two expected actions mutually exclusive under the database (cancel and modify the same reservation) |
-| Hidden / mis-key | Change a status or quantity in the golden state or an invariant without support in T; add an invariant demanding an event kind that T never mentions | Change an expected argument to a value the policy does not imply |
-| Ambiguity | Delete a disambiguating sentence of T ("mức tối đa 5%"); add a KB version with an overlapping effective date and a different rule; replace a number in T with a vague phrase ("mức hợp lý") | Delete or vague-ify a policy sentence that decides the expected action |
-| Weak check | Delete an invariant guarding a rule of T (`pay-sotien-blank`); drop the `Cần kiểm` condition from `trg_guard_pay`; relax an `eq` assertion to `in` | Delete the database-field clause guarding a policy rule |
+| Contradiction | Add an invariant that conflicts with an existing row-level `eq` invariant (same row and column, different value); add a guardrail trigger, `BEFORE INSERT OR UPDATE`, that forbids a status the golden state requires | Make two expected actions mutually exclusive under the database (cancel and modify the same reservation) |
+| Hidden / mis-key | Change a locked status value in the golden state without support in T; add an invariant demanding an event that T never motivates (`PAID` for `PAY-0031`) | Change an expected argument to a value the policy does not imply |
+| Ambiguity | Delete a disambiguating sentence of T ("mức tối đa 5%"); add a KB article with an overlapping effective date and a different cap; replace a number in a sentence of T with a vague phrase ("mức hợp lý") | Delete or vague-ify a policy sentence that decides the expected action |
+| Weak check | Remove a column from the blank list *and* delete the invariant that guards it (`pay.so_tien`); delete a golden event an interpreter is told to log (`FLAGGED ITEM-0012`) | Delete the database-field clause guarding a policy rule |
+
+Three operators considered earlier were dropped (§11): revoking a tool in `de_scope` shows up as a Hidden requirement rather than a Contradiction, because symbolic repair writes state directly; dropping the `Cần kiểm` condition from `trg_guard_pay` cannot be activated, because no scenario pays; relaxing an `eq` invariant to `in` is an equivalent mutant, because the golden-state clause still pins the value.
 
 - **Sampling:** application sites are enumerated per operator, giving about 150–250 mutants for S1 and 80–150 for S2. They are split 20/80 into development and test sets, stratified by type.
 - **Differential scoring:** a mutant is scored only on flags present in the mutant's report and absent from the base specification's report.
@@ -333,7 +336,7 @@ Operators touch only artefacts the running system reads, so each mutation is exe
 - Hidden requirement: the reported clause equals the ground-truth clause.
 - Weak check: the reported locked fields include the column constrained by the deleted or relaxed clause. Each Weak-check operator records that column.
 - Contradiction: the Jaccard index between the reported M and the ground-truth conflict set is at least 0.5.
-- Ambiguity: the reported sentence set intersects the mutated sentence or sentences.
+- Ambiguity: the reported sentence set intersects the mutated sentence or sentences. For a deletion operator the deleted sentence no longer exists, so a report matches when any reported sentence lies in the chunk that held it.
 
 ### 4.7 Statistics
 
@@ -494,14 +497,39 @@ The work is too large for one implementation plan. Each phase gets its own plan,
 
 | Phase | Scope | Exit condition |
 |---|---|---|
-| P1: core on S1 | Vendoring; `spec/`, `scenarios/`, `orchestrate/`, `interpreters/`, `observe/`, `infer/`, `active/`, `mutate/` for S1; the capability pilot (§4.2) | All §6.4 tests pass, and the pilot go/no-go gate (§4.8) passes |
-| P2: S2 and comparison | `subjects/tau2/`, `baselines/`, `eval/`; S2 mutants and real defects | τ² adapter reproduces τ²'s own scores; B1–B5 run on the development split |
+| P1: core on S1 | Vendoring; `spec/`, `scenarios/`, `orchestrate/`, `interpreters/`, `observe/`, `infer/`, `active/`, `mutate/` for S1; baselines B2 and B3 and the matching rules, which the gate needs; the capability pilot (§4.2) | All §6.4 tests pass, and the pilot go/no-go gate (§4.8) passes |
+| P2: S2 and comparison | `subjects/tau2/`, baselines B1, B4 and B5, the rest of `eval/`; S2 mutants and real defects | τ² adapter reproduces τ²'s own scores; B1–B5 run on the development split |
 | P3: full study | Test-split runs for RQ1–RQ5, statistics, tables and figures | All tables regenerate from `results/raw` |
 | P4: manuscript | `paper/` in acmart for TOSEM | Full draft |
 
 ---
 
-## 10. Key references
+## 11. Planning-time clarifications (2026-10-06)
+
+Reading the vendored code while planning P1 settled the following points. They refine the design and do not change its claims.
+
+1. **Lifting, made precise.** The anchor is `grn12`, because the 42 invariants and the golden state describe `grn12`'s end state. The anchor's parameters are ordered 15, received 12, discount 0, GRNs per PO 1.
+   - Only values in integer-typed schema columns are lifted: `po.sl_dat` and the `ITEM-0012` line of `soline.sl` lift to `ordered`, and `grn.sl_nhan` lifts to `received`.
+   - Count assertions and text are never lifted.
+   - A lifted clause applies only when the scenario's GRNs per PO equals the anchor's; that parameter changes which rows exist, so it is *structural*.
+   - Across the three canon scenarios, a numeric expectation that equals the same parameter in all three is lifted (`pay_units` lifts to `received`). A categorical expectation becomes a membership clause over the values seen (`three_way` ∈ {Khớp, Cần kiểm}; `apr_0102` ∈ {normal, over_cap}) that applies to every scenario, alongside its exact per-scenario clause.
+   - Everything else stays anchored.
+2. **Background rows.** Every run starts from master data plus the operational rows that do not belong to CASE-0031: the TH0 branch (`cand`, `att`, `esg`, and the approval with a blank `case_id`). Without them, every run would violate the TH0 invariants, which the process never touches.
+3. **Human gate steps are interpreted.** At each gate, the scenario fixes the decision (approve). A persona interpreter (P2, P6), working with the human tools, records the decision and carries out its consequences as it reads T. Without this, R-SO could never surface, because whether `SO-0031` advances is exactly a consequence of the P2 decision.
+4. **Singleton typing.** A singleton hitting set {c} is a Hidden requirement if refutation finds a state in π that satisfies c, and a Contradiction (a MUS of size 1) if it does not. This is how R-12 types as a Contradiction: `fn_reconcile` errors on two receipts, so no state satisfies `vinv.doi_soat = fn_reconcile(po)`.
+5. **Competence is pooled per model** across seeds and Tell variants: θ is indexed by model, the family effect is indexed by family, and seeds and variants are sampling noise.
+6. **Mutation operators revised** as in §4.3. With them, S1 has about 40 mutants in P1. Growing the site lists to the 150–250 target belongs to P3.
+7. **Clause families for every scenario.** These apply to every scenario in addition to the lifted and anchored clauses:
+   - blank columns (from `cot_de_trong_khong_canon`);
+   - step completion (each step ends `done` or `needs_gate`);
+   - reconciliation consistency (`vinv.doi_soat` equals `fn_reconcile(po)`, and an error counts as a violation);
+   - the payment guard;
+   - the event vocabulary.
+8. **Bootstrap confidence intervals over interpreters** (§3.2) are deferred to P3; P1 reports posterior probabilities.
+
+---
+
+## 12. Key references
 
 - Calvanese et al. *Agentic BPM: A Research Manifesto.* Information Systems, 2026. arXiv:2603.18916 (context only)
 - *Policy Loopholes in Agent Evaluation: When Policy Ambiguity Masquerades as Agent Error.* arXiv:2609.14400
