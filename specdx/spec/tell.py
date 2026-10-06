@@ -20,6 +20,7 @@ from pathlib import Path
 from tonomyx.canon.pack import CanonPack
 
 CHUNK_WORDS = 300
+CHUNKING_VERSION = 1  # Bump whenever chunking or sentence splitting changes
 PDF_DOCS = {"1.": "DEMO", "2.": "BA", "3.": "SAD"}
 _SPLIT = re.compile(r"(?<=[.!?;])\s+|\n+")
 _TOKEN = re.compile(r"\w+")
@@ -94,7 +95,11 @@ def pdf_chunks(pdf_dir: Path, cache_dir: Path) -> list[Chunk]:
     out: list[Chunk] = []
     for pdf in sorted(pdf_dir.glob("*.pdf")):
         doc = PDF_DOCS[pdf.name[:2]]
-        cached = cache_dir / f"{hashlib.sha256(pdf.read_bytes()).hexdigest()}.json"
+        pdf_bytes = pdf.read_bytes()
+        cache_key = hashlib.sha256(
+            pdf_bytes + f"|{doc}|{CHUNK_WORDS}|{CHUNKING_VERSION}".encode()
+        ).hexdigest()
+        cached = cache_dir / f"{cache_key}.json"
         if cached.is_file():
             out += TellCorpus.from_json(cached.read_text(encoding="utf-8")).chunks
             continue

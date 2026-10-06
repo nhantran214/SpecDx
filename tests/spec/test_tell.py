@@ -3,6 +3,7 @@ import unicodedata
 import pytest
 
 from specdx.config import BASE_PACK, PDF_DIR
+from specdx.spec import tell
 from specdx.spec.tell import Bm25, Chunk, Sentence, TellCorpus, pdf_chunks, split_sentences
 from specdx.variant import SpecVariant
 
@@ -68,3 +69,28 @@ def test_a_variant_digest_covers_pack_and_corpus(corpus) -> None:
     a = SpecVariant("base", BASE_PACK, corpus)
     b = SpecVariant("base", BASE_PACK, corpus.without(corpus.sentence_ids()[:1]))
     assert a.digest() != b.digest()
+
+
+def test_chunking_version_invalidates_cache(tmp_path) -> None:
+    # First call with version 1
+    cache = tmp_path / "cache"
+    pdf_chunks(PDF_DIR, cache)
+    files_v1 = list(cache.glob("*.json"))
+    assert len(files_v1) == 3
+
+    # Monkeypatch version to 2
+    monkeypatch_version = tell.CHUNKING_VERSION
+    tell.CHUNKING_VERSION = 2
+    try:
+        # Second call with version 2 should create new cache files
+        pdf_chunks(PDF_DIR, cache)
+        files_after = list(cache.glob("*.json"))
+        assert len(files_after) == 6  # 3 files per version
+
+        # Third call with version 2 should not create new files
+        count_before = len(list(cache.glob("*.json")))
+        pdf_chunks(PDF_DIR, cache)
+        count_after = len(list(cache.glob("*.json")))
+        assert count_before == count_after
+    finally:
+        tell.CHUNKING_VERSION = monkeypatch_version
