@@ -76,6 +76,8 @@ def test_sampling_options_and_a_prompt_without_playbooks(run_de) -> None:
     system = seen[0]["messages"][0]["content"]
     assert "search_spec" in system and "kiểm tra khả năng đáp ứng" in system
     assert "Hướng dẫn nghiệp vụ" not in system
+    # DE-OP-01's read scope includes soline; verify columns are shown
+    assert "soline(ma_soline, so, ma_sp, sl, don_gia, chiet_khau, du_hang)" in system
 
 
 def test_search_spec_answers_from_the_corpus_and_tools_write_for_real(run_de) -> None:

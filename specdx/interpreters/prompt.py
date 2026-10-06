@@ -55,8 +55,19 @@ def role_of(pack: CanonPack, actor: str) -> str:
     return roles.get(actor, "không rõ vai")
 
 
-def _names(tables: Iterable[str]) -> str:
-    return ", ".join(sorted(tables)) or "(không có)"
+def _describe(pack: CanonPack, tables: Iterable[str]) -> str:
+    """Render tables with their columns: table(col1, col2, ...) joined by "; "."""
+    described = []
+    for table in sorted(tables):
+        if table not in pack.columns:
+            continue
+        cols = pack.columns[table]
+        if cols:
+            col_names = ", ".join(col.name for col in cols)
+            described.append(f"{table}({col_names})")
+        else:
+            described.append(table)
+    return "; ".join(described) if described else "(không có)"
 
 
 def system_prompt(
@@ -75,7 +86,7 @@ def system_prompt(
         case_id=task.case_id,
         statement=variants.statements[task.intent][variant],
         inputs=json.dumps(task.inputs, ensure_ascii=False),
-        read=_names(read),
-        draft=_names(draft),
+        read=_describe(pack, read),
+        draft=_describe(pack, draft),
     )
     return f"{text}\n{suffix}" if suffix else text
