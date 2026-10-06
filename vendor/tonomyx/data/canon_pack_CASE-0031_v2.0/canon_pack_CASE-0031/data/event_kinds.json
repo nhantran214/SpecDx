@@ -1,0 +1,4 @@
+{
+  "note": "Bộ từ vựng evt.kind CANON (độc lập). Bảng evt chỉ nhận kind trong danh sách này (enforce bằng trigger Postgres). Bản chiếu sang vocab TonomyX ở targets/tonomyx/.",
+  "kinds": ["DRAFTED","FLAGGED","APPROVED","REJECTED","RECEIVED","INSPECTED","SHIPPED","RECONCILED","PAID","SENT"]
+}

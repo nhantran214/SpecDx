@@ -1,0 +1,8 @@
+{
+  "note": "Kịch bản demo — tham số DỮ LIỆU (độc lập app-stack). pay_units minh chứng 'chỉ chi phần đã nhận'.",
+  "scenarios": [
+    {"name":"happy",     "intake_discount_pct":0, "grn_received":15, "expect":{"apr_0102":"normal",   "three_way":"Khớp",     "pay_units":15, "open_units":0}},
+    {"name":"discount8", "intake_discount_pct":8, "grn_received":15, "expect":{"apr_0102":"over_cap",  "three_way":"Khớp",     "pay_units":15, "open_units":0}},
+    {"name":"grn12",     "intake_discount_pct":0, "grn_received":12, "expect":{"apr_0102":"normal",   "three_way":"Cần kiểm", "pay_units":12, "open_units":3}}
+  ]
+}

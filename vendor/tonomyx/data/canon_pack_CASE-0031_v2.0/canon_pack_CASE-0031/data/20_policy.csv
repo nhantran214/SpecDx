@@ -1,0 +1,7 @@
+﻿ma_nguong,doi_tuong,gia_tri,nguon,version
+NG-CK-0005,Trần chiết khấu KB-0003 (tối đa 5%),0.05,TriThuc,1
+NG-TON-MIN-0012,ITEM-0012 (nhu cầu tối thiểu của đơn),15,TriThuc,1
+NG-PO-MAX,PO (hạn mức) — doanh nghiệp tự đặt,,TriThuc,1
+NG-CHI-MAX,PAY (ngưỡng đề nghị chi) — doanh nghiệp tự đặt,,TriThuc,1
+NG-NCC-MIN,VEND (điểm tối thiểu) — nguồn chưa công bố,,TriThuc,1
+NG-LUONG-KD-MAX,Khung lương/offer NV Kinh doanh — TH0,,TriThuc,1

@@ -1,0 +1,5 @@
+{"note":"Ánh xạ vocab CANON (data/event_kinds.json) → vocab TonomyX (tool service ghi kind nào).",
+ "map":{"DRAFTED":"draft_created","FLAGGED":"exception_raised|tool_denied|shortage_detected|clarification_needed",
+ "APPROVED":"approval_decided","REJECTED":"approval_decided","RECEIVED":"grn_recorded",
+ "INSPECTED":"exception_raised","RECONCILED":"three_way_matched|three_way_failed",
+ "SHIPPED":"(ngoài MVP)","PAID":"(release)","SENT":"external_send"}}

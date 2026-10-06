@@ -1,0 +1,5 @@
+﻿ma_apr,loai,noi_dung,case_id,hoso_ref,nguoi_tao,gia_tri,muc_tu_hanh,trang_thai,created_at
+APR-0102,Báo giá cần duyệt (P2),"QUOTE-0031/SO-0031: P2 duyệt báo giá. (Minh họa, KHÔNG canon: khách đề nghị chiết khấu vượt trần KB-0003 5%.)",CASE-0031,SO-0031,DE-SM-02,,L3,Đã duyệt,2026-09-01 03:15:00+00
+APR-0155,"Đơn mua cần duyệt (P6, maker-checker)",PO-0015 mua bổ sung 15 ITEM-0012 từ VEND-0003; P6 duyệt trước khi phát hành (người chuẩn bị ≠ P6).,CASE-0031,PO-0015,DE-FN-04,,L3,Đã duyệt,2026-09-02 01:30:00+00
+APR-0210,Đề nghị chi cần duyệt (P5),PAY-0031 cho VINV-0015; đối soát PO15/GRN12/VINV15 → Cần kiểm; P5 duyệt.,CASE-0031,PAY-0031,DE-FN-03,,L3,Chờ duyệt,2026-09-08 01:10:00+00
+APR-TH-01,Offer vượt khung (TH0),"Offer cho CAND-0031 vượt khung — TH0, KHÔNG thuộc CASE-0031. Số tiền là dữ liệu đầu vào TH0 (không canon).",,CAND-0031,DE-HR-01,,L3,Chờ duyệt,2026-09-08 01:20:00+00

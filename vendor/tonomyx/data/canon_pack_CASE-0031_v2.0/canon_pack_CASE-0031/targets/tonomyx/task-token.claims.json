@@ -1,0 +1,4 @@
+{"iss":"tonomyx-token-issuer","sub":"<DE>","task_id":"<T-...>","case_id":"CASE-0031",
+ "tools":["read_records","search_kb","write_draft","create_approval"],
+ "scope":{"read":["cust","item","so","soline","policy"],"draft":["so","soline"],"kb_domain":"sales"},
+ "autonomy":"L2","budget_usd":0.05,"jti":"<uuid>","exp":"now+300s (single use)"}

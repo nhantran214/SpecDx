@@ -1,0 +1,9 @@
+﻿ma_user,ho_ten,role,quyen
+P1,Tổng Giám đốc,lãnh đạo,duyệt cấp cao / mục vượt ngưỡng
+P2,Trưởng Kinh doanh,quản lý,duyệt báo giá (APR-0102)
+P3,Nhân viên bán hàng,nhân viên,xử lý yêu cầu & chăm sóc khách (vai nội bộ)
+P4,Trưởng Vận hành,quản lý,xử lý ngoại lệ nhận hàng/chất lượng/giao
+P5,Kế toán trưởng,tài chính,duyệt đề nghị chi (APR-0210)
+P6,Nhân viên mua hàng,mua sắm,duyệt đơn mua PO (APR-0155)
+P7,Trưởng Nhân sự,quản lý,duyệt tuyển dụng (TH0)
+P8,Tuân thủ/ESG,quản lý,"chính sách, kiểm tra, báo cáo"

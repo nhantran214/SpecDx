@@ -1,0 +1,11 @@
+{"tools":[
+ {"name":"read_records","input":"table,filter,fields","effect":"rows in scope","gating":"table in token scope"},
+ {"name":"write_draft","input":"table,payload,idempotency_key","effect":"draft row","gating":"draft tables only; never approved/sent; discount cap from policy"},
+ {"name":"update_status","input":"table,key,new_status","effect":"status transition","gating":"legal transitions; gated statuses need approved APR"},
+ {"name":"create_approval","input":"type,record_ref,case_id,amount","effect":"APR 'Chờ duyệt'","gating":"required before sensitive action"},
+ {"name":"decide_approval","input":"apr,decision,reason,idempotency_key","effect":"APR state change","gating":"user token; persona owns APR type; over-cap not batch"},
+ {"name":"log_event","input":"case_id,kind,ref,actor,basis","effect":"evt row","gating":"kind in registry"},
+ {"name":"search_kb","input":"query,domain","effect":"passages+kb_id+version or not_found","gating":"domain from token"},
+ {"name":"send_email","input":"to,subject,body,ref","effect":"mail to Mailpit","gating":"related APR 'Đã duyệt' and to ends @demo.example"},
+ {"name":"match_three_way","input":"po,grn,vinv","effect":"Khớp or Cần kiểm + diff","gating":"never edits sources; Cần kiểm blocks paying unmatched"}
+]}

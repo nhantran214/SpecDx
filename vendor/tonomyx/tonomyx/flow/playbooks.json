@@ -1,0 +1,21 @@
+{
+  "_note": "What a correct outcome is, per digital employee and intent, for an executor backed by a language model. Scripted handlers encode this in code; a model needs it in words. Only intents whose playbook has been run against a real model are listed here. requires names the tools that must succeed before the task counts as done.",
+  "DE-OP-01": {
+    "check_availability": {
+      "steps": "Đọc bảng soline với filter {\"so\": <ma_so trong dữ liệu vào>}. Với MỖI dòng có du_hang = false, gọi log_event đúng một lần: case_id là vụ việc, kind='FLAGGED', ref=<ma_sp của dòng đó>, actor='AI', basis='<ma_sp> thiếu — không đủ <sl>; phát sinh mua bổ sung'. Không ghi sự kiện cho dòng có du_hang = true. Mỗi dòng thiếu chỉ ghi một lần.",
+      "requires": [
+        "read_records"
+      ]
+    }
+  },
+  "DE-SM-02": {
+    "draft_quote": {
+      "steps": "Soạn báo giá NHÁP cho đơn trong dữ liệu vào; không gửi cho khách, không tự duyệt. Dữ liệu vào gồm ma_so, ma_kh, ma_apr, lines (dạng 'ma_sp:sl' cách nhau dấu phẩy), và có thể có discount_pct (phần trăm: 8 nghĩa là 8%). Làm đúng thứ tự: (1) read_records bảng policy để biết trần chiết khấu (ma_nguong NG-CK-0005) và các ngưỡng tồn dạng NG-TON-MIN-<4 chữ số cuối của ma_sp>. (2) write_draft bảng so: ma_so, ma_kh, case_id = vụ việc, trang_thai='Chờ duyệt'; idempotency_key='draft:<ma_so>'. (3) Với dòng thứ n (đếm từ 1) trong lines, write_draft bảng soline: ma_soline='SOLINE-<phần số của ma_so>-<n>' (SO-0031 cho SOLINE-0031-1), so=<ma_so>, ma_sp, sl là số nguyên, don_gia=null, du_hang; idempotency_key='draft:<ma_soline>'. du_hang=false CHỈ KHI policy có ngưỡng NG-TON-MIN cho đúng mặt hàng đó, không có ngưỡng thì du_hang=true. chiet_khau=null và don_gia=null: canon để trống mọi giá, tiền và chiết khấu, không được tự điền kể cả số 0. (4) log_event kind='DRAFTED', ref=<ma_so>, actor='AI', basis='<mã nhân viên số> soạn báo giá (nháp)'. (5) Chỉ khi discount_pct vượt trần: log_event kind='FLAGGED', ref=<ma_so>, actor='AI', basis nêu khách đề nghị chiết khấu vượt trần. (6) create_approval type='quote', record_ref=<ma_so>, case_id = vụ việc, ma_apr=<ma_apr>, amount=null. Rồi dừng: duyệt là việc của P2.",
+      "requires": [
+        "write_draft",
+        "log_event",
+        "create_approval"
+      ]
+    }
+  }
+}

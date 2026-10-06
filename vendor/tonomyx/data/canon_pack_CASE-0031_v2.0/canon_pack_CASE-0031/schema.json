@@ -1,0 +1,719 @@
+{
+  "tables": {
+    "cust": [
+      {
+        "name": "ma_kh",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ten",
+        "type": "text"
+      },
+      {
+        "name": "hang",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "item": [
+      {
+        "name": "ma_sp",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ten",
+        "type": "text"
+      },
+      {
+        "name": "don_gia",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "ton_kho",
+        "type": "int",
+        "nullable": true
+      },
+      {
+        "name": "ck_toi_da",
+        "type": "numeric",
+        "nullable": true
+      }
+    ],
+    "vend": [
+      {
+        "name": "ma_ncc",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ten",
+        "type": "text"
+      },
+      {
+        "name": "diem_chat_luong",
+        "type": "int",
+        "nullable": true
+      }
+    ],
+    "cases": [
+      {
+        "name": "case_id",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "tieu_de",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "so": [
+      {
+        "name": "ma_so",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ma_kh",
+        "type": "text",
+        "fk": "cust.ma_kh"
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "soline": [
+      {
+        "name": "ma_soline",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "so",
+        "type": "text",
+        "fk": "so.ma_so"
+      },
+      {
+        "name": "ma_sp",
+        "type": "text",
+        "fk": "item.ma_sp"
+      },
+      {
+        "name": "sl",
+        "type": "int"
+      },
+      {
+        "name": "don_gia",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "chiet_khau",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "du_hang",
+        "type": "bool"
+      }
+    ],
+    "inv": [
+      {
+        "name": "ma_inv",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ma_kh",
+        "type": "text",
+        "fk": "cust.ma_kh"
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "nullable": true,
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "so_tien",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "doi_soat",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "po": [
+      {
+        "name": "ma_po",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ma_ncc",
+        "type": "text",
+        "fk": "vend.ma_ncc"
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "sl_dat",
+        "type": "int"
+      },
+      {
+        "name": "don_gia",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "grn": [
+      {
+        "name": "ma_grn",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "po",
+        "type": "text",
+        "fk": "po.ma_po"
+      },
+      {
+        "name": "sl_nhan",
+        "type": "int"
+      }
+    ],
+    "insp": [
+      {
+        "name": "ma_insp",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "grn",
+        "type": "text",
+        "fk": "grn.ma_grn"
+      },
+      {
+        "name": "ket_qua",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "ncr": [
+      {
+        "name": "ma_ncr",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "insp",
+        "type": "text",
+        "fk": "insp.ma_insp"
+      },
+      {
+        "name": "loi",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "muc_do",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "ship": [
+      {
+        "name": "ma_ship",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "po",
+        "type": "text",
+        "fk": "po.ma_po"
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "tre_ngay",
+        "type": "int",
+        "nullable": true
+      }
+    ],
+    "vinv": [
+      {
+        "name": "ma_vinv",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "po",
+        "type": "text",
+        "fk": "po.ma_po"
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "nullable": true,
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "so_tien",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "doi_soat",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "pay": [
+      {
+        "name": "ma_pay",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ma_vinv",
+        "type": "text",
+        "fk": "vinv.ma_vinv"
+      },
+      {
+        "name": "so_tien",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "emp": [
+      {
+        "name": "ma_nv",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ho_ten",
+        "type": "text"
+      },
+      {
+        "name": "phong",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "chuc_danh",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "luong",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "cand": [
+      {
+        "name": "ma_cand",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "vi_tri",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "nullable": true,
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "muc_offer",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "khung_max",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "att": [
+      {
+        "name": "ma_att",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ma_nv",
+        "type": "text",
+        "fk": "emp.ma_nv"
+      },
+      {
+        "name": "ngay",
+        "type": "date",
+        "nullable": true
+      },
+      {
+        "name": "loai",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "so_ngay",
+        "type": "numeric",
+        "nullable": true
+      }
+    ],
+    "esg": [
+      {
+        "name": "ma_esg",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "chi_tieu",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "ky",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "gia_tri",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "apr": [
+      {
+        "name": "ma_apr",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "loai",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "noi_dung",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "nullable": true,
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "hoso_ref",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "nguoi_tao",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "gia_tri",
+        "type": "bigint",
+        "nullable": true
+      },
+      {
+        "name": "muc_tu_hanh",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "trang_thai",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp",
+        "nullable": true
+      }
+    ],
+    "policy": [
+      {
+        "name": "ma_nguong",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "doi_tuong",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "gia_tri",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "nguon",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "int",
+        "pk": true
+      }
+    ],
+    "evt": [
+      {
+        "name": "id",
+        "type": "serial",
+        "pk": true
+      },
+      {
+        "name": "case_id",
+        "type": "text",
+        "fk": "cases.case_id"
+      },
+      {
+        "name": "kind",
+        "type": "text"
+      },
+      {
+        "name": "ref",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "actor",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "basis",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "at",
+        "type": "timestamp",
+        "nullable": true
+      }
+    ],
+    "kb": [
+      {
+        "name": "ma_kb",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "tieu_de",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "nguon",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "int",
+        "nullable": true
+      }
+    ],
+    "orc": [
+      {
+        "name": "ma_orc",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ten",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "de": [
+      {
+        "name": "ma_de",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "orc",
+        "type": "text",
+        "fk": "orc.ma_orc"
+      },
+      {
+        "name": "vai",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "app_user": [
+      {
+        "name": "ma_user",
+        "type": "text",
+        "pk": true
+      },
+      {
+        "name": "ho_ten",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "role",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "quyen",
+        "type": "text",
+        "nullable": true
+      }
+    ],
+    "de_scope": [
+      {
+        "name": "ma_de",
+        "type": "text",
+        "pk": true,
+        "fk": "de.ma_de"
+      },
+      {
+        "name": "tools",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "read_tables",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "draft_tables",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "create_apr",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "kb_domain",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "autonomy",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "budget_usd",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "send_email",
+        "type": "text",
+        "nullable": true
+      }
+    ]
+  },
+  "append_only": [
+    "evt"
+  ],
+  "classification": {
+    "cust": "master",
+    "item": "master",
+    "vend": "master",
+    "emp": "master",
+    "orc": "master",
+    "de": "master",
+    "app_user": "master",
+    "kb": "master",
+    "policy": "control",
+    "cases": "operational",
+    "so": "operational",
+    "soline": "operational",
+    "inv": "operational",
+    "po": "operational",
+    "grn": "operational",
+    "insp": "operational",
+    "ncr": "operational",
+    "ship": "operational",
+    "vinv": "operational",
+    "pay": "operational",
+    "cand": "operational",
+    "att": "operational",
+    "esg": "operational",
+    "apr": "operational",
+    "evt": "audit",
+    "de_scope": "master"
+  },
+  "advanced_note": "de_scope là mở rộng v2.0 (bảng thứ 26, master). event.kind registry enforce qua targets/postgres/guardrails.sql."
+}

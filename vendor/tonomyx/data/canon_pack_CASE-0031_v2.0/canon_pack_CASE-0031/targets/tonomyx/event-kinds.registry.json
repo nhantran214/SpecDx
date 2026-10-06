@@ -1,0 +1,5 @@
+{"note":"Registry evt.kind của TonomyX (§5.5) — vocab của tool service (phụ thuộc stack).",
+ "kinds":["case_opened","task_dispatched","task_completed","inquiry_classified","clarification_needed",
+ "draft_created","approval_requested","approval_decided","approval_escalated","external_send",
+ "shortage_detected","supply_requested","grn_recorded","exception_raised","vinv_received",
+ "three_way_matched","three_way_failed","tool_denied","llm_call","cost_cap_warned","cost_cap_hit"]}

@@ -1,0 +1,10 @@
+ma_de,tools,read_tables,draft_tables,create_apr,kb_domain,autonomy,budget_usd,send_email
+DE-SM-01,read_records|search_kb|write_draft|log_event,cust|item,so|soline,no,sales,L2,0.05,no
+DE-SM-02,read_records|search_kb|write_draft|create_approval|log_event,cust|item|policy,so|soline,yes,sales,L2,0.05,after_apr
+DE-OP-01,read_records|log_event,item|so|soline,,no,operations,L1,0.02,no
+DE-OP-02,read_records|write_draft|log_event,item|so|soline|po,grn,no,operations,L2,0.05,no
+DE-FN-04,read_records|write_draft|create_approval|log_event,item|so|soline|vend|policy,po,yes,procurement,L2,0.05,no
+DE-FN-01,read_records|write_draft|log_event,cust|so|soline,inv,no,finance,L2,0.05,no
+DE-FN-02,read_records|write_draft|match_three_way|log_event,po|grn|vend,vinv,no,finance,L2,0.05,no
+DE-FN-03,read_records|write_draft|create_approval|log_event,po|grn|vinv|vend|policy,pay,yes,finance,L2,0.05,no
+DE-CO-01,search_kb|log_event,,,no,all,L1,0.02,no

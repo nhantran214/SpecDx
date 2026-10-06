@@ -1,0 +1,35 @@
+[project]
+name = "specdx"
+version = "0.1.0"
+description = "SpecDx: probabilistic diagnosis of executable business specifications with populations of LLM interpreters"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.1", "httpx>=0.27", "psycopg[binary]>=3.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "ruff>=0.7"]
+
+[project.scripts]
+specdx = "specdx.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["specdx*"]
+
+[tool.setuptools.package-data]
+specdx = ["orchestrate/*.json", "interpreters/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["db: needs the SpecDx PostgreSQL on port 55434 (docker compose up -d)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["vendor/"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

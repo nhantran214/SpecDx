@@ -1,0 +1,505 @@
+{
+ "canon_version": "CASE-0031-ADV-2.0",
+ "invariants": [
+  {
+   "id": "po-15",
+   "desc": "PO-0015 đặt 15",
+   "table": "po",
+   "where": {
+    "ma_po": "PO-0015"
+   },
+   "assert": {
+    "col": "sl_dat",
+    "eq": "15"
+   }
+  },
+  {
+   "id": "grn-12",
+   "desc": "GRN-0015 nhận 12",
+   "table": "grn",
+   "where": {
+    "ma_grn": "GRN-0015"
+   },
+   "assert": {
+    "col": "sl_nhan",
+    "eq": "12"
+   }
+  },
+  {
+   "id": "vinv-cankiem",
+   "desc": "VINV-0015 đối soát 'Cần kiểm'",
+   "table": "vinv",
+   "where": {
+    "ma_vinv": "VINV-0015"
+   },
+   "assert": {
+    "col": "doi_soat",
+    "eq": "Cần kiểm"
+   }
+  },
+  {
+   "id": "ncr-2-12",
+   "desc": "NCR-0007 = 2/12 lỗi",
+   "table": "ncr",
+   "where": {
+    "ma_ncr": "NCR-0007"
+   },
+   "assert": {
+    "col": "loi",
+    "contains": "2 lỗi trên 12"
+   }
+  },
+  {
+   "id": "item0012-thieu",
+   "desc": "ITEM-0012 thiếu (du_hang false)",
+   "table": "soline",
+   "where": {
+    "ma_sp": "ITEM-0012"
+   },
+   "assert": {
+    "col": "du_hang",
+    "in": [
+     "f",
+     "false",
+     "False",
+     "0"
+    ]
+   }
+  },
+  {
+   "id": "item0005-du",
+   "desc": "ITEM-0005 đủ (du_hang true)",
+   "table": "soline",
+   "where": {
+    "ma_sp": "ITEM-0005"
+   },
+   "assert": {
+    "col": "du_hang",
+    "in": [
+     "t",
+     "true",
+     "True",
+     "1"
+    ]
+   }
+  },
+  {
+   "id": "gates-count",
+   "desc": "CASE-0031 có ĐÚNG 3 cổng",
+   "table": "apr",
+   "where": {
+    "case_id": "CASE-0031"
+   },
+   "assert": {
+    "count": 3
+   }
+  },
+  {
+   "id": "gates-set",
+   "desc": "3 cổng = APR-0102/0155/0210",
+   "table": "apr",
+   "where": {
+    "case_id": "CASE-0031"
+   },
+   "assert": {
+    "values_of": "ma_apr",
+    "equals_set": [
+     "APR-0102",
+     "APR-0155",
+     "APR-0210"
+    ]
+   }
+  },
+  {
+   "id": "apr0102-approved",
+   "desc": "APR-0102 (báo giá/P2) Đã duyệt",
+   "table": "apr",
+   "where": {
+    "ma_apr": "APR-0102"
+   },
+   "assert": {
+    "col": "trang_thai",
+    "eq": "Đã duyệt"
+   }
+  },
+  {
+   "id": "apr0155-approved",
+   "desc": "APR-0155 (đơn mua/P6 maker-checker) Đã duyệt",
+   "table": "apr",
+   "where": {
+    "ma_apr": "APR-0155"
+   },
+   "assert": {
+    "col": "trang_thai",
+    "eq": "Đã duyệt"
+   }
+  },
+  {
+   "id": "apr0210-pending",
+   "desc": "APR-0210 (đề nghị chi/P5) Chờ duyệt",
+   "table": "apr",
+   "where": {
+    "ma_apr": "APR-0210"
+   },
+   "assert": {
+    "col": "trang_thai",
+    "eq": "Chờ duyệt"
+   }
+  },
+  {
+   "id": "th01-not-case",
+   "desc": "APR-TH-01 (offer) là TH0 — case_id trống",
+   "table": "apr",
+   "where": {
+    "ma_apr": "APR-TH-01"
+   },
+   "assert": {
+    "col": "case_id",
+    "is_blank": true
+   }
+  },
+  {
+   "id": "th01-not-in-0031",
+   "desc": "APR-TH-01 KHÔNG thuộc CASE-0031",
+   "table": "apr",
+   "where": {
+    "ma_apr": "APR-TH-01",
+    "case_id": "CASE-0031"
+   },
+   "assert": {
+    "count": 0
+   }
+  },
+  {
+   "id": "no-case-0032",
+   "desc": "KHÔNG có CASE-0032",
+   "table": "cases",
+   "where": {
+    "case_id": "CASE-0032"
+   },
+   "assert": {
+    "count": 0
+   }
+  },
+  {
+   "id": "cand-not-case",
+   "desc": "Ứng viên nằm ngoài CASE-0031",
+   "table": "cand",
+   "where": {
+    "case_id": "CASE-0031"
+   },
+   "assert": {
+    "count": 0
+   }
+  },
+  {
+   "id": "vend-blank",
+   "desc": "Điểm VEND-0003 để trống",
+   "table": "vend",
+   "where": {
+    "ma_ncc": "VEND-0003"
+   },
+   "assert": {
+    "col": "diem_chat_luong",
+    "is_blank": true
+   }
+  },
+  {
+   "id": "cand-offer-blank",
+   "desc": "Offer/khung ứng viên để trống",
+   "table": "cand",
+   "assert": {
+    "all": {
+     "col": "muc_offer",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "cand-khung-blank",
+   "desc": "Khung ứng viên để trống",
+   "table": "cand",
+   "assert": {
+    "all": {
+     "col": "khung_max",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "apr-giatri-blank",
+   "desc": "APR.gia_tri để trống",
+   "table": "apr",
+   "assert": {
+    "all": {
+     "col": "gia_tri",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "inv-sotien-blank",
+   "desc": "INV.so_tien để trống",
+   "table": "inv",
+   "assert": {
+    "all": {
+     "col": "so_tien",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "vinv-sotien-blank",
+   "desc": "VINV.so_tien để trống",
+   "table": "vinv",
+   "assert": {
+    "all": {
+     "col": "so_tien",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "pay-sotien-blank",
+   "desc": "PAY.so_tien để trống",
+   "table": "pay",
+   "assert": {
+    "all": {
+     "col": "so_tien",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "item-dongia-blank",
+   "desc": "ITEM.don_gia để trống",
+   "table": "item",
+   "assert": {
+    "all": {
+     "col": "don_gia",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "po-dongia-blank",
+   "desc": "PO.don_gia để trống",
+   "table": "po",
+   "assert": {
+    "all": {
+     "col": "don_gia",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "soline-dongia-blank",
+   "desc": "SOLINE.don_gia để trống",
+   "table": "soline",
+   "assert": {
+    "all": {
+     "col": "don_gia",
+     "is_blank": true
+    }
+   }
+  },
+  {
+   "id": "chietkhau-0",
+   "desc": "Chiết khấu không phải canon (=0/để trống)",
+   "table": "soline",
+   "assert": {
+    "all": {
+     "col": "chiet_khau",
+     "in": [
+      "0",
+      "0.0",
+      "0.000",
+      ""
+     ]
+    }
+   }
+  },
+  {
+   "id": "esg01-thieu",
+   "desc": "ESG-01 = 'Thiếu dữ liệu'",
+   "table": "esg",
+   "where": {
+    "ma_esg": "ESG-01"
+   },
+   "assert": {
+    "col": "trang_thai",
+    "eq": "Thiếu dữ liệu"
+   }
+  },
+  {
+   "id": "pending-2",
+   "desc": "Còn 2 cổng 'Chờ duyệt' (APR-0210 + APR-TH-01)",
+   "table": "apr",
+   "where": {
+    "trang_thai": "Chờ duyệt"
+   },
+   "assert": {
+    "count": 2
+   }
+  },
+  {
+   "id": "so-case",
+   "desc": "SO xuyên suốt CASE-0031",
+   "table": "so",
+   "assert": {
+    "all": {
+     "col": "case_id",
+     "eq": "CASE-0031"
+    }
+   }
+  },
+  {
+   "id": "po-case",
+   "desc": "PO xuyên suốt CASE-0031",
+   "table": "po",
+   "assert": {
+    "all": {
+     "col": "case_id",
+     "eq": "CASE-0031"
+    }
+   }
+  },
+  {
+   "id": "vinv-case",
+   "desc": "VINV xuyên suốt CASE-0031",
+   "table": "vinv",
+   "assert": {
+    "all": {
+     "col": "case_id",
+     "eq": "CASE-0031"
+    }
+   }
+  },
+  {
+   "id": "inv-case",
+   "desc": "INV xuyên suốt CASE-0031",
+   "table": "inv",
+   "assert": {
+    "all": {
+     "col": "case_id",
+     "eq": "CASE-0031"
+    }
+   }
+  },
+  {
+   "id": "no-paid",
+   "desc": "Guardrail: không có khoản đã chi (snapshot)",
+   "table": "pay",
+   "assert": {
+    "all": {
+     "col": "trang_thai",
+     "ne": "Đã chi"
+    }
+   }
+  },
+  {
+   "id": "orc-count-5",
+   "desc": "Đủ 5 khối (ORC)",
+   "table": "orc",
+   "assert": {
+    "count": 5
+   }
+  },
+  {
+   "id": "de-count-15",
+   "desc": "Đủ 15 vai số (DE) theo TABLE 35",
+   "table": "de",
+   "assert": {
+    "count": 15
+   }
+  },
+  {
+   "id": "de-set",
+   "desc": "Danh mục DE khớp D_v19 TABLE 35",
+   "table": "de",
+   "assert": {
+    "values_of": "ma_de",
+    "equals_set": [
+     "DE-SM-01",
+     "DE-SM-02",
+     "DE-SM-03",
+     "DE-OP-01",
+     "DE-OP-02",
+     "DE-OP-03",
+     "DE-FN-01",
+     "DE-FN-02",
+     "DE-FN-03",
+     "DE-FN-04",
+     "DE-FN-05",
+     "DE-HR-01",
+     "DE-HR-02",
+     "DE-RP-01",
+     "DE-CO-01"
+    ]
+   }
+  },
+  {
+   "id": "appuser-count-8",
+   "desc": "Đủ 8 persona P1–P8",
+   "table": "app_user",
+   "assert": {
+    "count": 8
+   }
+  },
+  {
+   "id": "appuser-p3",
+   "desc": "Có P3 (nhân viên bán hàng)",
+   "table": "app_user",
+   "where": {
+    "ma_user": "P3"
+   },
+   "assert": {
+    "count": 1
+   }
+  },
+  {
+   "id": "de-scope-9",
+   "desc": "de_scope phủ 9 DE active",
+   "table": "de_scope",
+   "assert": {
+    "count": 9
+   }
+  },
+  {
+   "id": "de-sm02-apr",
+   "desc": "DE-SM-02 được tạo APR",
+   "table": "de_scope",
+   "where": {
+    "ma_de": "DE-SM-02"
+   },
+   "assert": {
+    "col": "create_apr",
+    "eq": "yes"
+   }
+  },
+  {
+   "id": "de-co01-kb",
+   "desc": "DE-CO-01 chỉ dùng search_kb",
+   "table": "de_scope",
+   "where": {
+    "ma_de": "DE-CO-01"
+   },
+   "assert": {
+    "col": "tools",
+    "contains": "search_kb"
+   }
+  },
+  {
+   "id": "de-fn03-pay",
+   "desc": "DE-FN-03 được draft pay",
+   "table": "de_scope",
+   "where": {
+    "ma_de": "DE-FN-03"
+   },
+   "assert": {
+    "col": "draft_tables",
+    "contains": "pay"
+   }
+  }
+ ]
+}

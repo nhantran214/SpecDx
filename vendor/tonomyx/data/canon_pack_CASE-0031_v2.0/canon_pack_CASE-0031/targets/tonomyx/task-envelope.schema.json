@@ -1,0 +1,6 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","title":"TaskEnvelope",
+ "type":"object","required":["task_id","case_id","de","intent","inputs","scope","idempotency_key","deadline"],
+ "properties":{"task_id":{"type":"string"},"case_id":{"type":"string"},"de":{"type":"string"},
+ "intent":{"type":"string"},"inputs":{"type":"object"},
+ "scope":{"type":"object","properties":{"tools":{"type":"array"},"read":{"type":"array"},"draft":{"type":"array"},"kb_domain":{"type":"string"}}},
+ "idempotency_key":{"type":"string"},"deadline":{"type":"string","format":"date-time"}}}

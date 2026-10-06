@@ -1,0 +1,12 @@
+﻿id,case_id,kind,ref,actor,basis,at
+1,CASE-0031,DRAFTED,SO-0031,AI,DE-SM-02 soạn báo giá QUOTE-0031 (nháp),2026-09-01 02:00:00+00
+2,CASE-0031,FLAGGED,ITEM-0012,AI,ITEM-0012 thiếu — không đủ 15; phát sinh mua bổ sung,2026-09-01 02:02:00+00
+3,CASE-0031,FLAGGED,SO-0031,AI,"(Minh họa, không canon) Khách đề nghị chiết khấu vượt trần KB-0003 5%",2026-09-01 02:03:00+00
+4,CASE-0031,APPROVED,APR-0102,Người,P2 duyệt báo giá,2026-09-01 03:15:00+00
+5,CASE-0031,DRAFTED,PO-0015,AI+,DE-FN-04 chuẩn bị PO-0015: 15 ITEM-0012 từ VEND-0003 (nháp),2026-09-01 03:20:00+00
+6,CASE-0031,APPROVED,APR-0155,Người,P6 duyệt PO-0015 (maker-checker) trước khi phát hành,2026-09-02 01:30:00+00
+7,CASE-0031,RECEIVED,GRN-0015,AI+,Nhận 12 / đặt 15 — lệch 3,2026-09-05 07:00:00+00
+8,CASE-0031,INSPECTED,NCR-0007,Người,2/12 đơn vị lỗi; P4 xử lý ngoại lệ (không mở APR chuẩn),2026-09-05 08:30:00+00
+9,CASE-0031,SHIPPED,SHIP-0031,AI+,NXB giao trễ 2 ngày; P4 xử lý ngoại lệ (không mở APR chuẩn),2026-09-07 02:00:00+00
+10,CASE-0031,RECONCILED,VINV-0015,AI+,Đối soát PO 15 / GRN 12 / VINV 15 → Cần kiểm (lệch 3),2026-09-08 01:00:00+00
+11,CASE-0031,DRAFTED,PAY-0031,AI,DE-FN-03 chuẩn bị PAY-0031 (nháp); dừng ở APR-0210 chờ P5,2026-09-08 01:10:00+00

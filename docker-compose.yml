@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: specdx-postgres
+    environment:
+      POSTGRES_USER: tonomyx
+      POSTGRES_PASSWORD: tonomyx
+      POSTGRES_DB: tonomyx
+      LANG: C.UTF-8
+    ports:
+      - "55434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tonomyx -d tonomyx"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

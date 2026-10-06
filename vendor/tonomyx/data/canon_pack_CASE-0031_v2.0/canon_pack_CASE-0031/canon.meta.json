@@ -1,0 +1,83 @@
+{
+  "canon_version": "CASE-0031-ADV-2.0",
+  "nguon": [
+    "DBook v19",
+    "NBook v17",
+    "MBook v16"
+  ],
+  "mo_ta": "Ground of truth trung lập công nghệ cho CASE-0031 (SAMPLE_CO). Dữ liệu + schema + bất biến ở dạng data; validator dùng thư viện chuẩn. Đổi tech stack vẫn dùng được.",
+  "nguyen_tac": [
+    "KHÓA dữ kiện canon (Bảng 9.3): mã, số lượng, trạng thái, cổng, quan hệ.",
+    "ĐỂ TRỐNG (blank/null) mọi số sách không xác lập: giá, tiền, chiết khấu, điểm NCC, offer, ngưỡng tiền.",
+    "CASE-0031 có ĐÚNG 3 cổng: APR-0102/P2, APR-0155/P6 (maker-checker), APR-0210/P5 (đối soát lệch).",
+    "GRN lệch / lô lỗi / giao trễ: P4 xử lý ngoại lệ — KHÔNG mở APR chuẩn.",
+    "Nhánh HR/offer là TH0: APR-TH-01, case_id trống; KHÔNG có CASE-0032."
+  ],
+  "cot_de_trong_khong_canon": {
+    "item": [
+      "don_gia",
+      "ton_kho"
+    ],
+    "soline": [
+      "don_gia",
+      "chiet_khau"
+    ],
+    "po": [
+      "don_gia"
+    ],
+    "inv": [
+      "so_tien"
+    ],
+    "vinv": [
+      "so_tien"
+    ],
+    "pay": [
+      "so_tien"
+    ],
+    "vend": [
+      "diem_chat_luong"
+    ],
+    "cand": [
+      "muc_offer",
+      "khung_max"
+    ],
+    "emp": [
+      "luong"
+    ],
+    "apr": [
+      "gia_tri"
+    ],
+    "policy": [
+      "gia_tri (NG-PO-MAX/NG-CHI-MAX/NG-NCC-MIN/NG-LUONG-KD-MAX)"
+    ]
+  },
+  "thay_doi_1.1": "Bổ sung đủ danh mục vai số theo D_v19 TABLE 35 (15 DE) + persona P3 (nhân viên bán hàng). Bất biến CASE-0031 giữ nguyên.",
+  "guardrails_db_enforced": [
+    "EVT append-only (trigger no_mutate) — không UPDATE/DELETE dấu vết.",
+    "trg_guard_pay — chặn chuyển pay→'Đã chi' khi chưa có APR 'Đã duyệt' hoặc VINV còn 'Cần kiểm'.",
+    "Policy dạng hàm: fn_policy / fn_check_discount / fn_reconcile — mọi app-stack gọi chung một luật."
+  ],
+  "ghi_chu_doc_lap": "CSDL cố định = PostgreSQL. Dữ liệu + policy + guardrails đều ở CSDL → độc lập framework agent/LLM/app-stack. Nạp targets/postgres/guardrails.sql (gồm EVT append-only + chặn-chi + hàm policy).",
+  "phan_loai_du_lieu": {
+    "master": 9,
+    "control": 1,
+    "operational": 15,
+    "audit": 1,
+    "ghi_chu": "de_scope là bảng master thứ 26 (advanced)"
+  },
+  "v2_advanced": {
+    "doc_lap": "CSDL cố định = PostgreSQL. CANON = data/ + schema.json + invariants.json + targets/postgres/ → ĐỘC LẬP mọi app-stack. Phần phụ thuộc stack ở targets/tonomyx/ (có nhãn).",
+    "them_data_doc_lap": [
+      "data/de_scope.csv (scope per-DE)",
+      "data/scenarios.json (happy/discount8/grn12)",
+      "data/event_kinds.json (vocab canon, enforce ở DB)",
+      "data/illustrative/prices.csv (NON-canon)",
+      "kb/*.md (front-matter)"
+    ],
+    "phu_thuoc_stack": [
+      "targets/tonomyx/ — Task/Result Envelope · task/user token · tool-catalog (9) · policy.rego · registry evt.kind TonomyX + mapping"
+    ],
+    "thu_tu_nap": "ddl.sql → guardrails.sql → seed_master.sql → seed_operational.sql",
+    "kiem_thu": "validate.py 49/49; Postgres: chặn-chi + evt append-only + registry evt.kind + de_scope=9"
+  }
+}

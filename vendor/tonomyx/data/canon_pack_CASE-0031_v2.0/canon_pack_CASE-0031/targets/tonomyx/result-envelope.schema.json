@@ -1,0 +1,6 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","title":"ResultEnvelope",
+ "type":"object","required":["task_id","case_id","status"],
+ "properties":{"task_id":{"type":"string"},"case_id":{"type":"string"},
+ "status":{"enum":["done","needs_gate","denied","error"]},
+ "drafts":{"type":"array"},"approvals":{"type":"array"},"events":{"type":"array"},
+ "citations":{"type":"array"},"usage":{"type":"object"},"next_hint":{"type":"string"}}}
