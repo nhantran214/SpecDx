@@ -13,11 +13,17 @@ def ddmin[T](
 ) -> list[T]:
     """A minimal subset on which `fails` still holds; anytime under max_tests."""
     tests = 0
+    seen: dict[tuple, bool] = {}
 
     def check(subset: Sequence[T]) -> bool:
         nonlocal tests
+        key = tuple(subset)
+        if key in seen:
+            return seen[key]
         tests += 1
-        return fails(subset)
+        result = fails(subset)
+        seen[key] = result
+        return result
 
     def out_of_budget() -> bool:
         return max_tests is not None and tests >= max_tests
@@ -36,7 +42,7 @@ def ddmin[T](
             if check(chunk):
                 current, n, reduced = chunk, 2, True
                 break
-        if not reduced:
+        if not reduced and n > 2:
             for chunk in chunks:
                 if out_of_budget():
                     break

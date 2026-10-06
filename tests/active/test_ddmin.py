@@ -11,8 +11,27 @@ def test_ddmin_returns_nothing_when_the_whole_does_not_fail() -> None:
 
 
 def test_ddmin_stops_at_the_test_budget_with_a_failing_superset() -> None:
-    result = ddmin(list(range(64)), lambda s: {3, 7} <= set(s), max_tests=3)
-    assert {3, 7} <= set(result)
+    calls = []
+
+    def fails(s):
+        calls.append(tuple(s))
+        return {3, 7} <= set(s)
+
+    result = ddmin(list(range(64)), fails, max_tests=3)
+    assert len(calls) <= 3
+    assert {3, 7} <= set(result) and len(result) > 2
+
+
+def test_ddmin_never_re_probes_a_subset() -> None:
+    calls = []
+
+    def fails(s):
+        calls.append(tuple(s))
+        return {3, 7} <= set(s)
+
+    result = ddmin(list(range(64)), fails)
+    assert len(calls) == len(set(calls))
+    assert sorted(result) == [3, 7]
 
 
 def test_localisation_names_the_sentence_that_keeps_the_split() -> None:
