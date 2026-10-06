@@ -1,0 +1,89 @@
+import pytest
+from tonomyx.canon.pack import CanonPack
+
+from specdx.config import BASE_PACK
+from specdx.mutate.operators import all_mutants, dev_split, witness_state
+from specdx.orchestrate.work_orders import load_work_orders
+from specdx.spec.clauses import ClauseSet
+from specdx.spec.tell import TellCorpus
+from specdx.types import Scenario, State
+from specdx.variant import SpecVariant
+
+STEPS = load_work_orders()
+GRN12 = Scenario("grn12", 15, 12, 0)
+
+
+@pytest.fixture(scope="module")
+def mutants(pack, tmp_path_factory):
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(pack, []))
+    return {m.id: m for m in all_mutants(base, [], tmp_path_factory.mktemp("work"))}
+
+
+@pytest.fixture(scope="module")
+def base_clauses(pack) -> ClauseSet:
+    return ClauseSet.from_pack(pack, STEPS)
+
+
+def _clauses(m) -> ClauseSet:
+    return ClauseSet.from_pack(CanonPack(m.variant.pack), STEPS)
+
+
+def _done(golden: State) -> State:
+    return State(golden.tables, golden.derived, {s.id: "done" for s in STEPS})
+
+
+def test_there_are_thirty_six_mutants_and_a_stratified_dev_split(mutants) -> None:
+    assert len(mutants) == 36
+    dev = dev_split(list(mutants.values()), 5, 20261006)
+    assert len(dev) == 20
+    assert sorted({m.truth.type for m in dev}) == ["ambiguity", "contradiction", "hidden", "weak"]
+
+
+@pytest.mark.db
+def test_hidden_and_conflict_mutants_are_witnessed_by_the_canon_state(mutants, golden) -> None:
+    for m in mutants.values():
+        if m.operator not in ("C1", "H1", "H2"):
+            continue
+        v = _clauses(m).violations(_done(witness_state(m, golden)), GRN12)
+        if m.operator == "C1":
+            assert v == {f"inv:mut-c1-{m.site}"}, m.id
+        else:
+            assert v == m.truth.location, m.id
+
+
+@pytest.mark.db
+def test_weak_mutants_let_a_t_violating_state_pass(mutants, base_clauses, golden) -> None:
+    for m in mutants.values():
+        if m.operator not in ("W1", "W2"):
+            continue
+        witness = _done(witness_state(m, golden))
+        assert _clauses(m).violations(witness, GRN12) == frozenset(), m.id
+        assert base_clauses.violations(witness, GRN12), m.id
+
+
+@pytest.mark.db
+def test_guardrail_mutants_refuse_the_canon_state(db, mutants, golden) -> None:
+    for m in mutants.values():
+        if m.operator != "C2":
+            continue
+        db.use(m.variant.pack)
+        assert db.materialize(golden) is None, m.id
+    db.use(BASE_PACK)
+
+
+def test_tell_mutants_change_the_corpus_and_the_kb(mutants) -> None:
+    a1 = mutants["A1-00"]
+    assert a1.variant.corpus.find("**mức tối đa 5%**.") == []
+    assert a1.truth.location == frozenset({"KB:KB-0003"})
+    kb = (a1.variant.pack / "kb" / "KB-0003.md").read_text(encoding="utf-8")
+    assert "mức tối đa 5%" not in kb
+    a2 = mutants["A2-01"]
+    assert set(a2.variant.corpus.find("**mức tối đa hợp lý**.")) == a2.truth.location
+    a3 = mutants["A3-00"]
+    assert "KB-0009" in CanonPack(a3.variant.pack).kb
+    assert all(TellCorpus.chunk_of(s) == "KB:KB-0009" for s in a3.truth.location)
+
+
+def test_the_base_pack_is_never_touched(mutants) -> None:
+    text = (BASE_PACK / "kb" / "KB-0003.md").read_text(encoding="utf-8")
+    assert "**mức tối đa 5%**" in text
