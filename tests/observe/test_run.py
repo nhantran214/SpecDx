@@ -52,3 +52,19 @@ def test_a_database_outage_is_not_cached(db, pack, variant, tmp_path) -> None:
     with pytest.raises(psycopg.OperationalError):
         runner.run(variant, canon_scenarios(pack)["grn12"], REF)
     assert len(cache) == 0
+
+
+def test_a_different_context_digest_never_reuses_a_cached_run(db, pack, variant, tmp_path) -> None:
+    cache = RunCache(tmp_path / "r.jsonl")
+    grn12 = canon_scenarios(pack)["grn12"]
+
+    def runner(context: str) -> Runner:
+        return Runner(db, cache, lambda i, c, s: reference_executor(), STEPS,
+                      model_digest=lambda m: "d", context_digest=context)
+
+    first, second, same_as_first = runner("tell-a"), runner("tell-b"), runner("tell-a")
+    key_a = first.run(variant, grn12, REF).run_key
+    key_b = second.run(variant, grn12, REF).run_key
+    assert key_a != key_b and second.executed == 1
+    same_as_first.run(variant, grn12, REF)
+    assert same_as_first.executed == 0

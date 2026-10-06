@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -37,14 +39,23 @@ from specdx.variant import SpecVariant
 def ollama_digests(
     base_url: str = OLLAMA_URL, transport: httpx.BaseTransport | None = None
 ) -> Callable[[str], str]:
-    """Model name → Ollama digest, so the run cache never mixes two builds of one model."""
-    try:
-        with httpx.Client(transport=transport, timeout=10.0) as client:
-            models = client.get(f"{base_url}/api/tags").json().get("models", [])
-        digests = {str(m["name"]): str(m["digest"]) for m in models}
-    except httpx.HTTPError:
-        digests = {}
-    return lambda model: digests.get(model, model)
+    """Model name → Ollama digest, fetched on first use, so the run cache never mixes two
+    builds of one model. An unknown model or an unreachable Ollama is an error."""
+    digests: dict[str, str] = {}
+
+    def lookup(model: str) -> str:
+        if not digests:
+            with httpx.Client(transport=transport, timeout=10.0) as client:
+                response = client.get(f"{base_url}/api/tags")
+                response.raise_for_status()
+                for m in response.json().get("models", []):
+                    digests[str(m["name"])] = str(m["digest"])
+        name = model if ":" in model else f"{model}:latest"
+        if name not in digests:
+            raise KeyError(f"Ollama does not list model {model!r}")
+        return digests[name]
+
+    return lookup
 
 
 class Workbench:
@@ -72,10 +83,17 @@ class Workbench:
     ) -> Workbench:
         pdf = pdf_chunks(PDF_DIR, work_dir / "tell")
         base = SpecVariant("base", BASE_PACK, TellCorpus.build(CanonPack(BASE_PACK), pdf))
+        variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
-                    load_variants(), pdf, base, work_dir)
+                    variants, pdf, base, work_dir)
+        context = json.dumps(
+            {"standing": list(variants.standing),
+             "statements": {k: list(v) for k, v in variants.statements.items()}},
+            ensure_ascii=False, sort_keys=True,
+        )
         bench.runner = Runner(bench.db, bench.cache, factory or bench.llm_factory, bench.steps,
-                              model_digest=model_digest or ollama_digests())
+                              model_digest=model_digest or ollama_digests(),
+                              context_digest=hashlib.sha256(context.encode()).hexdigest())
         return bench
 
     def llm_factory(self, interp: InterpreterId, corpus: TellCorpus, suffix: str) -> DeExecutor:
@@ -85,6 +103,11 @@ class Workbench:
         )
 
     def loop_context(self, variant: SpecVariant, config: SpecDxConfig) -> LoopContext:
+        if max(config.variants) >= self.variants.count:
+            raise ValueError(
+                f"configured Tell variants {sorted(config.variants)} exceed the "
+                f"{self.variants.count} available; run `specdx make-variants` first"
+            )
         pack = CanonPack(variant.pack)
         clauses = ClauseSet.from_pack(pack, self.steps)
         lens = SpecLens(clauses, self.steps, ColumnModel.of(pack))

@@ -35,9 +35,11 @@ class Runner:
         steps: Sequence[WorkStep],
         *,
         model_digest: Callable[[str], str] | None = None,
+        context_digest: str = "",
     ) -> None:
         self.db, self.cache, self.factory, self.steps = db, cache, factory, tuple(steps)
         self.model_digest = model_digest or (lambda model: model)
+        self.context_digest = context_digest
         self._steps_digest = hashlib.sha256(repr(self.steps).encode()).hexdigest()
         self.executed = 0
 
@@ -45,7 +47,7 @@ class Runner:
         self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
     ) -> Behaviour:
         key = run_key(
-            variant.digest(), self._steps_digest,
+            variant.digest(), self._steps_digest, self.context_digest,
             json.dumps(scenario.params(), sort_keys=True), interp.key,
             suffix, self.model_digest(interp.model),
         )

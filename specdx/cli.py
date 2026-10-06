@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -17,6 +18,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     mv = sub.add_parser("make-variants", help="paraphrase Tell variant 0 into variants 1..n")
     mv.add_argument("--model", default="qwen3:14b")
     mv.add_argument("--count", type=int, default=2)
+    mv.add_argument("--force", action="store_true",
+                    help="replace paraphrases that already exist (they are frozen otherwise)")
     cap = sub.add_parser("capability", help="check native tool calling of local models")
     cap.add_argument("models", nargs="+")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
@@ -41,7 +44,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         from specdx.interpreters.paraphrase import make_variants
         from specdx.interpreters.prompt import load_variants, save_variants
 
-        made = make_variants(load_variants(), model=args.model, count=args.count)
+        current = load_variants()
+        if current.count > 1 and not args.force:
+            print(
+                f"error: {current.count - 1} paraphrase variant(s) already exist and are frozen; "
+                "pass --force to replace them (cached runs of the old text are then not reused)",
+                file=sys.stderr,
+            )
+            return 2
+        made = make_variants(current, model=args.model, count=args.count)
         save_variants(made)
         print(f"variants: {made.count}")
         return 0
