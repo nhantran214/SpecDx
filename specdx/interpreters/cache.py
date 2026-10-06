@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from specdx.types import Behaviour
@@ -18,11 +17,17 @@ class RunCache:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._items: dict[str, Behaviour] = {}
+        self._needs_newline = False
         if path.is_file():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            data = path.read_bytes()
+            self._needs_newline = data and not data.endswith(b"\n")
+            for chunk in data.split(b"\n"):
+                if not chunk:
+                    continue
                 try:
+                    line = chunk.decode("utf-8")
                     b = Behaviour.from_json(line)
-                except (json.JSONDecodeError, KeyError, TypeError):
+                except (ValueError, KeyError, TypeError):
                     continue  # a line cut off by a crash; the run will simply be redone
                 self._items[b.run_key] = b
 
@@ -31,6 +36,9 @@ class RunCache:
 
     def put(self, behaviour: Behaviour) -> None:
         with self.path.open("a", encoding="utf-8") as handle:
+            if self._needs_newline:
+                handle.write("\n")
+                self._needs_newline = False
             handle.write(behaviour.to_json() + "\n")
         self._items[behaviour.run_key] = behaviour
 

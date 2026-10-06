@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
+import psycopg
 from tonomyx.contracts.clock import FixedClock
 from tonomyx.de.executor import DeExecutor
 from tonomyx.de.runtime import build_runtime
@@ -36,13 +38,15 @@ class Runner:
     ) -> None:
         self.db, self.cache, self.factory, self.steps = db, cache, factory, tuple(steps)
         self.model_digest = model_digest or (lambda model: model)
+        self._steps_digest = hashlib.sha256(repr(self.steps).encode()).hexdigest()
         self.executed = 0
 
     def run(
         self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
     ) -> Behaviour:
         key = run_key(
-            variant.digest(), json.dumps(scenario.params(), sort_keys=True), interp.key,
+            variant.digest(), self._steps_digest,
+            json.dumps(scenario.params(), sort_keys=True), interp.key,
             suffix, self.model_digest(interp.model),
         )
         cached = self.cache.get(key)
@@ -61,6 +65,8 @@ class Runner:
                 run_key=key, interpreter=interp, scenario=scenario, state=state,
                 refused=tuple(case.refused), claims=dict(case.claims),
             )
+        except (psycopg.OperationalError, psycopg.InterfaceError):
+            raise
         except Exception as exc:  # noqa: BLE001 - a failed run is data, never dropped
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=State.empty(),

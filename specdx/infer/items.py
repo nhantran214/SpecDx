@@ -53,6 +53,9 @@ def _relevant(step: WorkStep, clause: Clause) -> bool:
         if keys is None:
             return True
         return bool(keys & {str(v) for v in (inv.get("where") or {}).values()})
+    if clause.kind == "blank":
+        keys = _keyed(step, clause.payload["table"])
+        return keys is None
     return bool(clause.tables & step.tables)
 
 

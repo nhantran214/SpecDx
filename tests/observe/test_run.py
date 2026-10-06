@@ -1,3 +1,4 @@
+import psycopg
 import pytest
 
 from specdx.config import BASE_PACK
@@ -40,3 +41,14 @@ def test_a_crashing_factory_yields_an_error_behaviour(db, pack, variant, tmp_pat
     runner = Runner(db, RunCache(tmp_path / "r.jsonl"), broken, STEPS, model_digest=lambda m: "d")
     b = runner.run(variant, canon_scenarios(pack)["grn12"], REF)
     assert b.status == "error" and "no model" in b.error
+
+
+def test_a_database_outage_is_not_cached(db, pack, variant, tmp_path) -> None:
+    def db_fails(i, c, s):
+        raise psycopg.OperationalError("database offline")
+
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, db_fails, STEPS, model_digest=lambda m: "d")
+    with pytest.raises(psycopg.OperationalError):
+        runner.run(variant, canon_scenarios(pack)["grn12"], REF)
+    assert len(cache) == 0

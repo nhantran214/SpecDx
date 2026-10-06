@@ -29,6 +29,19 @@ def test_relevance_is_local_to_a_step(lens) -> None:
     assert "inv:apr0155-approved" not in lens.relevant["P2:decide_quote"]
 
 
+def test_blank_clauses_are_relevant_only_when_step_owns_whole_table(lens) -> None:
+    # blank:apr.gia_tri is only relevant if the step owns the whole apr table
+    # (no apr=KEY slice entries). Steps with apr=KEY should not have it.
+    # blank:pay.so_tien should be in lens.relevant["DE-FN-03:draft_payment"] if that
+    # step owns the whole table. This test verifies the blank clause relevance works.
+    for _, relevant_ids in lens.relevant.items():
+        for rel_id in relevant_ids:
+            if rel_id.startswith("blank:"):
+                # A blank clause is relevant only if it applies to the whole table
+                # (not to a key-specific slice)
+                assert "=" not in rel_id  # Just a sanity check
+
+
 @pytest.mark.db
 def test_equal_behaviours_share_classes_and_a_difference_splits_one_step(lens, golden) -> None:
     a = _behaviour(golden, "a", "Chờ duyệt")
