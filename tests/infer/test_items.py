@@ -29,17 +29,10 @@ def test_relevance_is_local_to_a_step(lens) -> None:
     assert "inv:apr0155-approved" not in lens.relevant["P2:decide_quote"]
 
 
-def test_blank_clauses_are_relevant_only_when_step_owns_whole_table(lens) -> None:
-    # blank:apr.gia_tri is only relevant if the step owns the whole apr table
-    # (no apr=KEY slice entries). Steps with apr=KEY should not have it.
-    # blank:pay.so_tien should be in lens.relevant["DE-FN-03:draft_payment"] if that
-    # step owns the whole table. This test verifies the blank clause relevance works.
-    for _, relevant_ids in lens.relevant.items():
-        for rel_id in relevant_ids:
-            if rel_id.startswith("blank:"):
-                # A blank clause is relevant only if it applies to the whole table
-                # (not to a key-specific slice)
-                assert "=" not in rel_id  # Just a sanity check
+def test_blank_clauses_belong_only_to_steps_owning_the_whole_table(lens) -> None:
+    assert all("blank:apr.gia_tri" not in ids for ids in lens.relevant.values())
+    assert "blank:pay.so_tien" in lens.relevant["DE-FN-03:draft_payment"]
+    assert "blank:pay.so_tien" not in lens.relevant["DE-SM-02:draft_quote"]
 
 
 @pytest.mark.db

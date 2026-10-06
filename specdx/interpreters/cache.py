@@ -20,7 +20,7 @@ class RunCache:
         self._needs_newline = False
         if path.is_file():
             data = path.read_bytes()
-            self._needs_newline = data and not data.endswith(b"\n")
+            self._needs_newline = bool(data and not data.endswith(b"\n"))
             for chunk in data.split(b"\n"):
                 if not chunk:
                     continue

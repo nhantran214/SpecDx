@@ -6,6 +6,11 @@ def _b(key: str) -> Behaviour:
     return Behaviour(key, InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0), State({}))
 
 
+def _vb(key: str, text: str) -> Behaviour:
+    return Behaviour(key, InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0), State({}),
+                     claims={"x": text})
+
+
 def test_keys_are_stable_and_distinct() -> None:
     assert run_key("a", "b") == run_key("a", "b") != run_key("a", "c")
 
@@ -27,29 +32,25 @@ def test_a_truncated_last_line_is_skipped(tmp_path) -> None:
     assert len(reloaded) == 2 and reloaded.get("k3") is None
 
 
-def test_a_file_cut_mid_multibyte_character_skips_the_partial_record(tmp_path) -> None:
+def test_a_line_cut_inside_a_multibyte_character_is_skipped(tmp_path) -> None:
+    path = tmp_path / "runs.jsonl"
+    RunCache(path).put(_b("k1"))
+    raw = _vb("k2", "Đã duyệt").to_json().encode("utf-8")
+    cut = raw.index("Đ".encode()) + 1  # inside the two-byte "Đ"
+    with path.open("ab") as handle:
+        handle.write(raw[:cut])
+    reloaded = RunCache(path)
+    assert len(reloaded) == 1 and reloaded.get("k1") is not None
+
+
+def test_records_containing_unicode_line_separators_survive_a_reload(tmp_path) -> None:
     path = tmp_path / "runs.jsonl"
     cache = RunCache(path)
-    b1 = Behaviour("k1", InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0),
-                   State({}), claims={"status": "Đã duyệt"})
-    cache.put(b1)
-    # Append a second record with multibyte char that will be cut off mid-UTF-8
-    b2_json = Behaviour("k2", InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0),
-                        State({}), claims={"text": "Đã duyệt"}).to_json()
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(b2_json[:20])  # Write only first 20 chars, cutting mid-multibyte
+    cache.put(_vb("k1", "a b"))
+    cache.put(_vb("k2", "c\u0085d"))
     reloaded = RunCache(path)
-    # First record should be complete and valid, second should be skipped
-    assert len(reloaded) == 1 and reloaded.get("k1") == b1 and reloaded.get("k2") is None
-
-
-def test_a_record_with_line_separator_character_survives_reload(tmp_path) -> None:
-    path = tmp_path / "runs.jsonl"
-    b = Behaviour("k1", InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0),
-                  State({}), claims={"text": "line separator"})
-    RunCache(path).put(b)
-    reloaded = RunCache(path)
-    assert reloaded.get("k1") == b
+    assert reloaded.get("k1").claims == {"x": "a b"}
+    assert reloaded.get("k2").claims == {"x": "c\u0085d"}
 
 
 def test_after_loading_truncated_file_put_then_reload_returns_record(tmp_path) -> None:
