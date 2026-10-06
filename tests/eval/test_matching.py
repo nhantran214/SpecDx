@@ -41,3 +41,13 @@ def test_f1_and_the_gate_verdict() -> None:
     passed, wins = gate_verdict(scores)
     assert passed and wins == {"contradiction": True, "hidden": False, "ambiguity": True,
                                "weak": True}
+
+
+def test_untyped_false_positives_belong_to_the_mutant_type() -> None:
+    truths = {"w": GroundTruth("w", "weak", frozenset({"pay.so_tien"}), "field")}
+    reports = {"w": [_d("hidden", "pay.so_tien"), _d("hidden", "noise1"), _d("hidden", "noise2")]}
+    untyped = evaluate_reports(reports, truths, [], typed=False)
+    assert (untyped["weak"].tp, untyped["weak"].fp) == (1, 2)
+    assert untyped["hidden"].fp == 0
+    typed = evaluate_reports(reports, truths, [])
+    assert typed["weak"].fn == 1 and typed["hidden"].fp == 3

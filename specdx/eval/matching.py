@@ -71,7 +71,7 @@ def evaluate_reports(
             scores[truth.type].fn += 1
         for d in new:
             if d not in hits:
-                scores[d.type].fp += 1
+                scores[d.type if typed else truth.type].fp += 1
     return scores
 
 
