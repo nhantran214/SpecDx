@@ -180,29 +180,46 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
 
     for i, text in enumerate(A1_SITES):
         mid, pack = f"A1-{i:02d}", fresh(f"A1-{i:02d}")
+        if not base.corpus.find(text):
+            raise ValueError(f"A1 site matches no Tell sentence: {text!r}")
         for rel in _kb_files_with(pack, text):
             replace_text(pack, rel, text, "")
         _edit_principles(pack, text, None)
         corpus = _corpus(pack, pdf)
         corpus = corpus.without(corpus.find(text))
         chunks = frozenset(TellCorpus.chunk_of(s) for s in base.corpus.find(text))
+        if not chunks:
+            raise ValueError(f"{mid} has an empty ground truth")
         out.append(_mutant(mid, "A1", text, pack, corpus, chunks, "chunk"))
 
     for i, (old, new) in enumerate(A2_SITES):
         mid, pack = f"A2-{i:02d}", fresh(f"A2-{i:02d}")
+        matched = False
         for rel in _kb_files_with(pack, old):
-            replace_text(pack, rel, old, new)
+            if replace_text(pack, rel, old, new):
+                matched = True
+        old_canon_meta = (pack / "canon.meta.json").read_text(encoding="utf-8")
         _edit_principles(pack, old, new)
+        new_canon_meta = (pack / "canon.meta.json").read_text(encoding="utf-8")
+        if old_canon_meta != new_canon_meta:
+            matched = True
         corpus = _corpus(pack, pdf)
+        if corpus.find(old):
+            matched = True
         for sid in corpus.find(old):
             corpus = corpus.replace(sid, new)
-        out.append(_mutant(mid, "A2", old, pack, corpus, frozenset(corpus.find(new)), "sentence"))
+        truth = frozenset(corpus.find(new))
+        if not matched or not truth:
+            raise ValueError(f"A2 site matches nothing: {old!r}")
+        out.append(_mutant(mid, "A2", old, pack, corpus, truth, "sentence"))
 
     mid, pack = "A3-00", fresh("A3-00")
     (pack / "kb" / "KB-0009.md").write_text(A3_ARTICLE, encoding="utf-8")
     corpus = _corpus(pack, pdf)
-    out.append(_mutant(mid, "A3", "KB-0009", pack, corpus,
-                       frozenset(corpus.sentence_ids(["KB:KB-0009"])), "sentence"))
+    truth = frozenset(corpus.sentence_ids(["KB:KB-0009"]))
+    if not truth:
+        raise ValueError(f"{mid} has an empty ground truth")
+    out.append(_mutant(mid, "A3", "KB-0009", pack, corpus, truth, "sentence"))
 
     for i, (table, column, inv_id) in enumerate(W1_SITES):
         mid, pack = f"W1-{i:02d}", fresh(f"W1-{i:02d}")

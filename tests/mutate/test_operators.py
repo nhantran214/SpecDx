@@ -78,10 +78,40 @@ def test_tell_mutants_change_the_corpus_and_the_kb(mutants) -> None:
     kb = (a1.variant.pack / "kb" / "KB-0003.md").read_text(encoding="utf-8")
     assert "mức tối đa 5%" not in kb
     a2 = mutants["A2-01"]
-    assert set(a2.variant.corpus.find("**mức tối đa hợp lý**.")) == a2.truth.location
+    kb = (a2.variant.pack / "kb" / "KB-0003.md").read_text(encoding="utf-8")
+    assert "**mức tối đa hợp lý**." in kb
+    found_ids = a2.variant.corpus.find("**mức tối đa hợp lý**.")
+    assert a2.truth.location == frozenset(found_ids) and found_ids != []
     a3 = mutants["A3-00"]
     assert "KB-0009" in CanonPack(a3.variant.pack).kb
-    assert all(TellCorpus.chunk_of(s) == "KB:KB-0009" for s in a3.truth.location)
+    assert a3.truth.location != frozenset()
+    assert a3.truth.location == frozenset(a3.variant.corpus.sentence_ids(["KB:KB-0009"]))
+
+
+def test_every_tell_mutant_is_real(pack, tmp_path_factory) -> None:
+    """Every A-series mutant has non-empty ground truth and different corpus."""
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(pack, []))
+    base_digest = base.corpus.digest()
+    mutants = all_mutants(base, [], tmp_path_factory.mktemp("work"))
+    for m in mutants:
+        if m.operator.startswith("A"):
+            assert m.truth.location != frozenset(), f"{m.id} has empty truth"
+            assert m.variant.corpus.digest() != base_digest, f"{m.id} has same corpus as base"
+
+
+def test_a_drifted_site_is_refused(tmp_path_factory, monkeypatch) -> None:
+    """Drifted site strings that match nothing raise ValueError."""
+    import specdx.mutate.operators as ops_module
+
+    monkeypatch.setattr(ops_module, "A1_SITES", ("câu không tồn tại.",))
+    monkeypatch.setattr(ops_module, "A2_SITES", ())
+    monkeypatch.setattr(ops_module, "A3_ARTICLE", "")
+
+    from tonomyx.canon.pack import CanonPack
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(CanonPack(BASE_PACK), []))
+
+    with pytest.raises(ValueError, match="A1 site matches no Tell sentence"):
+        ops_module.all_mutants(base, [], tmp_path_factory.mktemp("work"))
 
 
 def test_the_base_pack_is_never_touched(mutants) -> None:
