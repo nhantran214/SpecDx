@@ -8,6 +8,9 @@ business rule in the prompt, only the Tell corpus behind search_spec.
 from __future__ import annotations
 
 import json
+import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -27,6 +30,9 @@ SEARCH_REPLY_LIMIT = 12000
 # Ollama's default context would silently drop history once search replies are this long
 NUM_CTX = 16384
 _REPLY_LIMIT = 4000
+# Pauses between the five attempts of one chat call when Ollama itself fails.
+RETRY_PAUSES: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0)
+log = logging.getLogger(__name__)
 SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -44,7 +50,20 @@ SEARCH_SCHEMA: dict[str, Any] = {
 }
 
 
+def _ollama_failed(exc: httpx.HTTPError) -> bool:
+    """Ollama itself failed (unreachable, crashed, out of memory). A read timeout is not
+    such a failure: it is the model being slow, which is interpreter behaviour."""
+    if isinstance(exc, httpx.ReadTimeout):
+        return False
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+
+
 class SpecInterpreterExecutor:
+    """infra_failure is set when Ollama kept failing. DeRuntime swallows the error into a
+    step result, so the Runner reads this flag to keep the run out of the cache."""
+
     def __init__(
         self,
         model: str,
@@ -60,14 +79,22 @@ class SpecInterpreterExecutor:
         timeout: float = 180.0,
         transport: httpx.BaseTransport | None = None,
         suffix: str = "",
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.model, self.tools, self.corpus, self.variants = model, tools, corpus, variants
         self.variant, self.seed, self.temperature = variant, seed, temperature
         self.base_url, self.max_steps, self.timeout = base_url, max_steps, timeout
-        self.transport, self.suffix = transport, suffix
+        self.transport, self.suffix, self.sleep = transport, suffix, sleep
+        self.infra_failure: str | None = None
         self._gated = OllamaExecutor(model, tools)
 
     def run(self, task: TaskEnvelope, ctx: ToolContext) -> ResultEnvelope:
+        if self.infra_failure is not None:
+            # The run is void already; do not wait out the retries again on every step.
+            return ResultEnvelope(
+                task_id=task.task_id, case_id=task.case_id, status=ResultStatus.ERROR,
+                next_hint=f"not attempted: {self.infra_failure}",
+            )
         schemas = [*tool_schemas(self.tools, ctx.pack, names=ctx.token.tools), SEARCH_SCHEMA]
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt(
@@ -106,10 +133,28 @@ class SpecInterpreterExecutor:
         }
         if self.model.startswith("qwen3"):
             body["think"] = False
-        response = client.post(f"{self.base_url}/api/chat", json=body)
-        response.raise_for_status()
-        message: dict[str, Any] = response.json()["message"]
-        return message
+        attempts = len(RETRY_PAUSES) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = client.post(f"{self.base_url}/api/chat", json=body)
+                response.raise_for_status()
+                message: dict[str, Any] = response.json()["message"]
+                return message
+            except httpx.HTTPError as exc:
+                if not _ollama_failed(exc):
+                    raise
+                reason = f"{type(exc).__name__}: {exc}"
+                if attempt == attempts:
+                    self.infra_failure = (
+                        f"Ollama failed {attempts} times for {self.model}; last: {reason}"
+                    )
+                    log.error("%s", self.infra_failure)
+                    raise
+                pause = RETRY_PAUSES[attempt - 1]
+                log.warning("Ollama call for %s failed (%s); retry %d of %d in %.0f s",
+                            self.model, reason, attempt, attempts - 1, pause)
+                self.sleep(pause)
+        raise AssertionError("unreachable: the last attempt returns or raises")
 
     def _execute(self, call: dict[str, Any], ctx: ToolContext, record: _Record) -> dict[str, Any]:
         function = call.get("function") or {}

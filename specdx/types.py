@@ -16,6 +16,10 @@ FIRST_GRN = "GRN-0015"
 SECOND_GRN = "GRN-0016"
 
 
+class InfrastructureError(RuntimeError):
+    """Ollama failed, not the interpreter: such a run is never cached as a behaviour."""
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One point of the scenario space."""

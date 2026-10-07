@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+import psycopg
 
 from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
 from specdx.baselines.b2_single import b2_report
@@ -16,8 +17,13 @@ from specdx.baselines.b3_irt import b3_report
 from specdx.config import OLLAMA_URL
 from specdx.eval.matching import Prf, evaluate_reports, gate_verdict
 from specdx.mutate.operators import GroundTruth, Mutant
-from specdx.types import DEFECT_TYPES, Defect
+from specdx.types import DEFECT_TYPES, Defect, InfrastructureError
 from specdx.variant import SpecVariant
+
+# Faults of the machinery, not of a mutant: the gate stops rather than score around them.
+INFRASTRUCTURE_ERRORS: tuple[type[BaseException], ...] = (
+    psycopg.OperationalError, psycopg.InterfaceError, httpx.TransportError, InfrastructureError,
+)
 
 ECHO = {"type": "function", "function": {
     "name": "echo", "description": "Trả lại văn bản.",
@@ -92,10 +98,18 @@ class GateResult:
     wins: dict[str, bool]
     failed: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def headline(self) -> str:
+        """No verdict is given while any mutant failed to run."""
+        if self.failed:
+            return "INCOMPLETE"
+        return "PASSED" if self.passed else "NOT PASSED"
+
     def to_json(self) -> str:
         def table(s: dict[str, dict[str, Prf]]) -> dict[str, Any]:
             return {m: {t: p.as_dict() for t, p in by.items()} for m, by in s.items()}
-        return json.dumps({"passed": self.passed, "wins": self.wins, "failed": self.failed,
+        return json.dumps({"headline": self.headline, "passed": self.passed, "wins": self.wins,
+                           "failed": self.failed,
                            "typed": table(self.scores), "untyped": table(self.untyped)},
                           ensure_ascii=False, indent=2)
 
@@ -119,6 +133,8 @@ def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) ->
         try:
             ctx = bench.loop_context(m.variant, cfg)
             report = run_specdx(m.variant, ctx, cfg)
+        except INFRASTRUCTURE_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate
             failed[m.id] = f"{type(exc).__name__}: {exc}"
             continue
@@ -134,13 +150,14 @@ def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) ->
     scores = {n: evaluate_reports(reports[n], truths, bases[n]) for n in reports}
     untyped = {n: evaluate_reports(reports[n], truths, bases[n], typed=False) for n in reports}
     passed, wins = gate_verdict(scores)
-    return GateResult(scores, untyped, passed, wins, failed)
+    return GateResult(scores, untyped, passed and not failed, wins, failed)
 
 
 def gate_markdown(result: GateResult) -> str:
-    lines = [
-        f"# P1 gate: {'PASSED' if result.passed else 'NOT PASSED'}",
-        "",
+    lines = [f"# P1 gate: {result.headline}", ""]
+    if result.failed:
+        lines += [f"{len(result.failed)} mutant(s) could not run, so no verdict is given.", ""]
+    lines += [
         "Typed F1 (verdict) and untyped F1 (location only) per defect type.",
         "",
         "| type | SpecDx | B2 | B3 | SpecDx untyped | B2 untyped | B3 untyped | SpecDx wins |",

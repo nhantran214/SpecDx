@@ -1,15 +1,19 @@
+import httpx
 import psycopg
 import pytest
+from tonomyx.tools.catalog import build_registry
 
 from specdx.config import BASE_PACK
 from specdx.interpreters.cache import RunCache
+from specdx.interpreters.executor import SpecInterpreterExecutor
+from specdx.interpreters.prompt import load_variants
 from specdx.observe.run import Runner
 from specdx.orchestrate.reference import reference_executor
 from specdx.orchestrate.work_orders import load_work_orders
 from specdx.scenarios.space import canon_scenarios
 from specdx.spec.clauses import ClauseSet
 from specdx.spec.tell import TellCorpus
-from specdx.types import InterpreterId, Scenario
+from specdx.types import InfrastructureError, InterpreterId, Scenario
 from specdx.variant import SpecVariant
 
 pytestmark = pytest.mark.db
@@ -68,3 +72,47 @@ def test_a_different_context_digest_never_reuses_a_cached_run(db, pack, variant,
     assert key_a != key_b and second.executed == 1
     same_as_first.run(variant, grn12, REF)
     assert same_as_first.executed == 0
+
+
+def _ollama(handle):
+    """An interpreter factory whose Ollama is a MockTransport; sleeps are recorded, not slept."""
+    sleeps: list[float] = []
+
+    def factory(interp, corpus, suffix):
+        return SpecInterpreterExecutor(
+            interp.model, build_registry(), corpus, load_variants(),
+            transport=httpx.MockTransport(handle), sleep=sleeps.append,
+        )
+
+    return factory, sleeps
+
+
+def test_an_ollama_outage_raises_and_is_never_cached(db, pack, variant, tmp_path) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    factory, sleeps = _ollama(handle)
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, factory, STEPS, model_digest=lambda m: "d")
+    with pytest.raises(InfrastructureError, match="ConnectError"):
+        runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
+    assert len(cache) == 0 and not (tmp_path / "r.jsonl").exists()
+    assert sleeps == [2.0, 4.0, 8.0, 16.0] and len(calls) == 5
+
+
+def test_a_server_error_that_recovers_is_retried_and_cached(db, pack, variant, tmp_path) -> None:
+    replies = [httpx.Response(503, json={"error": "llama runner process has terminated"})]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if replies:
+            return replies.pop(0)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Xong."}})
+
+    factory, sleeps = _ollama(handle)
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, factory, STEPS, model_digest=lambda m: "d")
+    b = runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
+    assert b.status == "ok" and len(cache) == 1 and sleeps == [2.0]

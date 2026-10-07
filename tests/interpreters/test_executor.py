@@ -124,6 +124,48 @@ def test_a_timeout_ends_the_step_not_the_case(db, pack, corpus) -> None:
     assert case.statuses["P2:decide_quote"] == "error"
 
 
+def test_a_read_timeout_is_data_and_is_not_retried(db, corpus) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ReadTimeout("slow", request=request)
+
+    sleeps: list[float] = []
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), corpus, load_variants(),
+        transport=httpx.MockTransport(handle), sleep=sleeps.append,
+    )
+    with db.isolated() as conn:
+        runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
+        open_case(runtime.repo)
+        envelope = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+    assert envelope.status is ResultStatus.ERROR
+    assert len(calls) == 1 and sleeps == [] and executor.infra_failure is None
+
+
+def test_an_exhausted_server_error_flags_the_executor_and_stops_calling(db, corpus) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(500, json={"error": "CUDA error: out of memory"})
+
+    sleeps: list[float] = []
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), corpus, load_variants(),
+        transport=httpx.MockTransport(handle), sleep=sleeps.append,
+    )
+    with db.isolated() as conn:
+        runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
+        open_case(runtime.repo)
+        first = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+        second = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+    assert first.status is ResultStatus.ERROR and second.status is ResultStatus.ERROR
+    assert len(calls) == 5 and sleeps == [2.0, 4.0, 8.0, 16.0]
+    assert executor.infra_failure is not None and "500" in executor.infra_failure
+
+
 def test_search_reply_includes_all_passages_when_they_fit(pack) -> None:
     """A corpus of 5 chunks each ~1500 chars → the reply parses as JSON and holds all 5 passages."""
     from specdx.interpreters.executor import SEARCH_REPLY_LIMIT

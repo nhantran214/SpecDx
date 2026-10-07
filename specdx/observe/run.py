@@ -19,7 +19,7 @@ from specdx.observe.state import capture_state
 from specdx.orchestrate.flow import run_case
 from specdx.orchestrate.work_orders import WorkStep
 from specdx.spec.tell import TellCorpus
-from specdx.types import Behaviour, InterpreterId, Scenario, State
+from specdx.types import Behaviour, InfrastructureError, InterpreterId, Scenario, State
 from specdx.variant import SpecVariant
 
 ExecutorFactory = Callable[[InterpreterId, TellCorpus, str], DeExecutor]
@@ -58,16 +58,22 @@ class Runner:
         try:
             settings = self.db.use(variant.pack)
             executor = self.factory(interp, variant.corpus, suffix)
+            if hasattr(executor, "infra_failure"):
+                executor.infra_failure = None
             with self.db.isolated() as conn:
                 runtime = build_runtime(conn, settings, executor=executor,
                                         clock=FixedClock(RUN_CLOCK))
                 case = run_case(runtime, scenario, self.steps)
+                # DeRuntime turns an Ollama outage into a step error: read the side channel.
+                failure = getattr(executor, "infra_failure", None)
+                if failure:
+                    raise InfrastructureError(failure)
                 state = capture_state(conn, runtime.pack, case.statuses)
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=state,
                 refused=tuple(case.refused), claims=dict(case.claims),
             )
-        except (psycopg.OperationalError, psycopg.InterfaceError):
+        except (psycopg.OperationalError, psycopg.InterfaceError, InfrastructureError):
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run is data, never dropped
             behaviour = Behaviour(
