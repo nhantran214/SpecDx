@@ -1,0 +1,36 @@
+C1-00	contradiction	conflict	inv:mut-c1-po-15, inv:po-15
+C1-01	contradiction	conflict	inv:grn-12, inv:mut-c1-grn-12
+C1-02	contradiction	conflict	inv:mut-c1-vinv-cankiem, inv:vinv-cankiem
+C1-03	contradiction	conflict	inv:apr0102-approved, inv:mut-c1-apr0102-approved
+C1-04	contradiction	conflict	inv:apr0155-approved, inv:mut-c1-apr0155-approved
+C1-05	contradiction	conflict	inv:apr0210-pending, inv:mut-c1-apr0210-pending
+C2-00	contradiction	conflict	golden:po:PO-0015:trang_thai
+C2-01	contradiction	conflict	golden:apr:APR-0102:trang_thai, inv:apr0102-approved
+C2-02	contradiction	conflict	golden:apr:APR-0155:trang_thai, inv:apr0155-approved
+H1-00	hidden	clause	golden:vinv:VINV-0015:trang_thai
+H1-01	hidden	clause	golden:inv:INV-0031:doi_soat
+H1-02	hidden	clause	golden:inv:INV-0031:trang_thai
+H1-03	hidden	clause	golden:pay:PAY-0031:trang_thai
+H1-04	hidden	clause	golden:apr:APR-0210:muc_tu_hanh
+H2-00	hidden	clause	inv:mut-h2-PAID-PAY-0031
+H2-01	hidden	clause	inv:mut-h2-REJECTED-APR-0155
+A1-00	ambiguity	chunk	KB:KB-0003
+A1-01	ambiguity	chunk	KB:KB-0003
+A1-02	ambiguity	chunk	PRINCIPLES
+A2-00	ambiguity	sentence	KB:KB-0003:02
+A2-01	ambiguity	sentence	KB:KB-0003:03
+A2-02	ambiguity	sentence	PRINCIPLES:02
+A3-00	ambiguity	sentence	KB:KB-0009:00, KB:KB-0009:01, KB:KB-0009:02
+W1-00	weak	field	soline.chiet_khau
+W1-01	weak	field	soline.don_gia
+W1-02	weak	field	po.don_gia
+W1-03	weak	field	inv.so_tien
+W1-04	weak	field	vinv.so_tien
+W1-05	weak	field	pay.so_tien
+W1-06	weak	field	apr.gia_tri
+W2-00	weak	field	evt:DRAFTED:SO-0031
+W2-01	weak	field	evt:FLAGGED:ITEM-0012
+W2-02	weak	field	evt:DRAFTED:PO-0015
+W2-03	weak	field	evt:RECEIVED:GRN-0015
+W2-04	weak	field	evt:RECONCILED:VINV-0015
+W2-05	weak	field	evt:DRAFTED:PAY-0031
