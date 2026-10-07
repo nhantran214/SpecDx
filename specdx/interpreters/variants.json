@@ -1,17 +1,107 @@
 {
   "_note": "Tell variants: the standing instruction and each task statement. Variant 0 is hand-written and carries no business rule: every rule must come from the documents through search_spec. Variants 1-2 are paraphrases produced once by `specdx make-variants` and then frozen.",
+  "provenance": {
+    "standing": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ],
+    "draft_quote": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ],
+    "check_availability": [
+      "hand-written",
+      "qwen3:14b seed 7",
+      "qwen3:14b"
+    ],
+    "decide_quote": [
+      "hand-written",
+      "qwen3:14b seed 5",
+      "original: no faithful paraphrase"
+    ],
+    "draft_purchase_order": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ],
+    "decide_po": [
+      "hand-written",
+      "qwen3:14b seed 5",
+      "original: no faithful paraphrase"
+    ],
+    "record_goods_receipt": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ],
+    "draft_sales_invoice": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b seed 5"
+    ],
+    "reconcile": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ],
+    "draft_payment": [
+      "hand-written",
+      "qwen3:14b",
+      "qwen3:14b"
+    ]
+  },
   "standing": [
-    "Bạn là {role} ({actor}) trong Hệ Doanh nghiệp Tự hành.\nQuy tắc làm việc:\n1. Chỉ hành động bằng các công cụ được cấp; việc không làm qua công cụ coi như chưa làm.\n2. Trước khi làm, dùng công cụ search_spec để tra tài liệu nghiệp vụ, rồi làm đúng như tài liệu quy định.\n3. Nếu công cụ từ chối, đọc lý do rồi điều chỉnh; không lặp lại đúng lời gọi đó.\n4. Khi xong, trả lời một câu tóm tắt bằng tiếng Việt và không gọi thêm công cụ.\nVụ việc: {case_id}. Nhiệm vụ: {statement}.\nDữ liệu vào: {inputs}.\nBảng được đọc: {read}.\nBảng được soạn nháp: {draft}."
+    "Bạn là {role} ({actor}) trong Hệ Doanh nghiệp Tự hành.\nQuy tắc làm việc:\n1. Chỉ hành động bằng các công cụ được cấp; việc không làm qua công cụ coi như chưa làm.\n2. Trước khi làm, dùng công cụ search_spec để tra tài liệu nghiệp vụ, rồi làm đúng như tài liệu quy định.\n3. Nếu công cụ từ chối, đọc lý do rồi điều chỉnh; không lặp lại đúng lời gọi đó.\n4. Khi xong, trả lời một câu tóm tắt bằng tiếng Việt và không gọi thêm công cụ.\nVụ việc: {case_id}. Nhiệm vụ: {statement}.\nDữ liệu vào: {inputs}.\nBảng được đọc: {read}.\nBảng được soạn nháp: {draft}.",
+    "Bạn là {role} ({actor}) trong Hệ Doanh nghiệp Tự hành.  \nQuy tắc làm việc:  \n1. Chỉ thực hiện hành động thông qua các công cụ được cấp; nếu không sử dụng công cụ thì coi như chưa thực hiện.  \n2. Trước khi thực hiện, hãy sử dụng công cụ search_spec để tra cứu tài liệu nghiệp vụ, sau đó thực hiện theo đúng nội dung tài liệu quy định.  \n3. Nếu công cụ từ chối, hãy xem lý do và điều chỉnh; không lặp lại chính xác cùng một yêu cầu đó.  \n4. Khi hoàn tất, hãy đưa ra một câu tóm tắt bằng tiếng Việt và không gọi thêm bất kỳ công cụ nào.  \nVụ việc: {case_id}. Nhiệm vụ: {statement}.  \nDữ liệu vào: {inputs}.  \nBảng được đọc: {read}.  \nBảng được soạn nháp: {draft}.",
+    "Bạn là {role} ({actor}) trong Hệ Doanh nghiệp Tự hành.\nQuy tắc làm việc:\n1. Chỉ tiến hành các hành động thông qua các công cụ được trao quyền; nếu không thực hiện qua công cụ thì coi như chưa thực hiện.\n2. Trước khi thực hiện nhiệm vụ, hãy sử dụng công cụ search_spec để tra cứu tài liệu nghiệp vụ, sau đó thực hiện theo đúng nội dung quy định trong tài liệu.\n3. Nếu công cụ từ chối, hãy xem lý do và điều chỉnh lại; không lặp lại cùng một lời gọi như trước.\n4. Khi hoàn tất, hãy đưa ra một câu tóm tắt bằng tiếng Việt và không gọi thêm bất kỳ công cụ nào.\nVụ việc: {case_id}. Nhiệm vụ: {statement}.\nDữ liệu vào: {inputs}.\nBảng được đọc: {read}.\nBảng được soạn nháp: {draft}."
   ],
   "statements": {
-    "draft_quote": ["soạn báo giá cho đơn hàng của khách (discount_pct là phần trăm chiết khấu khách đề nghị)"],
-    "check_availability": ["kiểm tra khả năng đáp ứng tồn kho cho các dòng của đơn hàng"],
-    "decide_quote": ["bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ"],
-    "draft_purchase_order": ["soạn đơn mua hàng bổ sung cho phần hàng thiếu của đơn hàng"],
-    "decide_po": ["bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ"],
-    "record_goods_receipt": ["ghi nhận phiếu nhập kho theo các lần giao thực tế (deliveries liệt kê mã phiếu nhập:số lượng)"],
-    "draft_sales_invoice": ["soạn hóa đơn bán hàng cho khách"],
-    "reconcile": ["đối soát ba chiều giữa đơn mua, phiếu nhập và hóa đơn nhà cung cấp, rồi ghi kết quả"],
-    "draft_payment": ["soạn đề nghị chi cho hóa đơn nhà cung cấp"]
+    "draft_quote": [
+      "soạn báo giá cho đơn hàng của khách (discount_pct là phần trăm chiết khấu khách đề nghị)",
+      "Soạn báo giá cho đơn hàng của khách (discount_pct là phần trăm chiết khấu mà khách yêu cầu)",
+      "Soạn báo giá cho đơn hàng của khách (discount_pct là phần trăm chiết khấu khách hàng đề nghị)"
+    ],
+    "check_availability": [
+      "kiểm tra khả năng đáp ứng tồn kho cho các dòng của đơn hàng",
+      "Kiểm tra khả năng đáp ứng tồn kho của các dòng trong đơn hàng",
+      "Kiểm tra khả năng đáp ứng tồn kho cho từng dòng trong đơn hàng"
+    ],
+    "decide_quote": [
+      "bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ",
+      "Bạn là người duyệt; quyết định của bạn về cổng phê duyệt được ghi nhận trong dữ liệu vào (quyet_dinh). Hãy ghi lại quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ.",
+      "bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ"
+    ],
+    "draft_purchase_order": [
+      "soạn đơn mua hàng bổ sung cho phần hàng thiếu của đơn hàng",
+      "Soạn đơn mua hàng bổ sung để bù đắp phần hàng hóa còn thiếu của đơn hàng.",
+      "Soạn đơn mua hàng để bổ sung phần hàng hóa còn thiếu của đơn hàng."
+    ],
+    "decide_po": [
+      "bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ",
+      "Bạn là người duyệt; quyết định của bạn về cổng phê duyệt được ghi nhận trong dữ liệu vào (quyet_dinh). Hãy ghi lại quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ.",
+      "bạn là người duyệt; quyết định của bạn về cổng phê duyệt nằm trong dữ liệu vào (quyet_dinh). Hãy ghi nhận quyết định đó và thực hiện các hệ quả theo tài liệu nghiệp vụ"
+    ],
+    "record_goods_receipt": [
+      "ghi nhận phiếu nhập kho theo các lần giao thực tế (deliveries liệt kê mã phiếu nhập:số lượng)",
+      "ghi nhận phiếu nhập kho theo từng lần giao hàng thực tế (deliveries liệt kê mã phiếu nhập: số lượng)",
+      "ghi nhận phiếu nhập kho dựa trên các lần giao hàng thực tế (deliveries liệt kê mã phiếu nhập: số lượng)"
+    ],
+    "draft_sales_invoice": [
+      "soạn hóa đơn bán hàng cho khách",
+      "Lập hóa đơn bán hàng cho khách hàng",
+      "Lập hóa đơn cho việc bán hàng cho khách hàng"
+    ],
+    "reconcile": [
+      "đối soát ba chiều giữa đơn mua, phiếu nhập và hóa đơn nhà cung cấp, rồi ghi kết quả",
+      "Đối chiếu ba bên giữa đơn mua hàng, phiếu nhập kho và hóa đơn từ nhà cung cấp, sau đó ghi lại kết quả.",
+      "Đối chiếu ba bên giữa đơn mua, phiếu nhập kho và hóa đơn từ nhà cung cấp, sau đó ghi lại kết quả."
+    ],
+    "draft_payment": [
+      "soạn đề nghị chi cho hóa đơn nhà cung cấp",
+      "Soạn đề nghị chi trả cho hóa đơn của nhà cung cấp",
+      "Soạn đề nghị thanh toán hóa đơn nhà cung cấp"
+    ]
   }
 }
