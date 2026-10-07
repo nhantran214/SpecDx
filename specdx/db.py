@@ -15,6 +15,7 @@ from typing import Any
 
 import psycopg
 from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from tonomyx.canon.invariants import is_blank
 from tonomyx.canon.pack import CanonPack
@@ -32,8 +33,47 @@ _CAST = {
     "bool": "boolean", "date": "date", "timestamp": "timestamptz",
 }
 _MARKER = "specdx_marker"
+# Session-level advisory lock: one SpecDx process per database at a time.
+LOCK_KEY = 20261006
+# Other projects' databases on this machine; SpecDx drops the public schema it is given.
+FORBIDDEN_PORTS = frozenset({"55432", "55433"})
+# One lock connection per database URL, shared by every PackDatabase of this process.
+_LOCKS: dict[str, psycopg.Connection[dict[str, Any]]] = {}
 
 Tables = Mapping[str, Sequence[Mapping[str, str]]]
+
+
+def _where(url: str) -> tuple[str, set[str]]:
+    info = conninfo_to_dict(url)
+    ports = {p.strip() for p in str(info.get("port") or "5432").split(",")}
+    return f"{info.get('host', 'localhost')}:{','.join(sorted(ports))}/{info.get('dbname')}", ports
+
+
+def _hold_lock(url: str) -> psycopg.Connection[dict[str, Any]]:
+    """The process's lock connection for this database, taken on first use and held until
+    exit; a second process is refused at once instead of waiting or sharing."""
+    conn = _LOCKS.get(url)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except psycopg.Error:  # the server restarted: the lock went with the session
+            conn.close()
+            del _LOCKS[url]
+    conn = psycopg.connect(url, autocommit=True, row_factory=dict_row)
+    try:
+        row = conn.execute("SELECT pg_try_advisory_lock(%s) AS ok", (LOCK_KEY,)).fetchone()
+    except BaseException:
+        conn.close()
+        raise
+    if row is None or not row["ok"]:
+        conn.close()
+        raise RuntimeError(
+            f"another process holds the SpecDx lock on {_where(url)[0]}; SpecDx runs one "
+            "process per database (stop the other run, or wait for it to finish)"
+        )
+    _LOCKS[url] = conn
+    return conn
 
 
 def pack_digest(pack: Path) -> str:
@@ -89,9 +129,19 @@ def _marker(conn: psycopg.Connection[dict[str, Any]]) -> str | None:
 
 
 class PackDatabase:
-    """The SpecDx database and the specification currently loaded in it."""
+    """The SpecDx database and the specification currently loaded in it.
+
+    use() takes the process's advisory lock, and reads the database's marker on every
+    call: another PackDatabase of this process may have loaded another pack meanwhile.
+    """
 
     def __init__(self, database_url: str = DATABASE_URL) -> None:
+        where, ports = _where(database_url)
+        if ports & FORBIDDEN_PORTS:
+            raise ValueError(
+                f"refusing {where}: ports {', '.join(sorted(FORBIDDEN_PORTS))} hold other "
+                "projects' databases (SpecDx uses 55434)"
+            )
         self.url = database_url
         self._digest: str | None = None
         self._settings: Settings | None = None
@@ -114,13 +164,14 @@ class PackDatabase:
         """Load a specification's schema, guardrails and master data, unless already loaded."""
         pack_dir = pack_dir.resolve()
         digest = pack_digest(pack_dir)
-        if digest != self._digest:
+        loaded = _marker(_hold_lock(self.url)) == digest
+        if digest != self._digest or not loaded:
             self._digest = None
             self._settings = None
             self._pack = None
             self._background = {}
-            with psycopg.connect(self.url, row_factory=dict_row) as conn:
-                if _marker(conn) != digest:
+            if not loaded:
+                with psycopg.connect(self.url, row_factory=dict_row) as conn:
                     drop_everything(conn)
                     for name in MASTER_LOAD_ORDER:
                         path = pack_dir / "targets" / "postgres" / name

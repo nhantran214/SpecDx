@@ -7,8 +7,9 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 from tonomyx.contracts.clock import FixedClock
@@ -26,7 +27,18 @@ from specdx.variant import SpecVariant
 
 ExecutorFactory = Callable[[InterpreterId, TellCorpus, str], DeExecutor]
 RUN_CLOCK = datetime(2026, 9, 1, 2, 0, tzinfo=UTC)
+# Bump on any interpreter-visible change to prompts, flow or executor behaviour: runs
+# cached under an older version are then never reused.
+RUN_SCHEMA_VERSION = 2
 log = logging.getLogger(__name__)
+
+
+def context_digest(tell: Mapping[str, Any], settings: Mapping[str, Any]) -> str:
+    """The part of every run key that covers what interpreters are told (the Tell
+    variants), how they are run (executor settings) and the code (RUN_SCHEMA_VERSION)."""
+    payload = {"schema": RUN_SCHEMA_VERSION, "tell": tell, "executor": settings}
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 class Runner:

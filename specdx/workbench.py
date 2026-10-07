@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -20,9 +18,9 @@ from specdx.config import BASE_PACK, OLLAMA_URL, PDF_DIR, WORK_DIR
 from specdx.db import PackDatabase
 from specdx.infer.items import SpecLens
 from specdx.interpreters.cache import RunCache
-from specdx.interpreters.executor import SpecInterpreterExecutor
+from specdx.interpreters.executor import SpecInterpreterExecutor, interpreter_settings
 from specdx.interpreters.prompt import TellVariants, load_variants
-from specdx.observe.run import ExecutorFactory, Runner
+from specdx.observe.run import ExecutorFactory, Runner, context_digest
 from specdx.orchestrate.work_orders import WorkStep, load_work_orders
 from specdx.scenarios.space import (
     boundary_domain,
@@ -72,6 +70,7 @@ class Workbench:
     ) -> None:
         self.db, self.cache, self.steps, self.variants = db, cache, steps, variants
         self.pdf, self.base, self.work_dir = pdf, base, work_dir
+        self.settings = interpreter_settings()
         self.runner: Runner
 
     @classmethod
@@ -87,20 +86,19 @@ class Workbench:
         variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
                     variants, pdf, base, work_dir)
-        context = json.dumps(
-            {"standing": list(variants.standing),
-             "statements": {k: list(v) for k, v in variants.statements.items()}},
-            ensure_ascii=False, sort_keys=True,
-        )
+        tell = {"standing": list(variants.standing),
+                "statements": {k: list(v) for k, v in variants.statements.items()}}
         bench.runner = Runner(bench.db, bench.cache, factory or bench.llm_factory, bench.steps,
                               model_digest=model_digest or ollama_digests(),
-                              context_digest=hashlib.sha256(context.encode()).hexdigest())
+                              context_digest=context_digest(tell, bench.settings))
         return bench
 
     def llm_factory(self, interp: InterpreterId, corpus: TellCorpus, suffix: str) -> DeExecutor:
         return SpecInterpreterExecutor(
             interp.model, build_registry(), corpus, self.variants,
             variant=interp.variant, seed=interp.seed, suffix=suffix,
+            temperature=float(self.settings["temperature"]),
+            max_steps=int(self.settings["max_steps"]), timeout=float(self.settings["timeout"]),
         )
 
     def loop_context(self, variant: SpecVariant, config: SpecDxConfig) -> LoopContext:

@@ -24,6 +24,9 @@ from specdx.interpreters.prompt import TellVariants, system_prompt
 from specdx.spec.tell import TellCorpus
 
 SEARCH_SPEC = "search_spec"
+TEMPERATURE = 0.7
+MAX_STEPS = 16
+TIMEOUT = 180.0
 SEARCH_K = 5
 # whole passages only, never a sliced JSON
 SEARCH_REPLY_LIMIT = 12000
@@ -50,6 +53,13 @@ SEARCH_SCHEMA: dict[str, Any] = {
 }
 
 
+def interpreter_settings() -> dict[str, float | int]:
+    """Every executor setting an interpreter's behaviour depends on, as now configured.
+    The run key covers them (spec §6.5), so changing one never reuses a cached run."""
+    return {"temperature": TEMPERATURE, "max_steps": MAX_STEPS, "timeout": TIMEOUT,
+            "num_ctx": NUM_CTX, "search_k": SEARCH_K, "search_reply_limit": SEARCH_REPLY_LIMIT}
+
+
 def _ollama_failed(exc: httpx.HTTPError) -> bool:
     """Ollama itself failed (unreachable, crashed, out of memory). A read timeout is not
     such a failure: it is the model being slow, which is interpreter behaviour."""
@@ -73,10 +83,10 @@ class SpecInterpreterExecutor:
         *,
         variant: int = 0,
         seed: int = 1,
-        temperature: float = 0.7,
+        temperature: float = TEMPERATURE,
         base_url: str = OLLAMA_URL,
-        max_steps: int = 16,
-        timeout: float = 180.0,
+        max_steps: int = MAX_STEPS,
+        timeout: float = TIMEOUT,
         transport: httpx.BaseTransport | None = None,
         suffix: str = "",
         sleep: Callable[[float], None] = time.sleep,

@@ -1,10 +1,12 @@
 import shutil
+import time
 
 import psycopg
 import pytest
 
+from specdx import db as db_module
 from specdx.config import BASE_PACK
-from specdx.db import pack_digest, split_background
+from specdx.db import PackDatabase, pack_digest, split_background
 from specdx.observe.state import reconcile_value
 from specdx.types import State
 
@@ -78,6 +80,40 @@ def test_use_recovers_from_failed_reload(db, tmp_path) -> None:
     db.use(BASE_PACK)
     with db.isolated() as conn:
         assert conn.execute("SELECT count(*) AS n FROM cust").fetchone()["n"] > 0
+
+
+def test_two_pack_databases_in_one_process_share_the_lock_and_stay_honest(db, tmp_path) -> None:
+    other = tmp_path / "pack"
+    shutil.copytree(BASE_PACK, other)
+    (other / "kb" / "KB-0001.md").write_text("changed", encoding="utf-8")
+    first, second = PackDatabase(db.url), PackDatabase(db.url)
+    first.use(BASE_PACK)
+    second.use(other)  # the database now holds the other specification
+    first.use(BASE_PACK)  # so this must reload, though first last loaded the base
+    with psycopg.connect(db.url) as conn:
+        marker = conn.execute("SELECT digest FROM specdx_marker").fetchone()[0]
+    assert marker == pack_digest(BASE_PACK)
+    with first.isolated() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM cust").fetchone()["n"] > 0
+
+
+def test_a_second_process_holding_the_lock_is_refused_fast(db) -> None:
+    held = db_module._LOCKS.pop(db.url)  # act as if this process had never taken the lock
+    held.close()
+    with psycopg.connect(db.url, autocommit=True) as other:
+        other.execute("SELECT pg_advisory_lock(%s)", (db_module.LOCK_KEY,))
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="another process"):
+            PackDatabase(db.url).use(BASE_PACK)
+        assert time.monotonic() - started < 5
+    db.use(BASE_PACK)  # the other session has ended: the lock is free again
+    assert db.url in db_module._LOCKS
+
+
+@pytest.mark.parametrize("port", [55432, 55433])
+def test_the_ports_of_other_projects_are_refused(port) -> None:
+    with pytest.raises(ValueError, match=str(port)):
+        PackDatabase(f"postgresql://tonomyx:tonomyx@localhost:{port}/tonomyx")
 
 
 def test_reconcile_value_raises_on_closed_connection(db) -> None:
