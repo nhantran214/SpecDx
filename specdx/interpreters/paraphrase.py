@@ -20,9 +20,14 @@ KEEP_PLACEHOLDERS = (
     "khác. "
 )
 KEEP_CODES = "Giữ nguyên từng mã ({items}) đúng như cũ và không thêm mã nào khác. "
+KEEP_IDENTIFIERS = (
+    "Giữ nguyên từng định danh ({items}) đúng như cũ và không thêm định danh nào khác. "
+)
 ONLY = "Chỉ trả về đoạn văn đã viết lại."
 _PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 _CODE = re.compile(r"[A-Z]{2,}-\d+")
+# Tool and input names such as search_spec, discount_pct, quyet_dinh.
+_IDENTIFIER = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 _LEAKS = ("/no_th", "<think", "</think")
 # CJK symbols and ideographs, Hangul syllables, Cyrillic: never in a Vietnamese paraphrase.
 _FOREIGN = re.compile("[　-鿿가-힯Ѐ-ӿ]")
@@ -30,8 +35,9 @@ log = logging.getLogger(__name__)
 
 
 def prompt_for(text: str) -> str:
-    """The request for one text: placeholders and codes are mentioned only when the text
-    has them, since naming them otherwise makes models invent some."""
+    """The request for one text: placeholders, codes and identifiers are mentioned only
+    when the text has them, since naming them otherwise makes models invent some. An
+    identifier inside a placeholder ({case_id}) is named with the placeholders."""
     parts = [REWRITE]
     placeholders = sorted(set(_PLACEHOLDER.findall(text)))
     if placeholders:
@@ -39,6 +45,9 @@ def prompt_for(text: str) -> str:
     codes = sorted(set(_CODE.findall(text)))
     if codes:
         parts.append(KEEP_CODES.format(items=", ".join(codes)))
+    identifiers = sorted(set(_IDENTIFIER.findall(_PLACEHOLDER.sub(" ", text))))
+    if identifiers:
+        parts.append(KEEP_IDENTIFIERS.format(items=", ".join(identifiers)))
     parts.append(ONLY)
     return "".join(parts) + "\n\n" + text
 
@@ -53,6 +62,8 @@ def rejection(text: str, out: str) -> str | None:
         return "a stray brace"  # str.format would fail on it
     if set(_CODE.findall(out)) != set(_CODE.findall(text)):
         return "codes differ"
+    if set(_IDENTIFIER.findall(out)) != set(_IDENTIFIER.findall(text)):
+        return "identifiers differ"
     lowered = out.lower()
     if any(leak in lowered for leak in _LEAKS):
         return "a thinking marker leaked"

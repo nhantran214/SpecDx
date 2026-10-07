@@ -16,7 +16,7 @@ from typing import Protocol
 from tonomyx.flow.case_0031 import CASE_ID
 from tonomyx.flow.handlers import PO, SO, VINV
 
-from specdx.active.budget import ProbeBudget
+from specdx.active.budget import RunBudget
 from specdx.db import PackDatabase
 from specdx.observe.state import ERROR
 from specdx.spec.clauses import PAID, Clause, ClauseSet, describe
@@ -240,7 +240,7 @@ class DirectedProbe:
         *,
         attempts: int = 3,
         width: int = 3,
-        budget: ProbeBudget | None = None,
+        budget: RunBudget | None = None,
     ) -> None:
         self.runner, self.variant, self.clauses = runner, variant, clauses
         self.interpreters = list(interpreters)
@@ -248,7 +248,7 @@ class DirectedProbe:
 
     @property
     def out_of_budget(self) -> bool:
-        return self.budget is not None and self.budget.exhausted
+        return self.budget is not None and self.budget.exhausted("probe")
 
     def search(
         self, targets: frozenset[str], scenario: Scenario, allowed: frozenset[str]

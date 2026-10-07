@@ -3,7 +3,7 @@ import dataclasses
 import pytest
 from tonomyx.canon.pack import CanonPack
 
-from specdx.active.budget import ProbeBudget
+from specdx.active.budget import RunBudget
 from specdx.active.refute import (
     CombinedRefuter,
     DirectedProbe,
@@ -95,7 +95,7 @@ class _FakeRunner:
 
 def test_the_probe_budget_caps_directed_probe_runs(clauses, variant) -> None:
     runner = _FakeRunner(State.empty())  # every probe fails: nothing satisfies the targets
-    budget = ProbeBudget(4)
+    budget = RunBudget(probe_limit=4, ddmin_limit=80)
     probe = DirectedProbe(runner, variant, clauses, [InterpreterId("m", "f", 0, 1)],
                           budget=budget)
     refuter = CombinedRefuter(clauses, None, probe)
@@ -106,6 +106,7 @@ def test_the_probe_budget_caps_directed_probe_runs(clauses, variant) -> None:
     third = refuter.refute(frozenset({"golden:inv:INV-0031:trang_thai"}), GRN12, [])
     assert not third.refuted and not third.attempted
     assert runner.calls == 4 and budget.probe == 4 and budget.ddmin == 0
+    assert budget.exhausted("probe") and not budget.exhausted("ddmin")
 
 
 def test_the_probe_refutes_and_results_are_memoised(clauses, variant, golden) -> None:

@@ -35,6 +35,7 @@ class Deviant:
 CONFIG = GateConfig(
     models_by_family={"ref": ("reference",), "dev": ("deviant",)},
     variants=(0,), seeds=(1,), budget=6, dev_per_type=1, rng_seed=1, probe_budget=6,
+    localize_budget=6,
 )
 
 
@@ -60,7 +61,7 @@ def test_the_gate_runs_end_to_end_on_real_mutants(tmp_path) -> None:
     assert lines[0]["base"] is True and lines[0]["runs"]["population"] == 6
     for line in lines[1:]:
         assert line["failure"] is None and line["runs"]["population"] == 6
-        assert line["runs"]["probe"] + line["runs"]["ddmin"] <= 6
+        assert line["runs"]["probe"] <= 6 and line["runs"]["ddmin"] <= 6
     # C2-00 forbids the approved PO the golden state requires: no run can reach it
     c2 = lines[1]
     assert ["contradiction", ["golden:po:PO-0015:trang_thai"]] in c2["matches"]["specdx"]["typed"]

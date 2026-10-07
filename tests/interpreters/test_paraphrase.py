@@ -38,15 +38,25 @@ def test_a_text_without_placeholders_or_codes_gets_no_instruction_about_them() -
     instructions = seen[0].split("\n\n", 1)[0]
     assert "{" not in instructions and "ngoặc nhọn" not in instructions
     assert "APR-0102" not in instructions and "mã" not in instructions.split()
+    assert "định danh" not in instructions
     assert "tiếng Việt" in instructions and "Chỉ trả về" in instructions
 
 
-def test_the_instructions_name_the_placeholders_and_codes_the_text_has() -> None:
+def test_the_instructions_name_the_placeholders_codes_and_identifiers_the_text_has() -> None:
     seen: list[str] = []
-    _paraphrase("Bạn là {role}; duyệt APR-0102.", "Với vai {role}, hãy duyệt APR-0102.",
-                seen=seen)
+    _paraphrase("Bạn là {role}; dùng search_spec rồi duyệt APR-0102.",
+                "Với vai {role}, tra search_spec và duyệt APR-0102.", seen=seen)
     instructions = seen[0].split("\n\n", 1)[0]
     assert "{role}" in instructions and "APR-0102" in instructions
+    assert "định danh (search_spec)" in instructions
+
+
+def test_a_renamed_or_dropped_identifier_is_rejected() -> None:
+    text = "soạn báo giá (discount_pct là phần trăm chiết khấu khách đề nghị)"
+    assert _paraphrase(text, "lập báo giá (discount_percent là mức chiết khấu khách xin)",
+                       "lập báo giá (chiết khấu khách xin)",
+                       "lập báo giá (discount_pct là mức chiết khấu khách xin)") == (
+        "lập báo giá (discount_pct là mức chiết khấu khách xin)")
 
 
 def test_an_invented_placeholder_is_rejected_and_the_retry_accepted() -> None:

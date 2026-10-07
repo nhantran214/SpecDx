@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
-from specdx.active.budget import ProbeBudget
+from specdx.active.budget import RunBudget
 from specdx.active.search import CellBandit, information_gain, should_escalate
 from specdx.infer.items import ItemView
 from specdx.infer.latent import Observation, Posterior, fit
@@ -39,7 +39,7 @@ class LensLike(Protocol):
 
 # The localised sentence ids, or None when the ambiguity stays unlocalised.
 Localizer = Callable[
-    [SpecVariant, Defect, Sequence[InterpreterId], ProbeBudget], tuple[str, ...] | None
+    [SpecVariant, Defect, Sequence[InterpreterId], RunBudget], tuple[str, ...] | None
 ]
 AmbiguityKey = tuple[str, str, tuple[str, ...]]
 
@@ -60,8 +60,10 @@ class SpecDxConfig:
     synthesize: bool = True
     localize: bool = True
     localize_tests: int = 40
-    # Directed-probe and ddmin runs requested per specification, cached or not (§11).
+    # Runs requested per specification, cached or not (§11): directed probes for
+    # refutation, and ddmin runs for localisation, each under its own cap.
     probe_budget: int = 100
+    localize_budget: int = 80
 
 
 @dataclass
@@ -71,14 +73,15 @@ class LoopContext:
     canon: dict[str, Scenario]
     candidates: list[Scenario]
     cap_pct: int
-    refuter_factory: Callable[[Sequence[InterpreterId], ProbeBudget], Refuter]
+    refuter_factory: Callable[[Sequence[InterpreterId], RunBudget], Refuter]
     localizer: Localizer | None = None
 
 
 @dataclass
 class Report:
-    """runs counts population runs; probe_runs and ddmin_runs the requested runs that the
-    probe budget charged. ambiguity_keys are the ambiguities found, before localisation."""
+    """runs counts population runs; probe_runs and ddmin_runs the requested runs charged to
+    the probe and localisation budgets. ambiguity_keys are the ambiguities found, before
+    localisation."""
 
     variant: str
     defects: list[Defect]
@@ -134,7 +137,7 @@ def run_specdx(
     """base: the base specification's report. Ambiguities it already holds (same step and
     fields) are dropped before localisation, so only the mutant's own are localised (§11)."""
     rng = random.Random(config.rng_seed)
-    budget = ProbeBudget(config.probe_budget)
+    budget = RunBudget(config.probe_budget, config.localize_budget)
     refutations: dict = {}
     bandit = CellBandit(ctx.cap_pct)
     queue = [ctx.canon[name] for name in sorted(ctx.canon)]
@@ -213,14 +216,18 @@ def run_specdx(
                    if d.type != "ambiguity" or ambiguity_key(d) not in base.ambiguity_keys]
     if config.localize and ctx.localizer is not None:
         interps = ranked_interpreters(config.models_by_family, posterior.theta, config.variants)
-        localised: list[Defect] = []
-        for d in defects:
-            if d.type == "ambiguity":
-                # Unlocalised: an empty location, which matches no ground truth.
-                sentences = ctx.localizer(variant, d, interps, budget)
-                d = dataclasses.replace(d, location=tuple(sentences or ()))
-            localised.append(d)
-        defects = merge_defects(localised)
+        # Best supported first, until the localisation budget runs out; from then on every
+        # ambiguity is unlocalised: an empty location, which matches no ground truth.
+        located: dict[int, tuple[str, ...]] = {}
+        for i in sorted((i for i, d in enumerate(defects) if d.type == "ambiguity"),
+                        key=lambda i: -defects[i].score):
+            sentences = (None if budget.exhausted("ddmin")
+                         else ctx.localizer(variant, defects[i], interps, budget))
+            located[i] = tuple(sentences or ())
+        defects = merge_defects(
+            dataclasses.replace(d, location=located[i]) if i in located else d
+            for i, d in enumerate(defects)
+        )
 
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
                   dict(posterior.theta), behaviours, probe_runs=budget.probe,

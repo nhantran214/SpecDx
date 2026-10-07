@@ -8,6 +8,7 @@
   "seeds": [1, 2, 3],
   "budget": 200,
   "probe_budget": 100,
+  "localize_budget": 80,
   "dev_per_type": 5,
   "rng_seed": 20261006
 }

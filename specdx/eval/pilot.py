@@ -83,6 +83,7 @@ class GateConfig:
     dev_per_type: int
     rng_seed: int
     probe_budget: int = SpecDxConfig.probe_budget
+    localize_budget: int = SpecDxConfig.localize_budget
 
     @classmethod
     def load(cls, path: Path) -> GateConfig:
@@ -92,12 +93,13 @@ class GateConfig:
             variants=tuple(raw["variants"]), seeds=tuple(raw["seeds"]), budget=int(raw["budget"]),
             dev_per_type=int(raw["dev_per_type"]), rng_seed=int(raw["rng_seed"]),
             probe_budget=int(raw.get("probe_budget", SpecDxConfig.probe_budget)),
+            localize_budget=int(raw.get("localize_budget", SpecDxConfig.localize_budget)),
         )
 
     def specdx(self) -> SpecDxConfig:
         return SpecDxConfig(self.models_by_family, variants=self.variants, seeds=self.seeds,
                             budget=self.budget, rng_seed=self.rng_seed,
-                            probe_budget=self.probe_budget)
+                            probe_budget=self.probe_budget, localize_budget=self.localize_budget)
 
 
 class BenchLike(Protocol):

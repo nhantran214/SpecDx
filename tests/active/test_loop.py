@@ -178,18 +178,66 @@ def test_an_unattempted_singleton_is_hidden_and_an_attempted_one_a_contradiction
     assert attempted.probe_runs == 1
 
 
-def test_the_report_counts_probe_and_ddmin_runs() -> None:
+def _ddmin_localiser(calls, runs=3):
+    """Spends `runs` ddmin runs per ambiguity, like the real one; unlocalised if cut short."""
     def localiser(v, d, i, budget):
-        for _ in range(3):
-            budget.take("ddmin")
+        calls.append(d.note)
+        for _ in range(runs):
+            if not budget.take("ddmin"):
+                return None
         return ("A:01",)
+    return localiser
 
+
+def _split_and_shared_plan(scenario, interp):
+    """grn12: the competent models split two ways and all violate c1, so the scenario has
+    both an ambiguity to localise and a candidate to refute."""
+    klass, bad = _split_plan(scenario, interp)
+    return (klass, {"c1"}) if scenario.id == "grn12" and interp.model in GOOD else (klass, bad)
+
+
+def test_the_report_counts_probe_and_ddmin_runs() -> None:
     report = run_specdx(
         VARIANT,
-        _ctx(FakeRunner(_split_plan), localiser, refuter=lambda i, b: NeverRefute(b)),
-        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=4),
+        _ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser([]),
+             refuter=lambda i, b: NeverRefute(b)),
+        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=4, localize_budget=5),
     )
-    assert report.ddmin_runs + report.probe_runs <= 4 and report.ddmin_runs >= 1
+    assert (report.probe_runs, report.ddmin_runs) == (1, 3)
     out = json.loads(report.to_json())
     assert (out["runs"], out["probe_runs"], out["ddmin_runs"]) == (
         report.runs, report.probe_runs, report.ddmin_runs)
+
+
+def test_refutation_spending_its_whole_budget_leaves_localisation_its_own() -> None:
+    calls: list[str] = []
+    report = run_specdx(
+        VARIANT,
+        _ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser(calls),
+             refuter=lambda i, b: NeverRefute(b)),
+        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=1, localize_budget=80),
+    )
+    assert report.probe_runs == 1  # the probe budget is spent
+    assert calls and report.ddmin_runs == 3
+    assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
+
+
+def test_the_localisation_budget_caps_ddmin_in_descending_score_order() -> None:
+    def run(localize_budget):
+        calls: list[str] = []
+        report = run_specdx(
+            VARIANT,
+            _ctx(FakeRunner(_split_plan), _ddmin_localiser(calls), lens=TwoStepLens()),
+            SpecDxConfig(MODELS, budget=200, synthesize=False, localize_budget=localize_budget),
+        )
+        found = sorted(d.location for d in report.defects if d.type == "ambiguity")
+        return report, calls, found
+
+    full, calls, found = run(6)
+    assert full.ddmin_runs == 6 and len(calls) == 2 and found == [("A:01",)]
+    cut, calls, found = run(4)  # the second localisation runs out after one run
+    assert cut.ddmin_runs == 4 and len(calls) == 2 and found == [(), ("A:01",)]
+    spent, calls, found = run(3)  # nothing left for the second: it is not even tried
+    assert spent.ddmin_runs == 3 and len(calls) == 1 and found == [(), ("A:01",)]
+    score = {d.location: d.score for d in spent.defects if d.type == "ambiguity"}
+    assert score[("A:01",)] >= score[()]  # the better supported one went first

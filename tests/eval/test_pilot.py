@@ -110,6 +110,13 @@ def _config(tmp_path) -> GateConfig:
     return GateConfig.load(path)
 
 
+def test_the_gate_configuration_carries_both_run_budgets(tmp_path) -> None:
+    assert (_config(tmp_path).specdx().probe_budget,
+            _config(tmp_path).specdx().localize_budget) == (100, 80)
+    gate = GateConfig.load(Path(__file__).parents[2] / "experiments" / "p1-gate.json")
+    assert (gate.specdx().probe_budget, gate.specdx().localize_budget) == (100, 80)
+
+
 def test_gate_records_a_broken_mutant_and_continues(tmp_path) -> None:
     mutants = [_mutant("H1-00", "hidden", {"c1"}), _mutant("broken", "weak", {"x.y"})]
     result = run_gate(_config(tmp_path), _Bench(), mutants)

@@ -10,7 +10,7 @@ from tonomyx.canon.pack import CanonPack
 from tonomyx.de.executor import DeExecutor
 from tonomyx.tools.catalog import build_registry
 
-from specdx.active.budget import ProbeBudget
+from specdx.active.budget import RunBudget
 from specdx.active.ddmin import OutOfBudget, localize_ambiguity
 from specdx.active.loop import LoopContext, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
@@ -115,7 +115,7 @@ class Workbench:
         by_id = {s.id: s for s in [*canon.values(), *candidates]}
 
         def refuter_factory(
-            interps: Sequence[InterpreterId], budget: ProbeBudget
+            interps: Sequence[InterpreterId], budget: RunBudget
         ) -> CombinedRefuter:
             return CombinedRefuter(
                 clauses, SymbolicRepair(self.db, variant, clauses),
@@ -123,7 +123,7 @@ class Workbench:
             )
 
         def localizer(v: SpecVariant, defect: Defect, interps: Sequence[InterpreterId],
-                      budget: ProbeBudget) -> tuple[str, ...] | None:
+                      budget: RunBudget) -> tuple[str, ...] | None:
             scenario_id, step_id = defect.note.split("|", 1)
             scenario: Scenario = by_id[scenario_id]
             step = next(s for s in self.steps if s.id == step_id)
