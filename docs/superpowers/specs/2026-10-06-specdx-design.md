@@ -527,6 +527,28 @@ Reading the vendored code while planning P1 settled the following points. They r
    - the event vocabulary.
 8. **Bootstrap confidence intervals over interpreters** (§3.2) are deferred to P3; P1 reports posterior probabilities.
 
+The final review of P1 (2026-10-07) added the following clarifications.
+
+9. **Ambiguity localisation in P1.** The localiser retrieves the top 5 chunks for a step, not the top 20 of §3.7. This bounds the ddmin cost. Ambiguities sourced beyond rank 5 go unlocalised, which is conservative against SpecDx.
+   - ddmin first tests the empty set. If the split persists with none of the candidate sentences, the ambiguity is *unlocalised*. It is also unlocalised when the ddmin tests or the probe budget (item 13) run out before the result is 1-minimal.
+   - An unlocalised ambiguity keeps its type with an empty location, so it matches no ground truth.
+   - Before localisation, an ambiguity is identified by its step and the locked fields its admissible classes differ on. The differential against the base report compares ambiguities on that identity, because localisation gives different sentence ids from one run to the next. Only the mutant's remaining ambiguities are localised. Defects that then share type and location are merged.
+10. **Errors and classes.**
+    - Step-level errors enter the step's class key as interpreter behaviour. These are an interpreter's malformed or failed steps inside an otherwise completed run.
+    - Run-level errors never get a class (§6.5).
+    - Infrastructure errors never become behaviours. An Ollama outage is a transport failure or an HTTP 5xx that persists through five attempts with pauses of 2, 4, 8 and 16 s; a read timeout is still the interpreter's behaviour. An Ollama or database outage stops the run without caching it, and it stops the gate.
+11. **B2 uses more data than §4.5 states.** B2 uses every Tell variant × seed of the best model, more than §4.5's "× 3 seeds". This gives the baseline more data, never less.
+12. **The gate verdict (§4.8).**
+    - For each type, SpecDx's typed F1 is compared with each baseline's *untyped* F1 for that type. Untyped scoring charges a baseline's unmatched findings to the mutant's true type.
+    - A type is a win if SpecDx's typed F1 > max(B2 untyped F1, B3 untyped F1). The gate passes on at least 3 wins of 4.
+    - Reason: B2 and B3 cannot assign types by construction, since they report only Hidden requirements. Their typed F1 for Contradiction, Ambiguity and Weak check is therefore 0, and a typed-against-typed comparison would be won by any single SpecDx true positive.
+    - The literal typed-against-typed comparison is still reported, for transparency.
+    - If any mutant could not run, the headline reads INCOMPLETE and no verdict is given. Infrastructure failures stop the gate instead (item 10).
+13. **Probe budget.** `probe_budget` (default 100) caps the directed-probe and ddmin runs requested per specification. A run counts whether it is cached or not, so a resumed study spends the budget exactly as the original did.
+    - Refutation candidates are processed in descending score order. Each pair of scenario and target set is refuted once per specification.
+    - A singleton whose refutation was never attempted because the budget ran out is typed Hidden, because a Contradiction requires a failed refutation attempt. For the same reason, an unattempted candidate of two or more clauses is not reported.
+    - With the population budget of 200 runs, a specification costs at most 300 runs.
+
 ---
 
 ## 12. Key references
