@@ -536,7 +536,7 @@ The final review of P1 (2026-10-07) added the following clarifications.
 10. **Errors and classes.**
     - Step-level errors enter the step's class key as interpreter behaviour. These are an interpreter's malformed or failed steps inside an otherwise completed run.
     - Run-level errors never get a class (§6.5).
-    - Infrastructure errors never become behaviours. An Ollama outage is a transport failure or an HTTP 5xx that persists through five attempts with pauses of 2, 4, 8 and 16 s; a read timeout is still the interpreter's behaviour. An Ollama or database outage stops the run without caching it, and it stops the gate.
+    - Infrastructure errors never become behaviours. An Ollama outage is a transport failure or an HTTP 5xx that persists through five attempts with pauses of 2, 4, 8 and 16 s. A read timeout is still the interpreter's behaviour, and so is the HTTP 500 with which Ollama reports a tool call the model wrote malformed. An Ollama or database outage, or a database that another process holds, stops the run without caching it, and it stops the gate.
 11. **B2 uses more data than §4.5 states.** B2 uses every Tell variant × seed of the best model, more than §4.5's "× 3 seeds". This gives the baseline more data, never less.
 12. **The gate verdict (§4.8).**
     - For each type, SpecDx's typed F1 is compared with each baseline's *untyped* F1 for that type. Untyped scoring charges a baseline's unmatched findings to the mutant's true type.

@@ -5,7 +5,9 @@ import psycopg
 import pytest
 from tonomyx.tools.catalog import build_registry
 
+from specdx import db as db_module
 from specdx.config import BASE_PACK
+from specdx.db import PackDatabase
 from specdx.interpreters.cache import RunCache
 from specdx.interpreters.executor import SpecInterpreterExecutor
 from specdx.interpreters.prompt import load_variants
@@ -60,6 +62,19 @@ def test_a_database_outage_is_not_cached(db, pack, variant, tmp_path) -> None:
     with pytest.raises(psycopg.OperationalError):
         runner.run(variant, canon_scenarios(pack)["grn12"], REF)
     assert len(cache) == 0
+
+
+def test_a_database_another_process_holds_is_never_cached(db, pack, variant, tmp_path) -> None:
+    db_module._LOCKS.pop(db.url).close()  # act as if this process had never taken the lock
+    cache = RunCache(tmp_path / "r.jsonl")
+    with psycopg.connect(db.url, autocommit=True) as other:
+        other.execute("SELECT pg_advisory_lock(%s)", (db_module.LOCK_KEY,))
+        runner = Runner(PackDatabase(db.url), cache, lambda i, c, s: reference_executor(),
+                        STEPS, model_digest=lambda m: "d")
+        with pytest.raises(InfrastructureError, match="another process"):
+            runner.run(variant, canon_scenarios(pack)["grn12"], REF)
+    assert len(cache) == 0
+    db.use(BASE_PACK)
 
 
 def test_a_different_context_digest_never_reuses_a_cached_run(db, pack, variant, tmp_path) -> None:

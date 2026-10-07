@@ -24,7 +24,7 @@ from tonomyx.db.bootstrap import OPERATIONAL_TABLES, drop_everything, resync_seq
 
 from specdx.config import DATABASE_URL, settings_for
 from specdx.observe.state import capture_state
-from specdx.types import State
+from specdx.types import InfrastructureError, State
 
 MASTER_LOAD_ORDER: tuple[str, ...] = ("ddl.sql", "guardrails.sql", "seed_master.sql")
 BACKGROUND_TABLES: tuple[str, ...] = ("cand", "att", "esg")
@@ -68,7 +68,8 @@ def _hold_lock(url: str) -> psycopg.Connection[dict[str, Any]]:
         raise
     if row is None or not row["ok"]:
         conn.close()
-        raise RuntimeError(
+        # Infrastructure, not behaviour: the Runner must not cache a run it never made.
+        raise InfrastructureError(
             f"another process holds the SpecDx lock on {_where(url)[0]}; SpecDx runs one "
             "process per database (stop the other run, or wait for it to finish)"
         )

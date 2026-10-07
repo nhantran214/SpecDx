@@ -35,6 +35,8 @@ NUM_CTX = 16384
 _REPLY_LIMIT = 4000
 # Pauses between the five attempts of one chat call when Ollama itself fails.
 RETRY_PAUSES: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0)
+# HTTP 5xx bodies that report the model's output, not an outage (Ollama 0.30).
+MODEL_ERRORS: tuple[str, ...] = ("error parsing tool call",)
 log = logging.getLogger(__name__)
 SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
@@ -60,14 +62,30 @@ def interpreter_settings() -> dict[str, float | int]:
             "num_ctx": NUM_CTX, "search_k": SEARCH_K, "search_reply_limit": SEARCH_REPLY_LIMIT}
 
 
+def _describe(exc: httpx.HTTPError) -> str:
+    """The error, with Ollama's own message when it sent one."""
+    text = f"{type(exc).__name__}: {exc}"
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            body = exc.response.text
+        except httpx.ResponseNotRead:
+            body = ""
+        if body:
+            text += f" | {body[:500]}"
+    return text
+
+
 def _ollama_failed(exc: httpx.HTTPError) -> bool:
     """Ollama itself failed (unreachable, crashed, out of memory). A read timeout is not
-    such a failure: it is the model being slow, which is interpreter behaviour."""
+    such a failure: it is the model being slow, which is interpreter behaviour. Nor is a
+    500 for a tool call the model wrote malformed: retrying the same seed repeats it."""
     if isinstance(exc, httpx.ReadTimeout):
         return False
     if isinstance(exc, httpx.TransportError):
         return True
-    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
+        return not any(m in _describe(exc) for m in MODEL_ERRORS)
+    return False
 
 
 class SpecInterpreterExecutor:
@@ -127,7 +145,7 @@ class SpecInterpreterExecutor:
         except httpx.HTTPError as exc:
             return ResultEnvelope(
                 task_id=task.task_id, case_id=task.case_id, status=ResultStatus.ERROR,
-                next_hint=f"ollama call failed: {exc}",
+                next_hint=f"ollama call failed: {_describe(exc)}",
             )
         return record.envelope(
             task, self.model, self.max_steps, ResultStatus.ERROR,
@@ -153,7 +171,7 @@ class SpecInterpreterExecutor:
             except httpx.HTTPError as exc:
                 if not _ollama_failed(exc):
                     raise
-                reason = f"{type(exc).__name__}: {exc}"
+                reason = _describe(exc)
                 if attempt == attempts:
                     self.infra_failure = (
                         f"Ollama failed {attempts} times for {self.model}; last: {reason}"

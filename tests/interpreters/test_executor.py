@@ -166,6 +166,29 @@ def test_an_exhausted_server_error_flags_the_executor_and_stops_calling(db, corp
     assert executor.infra_failure is not None and "500" in executor.infra_failure
 
 
+def test_a_malformed_tool_call_ollama_reports_as_500_is_behaviour(db, corpus) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(500, json={
+            "error": "error parsing tool call: raw='{\"name\": \"log_ev', "
+                     "err=unexpected end of JSON input"})
+
+    sleeps: list[float] = []
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), corpus, load_variants(),
+        transport=httpx.MockTransport(handle), sleep=sleeps.append,
+    )
+    with db.isolated() as conn:
+        runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
+        open_case(runtime.repo)
+        envelope = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+    assert envelope.status is ResultStatus.ERROR and "error parsing tool call" in (
+        envelope.next_hint or "")
+    assert len(calls) == 1 and sleeps == [] and executor.infra_failure is None
+
+
 def test_search_reply_includes_all_passages_when_they_fit(pack) -> None:
     """A corpus of 5 chunks each ~1500 chars → the reply parses as JSON and holds all 5 passages."""
     from specdx.interpreters.executor import SEARCH_REPLY_LIMIT

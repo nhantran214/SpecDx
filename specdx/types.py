@@ -17,7 +17,7 @@ SECOND_GRN = "GRN-0016"
 
 
 class InfrastructureError(RuntimeError):
-    """Ollama failed, not the interpreter: such a run is never cached as a behaviour."""
+    """Ollama or the database failed, not the interpreter: never cached as a behaviour."""
 
 
 @dataclass(frozen=True)
