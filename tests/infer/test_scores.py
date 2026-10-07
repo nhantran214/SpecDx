@@ -2,8 +2,8 @@ import pytest
 
 from specdx.infer.items import ItemView
 from specdx.infer.latent import ItemPosterior, Observation, fit
-from specdx.infer.scores import _weak, diagnose, run_weights
-from specdx.types import Behaviour, InterpreterId, RefuteResult, Scenario, State
+from specdx.infer.scores import UNATTEMPTED, _weak, diagnose, merge_defects, run_weights
+from specdx.types import Behaviour, Defect, InterpreterId, RefuteResult, Scenario, State
 
 GOOD = ("g1", "g2", "g3", "g4")
 BAD = ("b1", "b2")
@@ -203,3 +203,12 @@ def test_weak_union_score() -> None:
     klass, score = result
     assert klass == "C"
     assert score == 1.0
+
+
+def test_a_merged_hidden_finding_keeps_an_attempted_refutation_note() -> None:
+    unattempted = Defect("hidden", ("c",), ("s1",), ("r1",), 0.9, UNATTEMPTED)
+    refuted = Defect("hidden", ("c",), ("s2",), ("r2",), 0.5, "refuted by w")
+    for pair in ((unattempted, refuted), (refuted, unattempted)):
+        (merged,) = merge_defects(pair)
+        assert merged.note == "refuted by w" and merged.score == 0.9
+        assert merged.scenarios == ("s1", "s2")

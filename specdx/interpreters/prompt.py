@@ -18,7 +18,8 @@ _NOTE = (
     "Tell variants: the standing instruction and each task statement. Variant 0 is "
     "hand-written and carries no business rule: every rule must come from the documents "
     "through search_spec. Variants 1-2 are paraphrases produced once by "
-    "`specdx make-variants` and then frozen."
+    "`specdx make-variants` and then frozen; an entry no local model paraphrased "
+    "faithfully keeps the variant-0 wording (see provenance)."
 )
 
 

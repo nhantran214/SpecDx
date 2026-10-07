@@ -28,6 +28,8 @@ REPAIR_BASIS = "specdx repair"
 REPAIR_AT = "2026-09-01 02:00:00+00"
 GOAL = "Yêu cầu bổ sung: kết quả cuối cùng phải thỏa mọi điều sau: {items}."
 PROTECTED_TABLES = ("cases", "insp", "ncr", "ship")
+# The witness of a refutation that symbolic repair found, at no probe cost.
+SYMBOLIC_WITNESS = "symbolic-repair"
 
 
 class RunnerLike(Protocol):
@@ -298,7 +300,7 @@ class CombinedRefuter:
         if self.repair is not None and starts:
             attempts += 1
             if self.repair.search(targets, scenario, starts) is not None:
-                result = RefuteResult(True, "symbolic-repair", attempts)
+                result = RefuteResult(True, SYMBOLIC_WITNESS, attempts)
         if result is None and self.probe is not None:
             found, probed = self.probe.search(targets, scenario, allowed)
             attempts += probed

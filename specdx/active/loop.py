@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from specdx.active.budget import RunBudget
+from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.active.search import CellBandit, information_gain, should_escalate
 from specdx.infer.items import ItemView
 from specdx.infer.latent import Observation, Posterior, fit
@@ -155,8 +156,12 @@ def run_specdx(
     runs = 0
     executed_before = ctx.runner.executed
     members = committee(config.models_by_family, config.variants, config.seeds)
+    # Base locations whose candidates spent probes, or would: contradictions, and hidden
+    # findings refuted by a probe run or never attempted. A base finding that symbolic
+    # repair refuted cost no probe; if it needs one on a mutant, the mutant changed it.
     known = (frozenset(d.location for d in base.defects
-                       if d.type in ("contradiction", "hidden"))
+                       if d.type == "contradiction"
+                       or (d.type == "hidden" and d.note != f"refuted by {SYMBOLIC_WITNESS}"))
              if base is not None else frozenset())
 
     while runs < config.budget:

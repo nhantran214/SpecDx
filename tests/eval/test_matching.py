@@ -64,6 +64,22 @@ def test_an_unattempted_hidden_finding_at_a_base_location_is_base_noise() -> Non
     fresh = Defect("hidden", ("y",), ("s",), (), 1.0, UNATTEMPTED)
     new, _ = match_findings([unattempted, refuted, fresh], truth, base)
     assert new == [refuted, fresh]
+    # Only a hidden finding's type can be a default; any other type is evidence
+    odd = Defect("contradiction", ("z",), ("s",), (), 1.0, UNATTEMPTED)
+    held = [Defect("hidden", ("z",), ("s",), (), 1.0)]
+    assert match_findings([odd], truth, held)[0] == [odd]
+
+
+def test_an_exact_f1_tie_with_a_baseline_is_no_win() -> None:
+    types = ("contradiction", "hidden", "ambiguity", "weak")
+    mine, theirs = Prf(tp=1, fp=0, fn=4), Prf(tp=2, fp=5, fn=3)  # both exactly 1/3
+    assert mine.f1 > theirs.f1  # the float route would call it a win
+    typed = {"specdx": dict.fromkeys(types, mine), "b2": dict.fromkeys(types, Prf(fn=5)),
+             "b3": dict.fromkeys(types, Prf(fn=5))}
+    untyped = {"specdx": typed["specdx"], "b2": dict.fromkeys(types, theirs),
+               "b3": dict.fromkeys(types, theirs)}
+    _, wins = gate_verdict(typed, untyped)
+    assert not wins["contradiction"] and not wins["hidden"]
 
 
 def test_f1_and_the_gate_verdict() -> None:

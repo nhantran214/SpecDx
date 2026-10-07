@@ -550,8 +550,14 @@ The final review of P1 (2026-10-07) added the following clarifications.
     - A singleton whose refutation was never attempted because the probe budget ran out is typed Hidden, because a Contradiction requires a failed refutation attempt. For the same reason, an unattempted candidate of two or more clauses is not reported.
     - `localize_budget` (default 80) caps ddmin runs. Ambiguities are localised in descending score order until it runs out. The ambiguity being localised when it runs out, and every one after it, stays unlocalised (item 9).
     - With the population budget of 200 runs, a specification costs at most 380 runs.
-    - On a mutant, candidates whose location the base report already holds are refuted last. The base smoke run (budget 60) produced 91 base findings, and its probe budget was spent on candidates that the base already explains. Without this ordering, the mutant's own candidate could go unprobed, and a true contradiction would be typed Hidden by default.
-    - A Hidden finding typed only because its refutation was never attempted carries no type evidence. The differential therefore treats it as base noise when the base report holds its location under any type. Attempted findings are compared on type and location as before.
+    - On a mutant, some candidates are refuted last: those whose location the base report holds as a contradiction, or as a hidden finding refuted by a probe run or never attempted.
+      - Why: the base smoke run (budget 60) produced 91 base findings (12 contradiction, 41 hidden refuted by symbolic repair, 37 hidden never attempted, 1 weak), and its probe budget was spent on candidates that the base already explains. Without this ordering, the mutant's own candidate could go unprobed, and a true contradiction would be typed Hidden by default.
+      - Exception: a location the base refuted by symbolic repair cost no probe there, so it keeps its score order. If it needs a probe on a mutant, the mutant changed it, for example a C2 guard trigger.
+    - A Hidden finding typed only because its refutation was never attempted carries no type evidence.
+      - The differential therefore treats it as base noise when the base report holds its location under any type. Attempted findings are compared on type and location as before.
+      - When findings merge across scenarios, an attempted refutation's note wins over an unattempted one.
+      - The rule is one-sided: an unattempted base finding does not neutralise an attempted mutant contradiction at the same location, because that contradiction is evidence.
+    - Gate comparisons use exact F1 = 2tp / (2tp + fp + fn), so an exact tie is never counted as a win.
 
 ---
 

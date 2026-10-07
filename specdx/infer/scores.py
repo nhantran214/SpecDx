@@ -41,6 +41,11 @@ def identity(d: Defect) -> tuple:
     return ambiguity_key(d) if d.type == "ambiguity" else d.key
 
 
+# The note of a singleton typed hidden only because the probe budget ran out before any
+# refutation attempt: its type is a default, not evidence (§11).
+UNATTEMPTED = "refutation not attempted: probe budget exhausted"
+
+
 def merge_defects(
     defects: Iterable[Defect], key: Callable[[Defect], Hashable] = lambda d: d.key
 ) -> list[Defect]:
@@ -52,11 +57,15 @@ def merge_defects(
             merged[k] = d
             continue
         best = d if d.score > old.score else old
+        note = best.note
+        if UNATTEMPTED in (old.note, d.note) and old.note != d.note:
+            # A refutation attempted in any scenario is evidence; keep its note (§11).
+            note = d.note if old.note == UNATTEMPTED else old.note
         merged[k] = Defect(
             d.type, d.location,
             tuple(sorted(set(old.scenarios) | set(d.scenarios))),
             tuple(sorted(set(old.witnesses) | set(d.witnesses))),
-            best.score, best.note,
+            best.score, note,
         )
     return sorted(merged.values(), key=lambda d: (-d.score, d.type, d.location, d.note))
 
@@ -106,11 +115,6 @@ def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[
         score = sum(p for s, p in ip.set_posterior.items() if any(k not in s for k in eligible))
     chosen = sorted(eligible, key=lambda k: (-outside(k), -counts[k], k))[0]
     return chosen, score
-
-
-# The note of a singleton typed hidden only because the probe budget ran out before any
-# refutation attempt: its type is a default, not evidence (§11).
-UNATTEMPTED = "refutation not attempted: probe budget exhausted"
 
 
 def diagnose(

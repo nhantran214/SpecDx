@@ -4,8 +4,9 @@ from pathlib import Path
 
 from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
 from specdx.infer.items import ItemView
+from specdx.infer.scores import UNATTEMPTED
 from specdx.spec.tell import TellCorpus
-from specdx.types import Behaviour, RefuteResult, Scenario, State
+from specdx.types import Behaviour, Defect, RefuteResult, Scenario, State
 from specdx.variant import SpecVariant
 
 CANON = {"discount8": Scenario("discount8", 15, 15, 8), "grn12": Scenario("grn12", 15, 12, 0),
@@ -138,6 +139,19 @@ def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) ->
     monkeypatch.setitem(run_specdx.__globals__, "diagnose", recording)
     run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=base)
     assert seen and all(("c1",) in known for known in seen)
+    # Symbolic repair spent no probe on the base, so a mutant needing one probes it early;
+    # ambiguity and weak locations are no refutation candidates at all.
+    seen.clear()
+    noted = dataclasses.replace(base, defects=[
+        Defect("contradiction", ("a",), ("s",), (), 1.0),
+        Defect("hidden", ("b",), ("s",), (), 1.0, UNATTEMPTED),
+        Defect("hidden", ("c",), ("s",), (), 1.0, "refuted by symbolic-repair"),
+        Defect("hidden", ("d",), ("s",), (), 1.0, "refuted by grn12|q1|v0|s1"),
+        Defect("ambiguity", ("e",), ("s",), (), 1.0),
+        Defect("weak", ("f",), ("s",), (), 1.0),
+    ])
+    run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=noted)
+    assert seen and all(known == {("a",), ("b",), ("d",)} for known in seen)
 
 
 def test_a_base_noise_ambiguity_is_removed_before_localisation() -> None:

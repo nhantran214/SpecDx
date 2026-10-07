@@ -63,7 +63,8 @@ def match_findings(
     base_keys = {d.key for d in base}
     base_locations = {d.location for d in base}
     new = [d for d in defects if d.key not in base_keys
-           and not (d.note == UNATTEMPTED and d.location in base_locations)]
+           and not (d.type == "hidden" and d.note == UNATTEMPTED
+                    and d.location in base_locations)]
     if k is not None:
         new = new[:k]
     hits = [d for d in new if (not typed or d.type == truth.type) and location_matches(d, truth)]
@@ -106,15 +107,20 @@ ABSOLUTE_BAR = 0.4
 def _wins(
     mine: Mapping[str, Prf], theirs: Sequence[Mapping[str, Prf]]
 ) -> dict[str, bool]:
-    return {t: mine[t].f1 > max(other[t].f1 for other in theirs) for t in DEFECT_TYPES}
+    return {t: exact_f1(mine[t]) > max(exact_f1(other[t]) for other in theirs)
+            for t in DEFECT_TYPES}
+
+
+def exact_f1(score: Prf) -> Fraction:
+    """F1 = 2tp / (2tp + fp + fn) in exact arithmetic: the float route lands a hair off on
+    exact ties (tp 3, fp 5, fn 4 gives 0.3999…; tp 1, fp 0, fn 4 gives 0.3333…37)."""
+    denominator = 2 * score.tp + score.fp + score.fn
+    return Fraction(2 * score.tp, denominator) if denominator else Fraction(0)
 
 
 def reaches_bar(score: Prf) -> bool:
-    """F1 >= ABSOLUTE_BAR in exact arithmetic: F1 = 2tp / (2tp + fp + fn), and the float
-    route can land a hair under the bar on an exact tie (for example tp 3, fp 5, fn 4)."""
-    denominator = 2 * score.tp + score.fp + score.fn
-    return bool(denominator) and Fraction(2 * score.tp, denominator) >= Fraction(
-        str(ABSOLUTE_BAR))
+    """F1 >= ABSOLUTE_BAR, exactly."""
+    return exact_f1(score) >= Fraction(str(ABSOLUTE_BAR))
 
 
 def gate_rule(defect_type: str) -> str:
