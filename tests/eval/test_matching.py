@@ -9,6 +9,7 @@ from specdx.eval.matching import (
     gate_verdict,
     literal_wins,
     location_matches,
+    reaches_bar,
 )
 from specdx.mutate.operators import GroundTruth
 from specdx.types import Defect
@@ -95,6 +96,12 @@ def test_ambiguity_and_weak_must_reach_the_absolute_bar() -> None:
     assert wins == {"contradiction": True, "hidden": True, "ambiguity": False, "weak": True}
     assert passed
     assert "0.40" in gate_rule("weak") and "untyped" in gate_rule("hidden")
+
+
+def test_an_exact_tie_with_the_bar_reaches_it() -> None:
+    tie = Prf(tp=3, fp=5, fn=4)  # F1 = 6/15 = 0.4 exactly; the float route gives 0.3999…
+    assert tie.f1 < ABSOLUTE_BAR and reaches_bar(tie)
+    assert not reaches_bar(Prf(tp=1, fp=0, fn=4)) and not reaches_bar(Prf())
 
 
 def test_untyped_false_positives_belong_to_the_mutant_type() -> None:

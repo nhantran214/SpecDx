@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 
 from specdx.mutate.operators import GroundTruth
 from specdx.spec.tell import TellCorpus
@@ -103,6 +104,14 @@ def _wins(
     return {t: mine[t].f1 > max(other[t].f1 for other in theirs) for t in DEFECT_TYPES}
 
 
+def reaches_bar(score: Prf) -> bool:
+    """F1 >= ABSOLUTE_BAR in exact arithmetic: F1 = 2tp / (2tp + fp + fn), and the float
+    route can land a hair under the bar on an exact tie (for example tp 3, fp 5, fn 4)."""
+    denominator = 2 * score.tp + score.fp + score.fn
+    return bool(denominator) and Fraction(2 * score.tp, denominator) >= Fraction(
+        str(ABSOLUTE_BAR))
+
+
 def gate_rule(defect_type: str) -> str:
     """How the verdict judges this type, as the report states it."""
     if defect_type in BASELINE_BLIND:
@@ -123,7 +132,7 @@ def gate_verdict(
     typed F1 is no bar). Ambiguity and weak: the baselines cannot locate those truths at
     all, so SpecDx's typed F1 must reach ABSOLUTE_BAR. The gate needs `required` wins."""
     compared = _wins(typed[method], [untyped[b] for b in baselines])
-    wins = {t: typed[method][t].f1 >= ABSOLUTE_BAR if t in BASELINE_BLIND else compared[t]
+    wins = {t: reaches_bar(typed[method][t]) if t in BASELINE_BLIND else compared[t]
             for t in DEFECT_TYPES}
     return sum(wins.values()) >= required, wins
 
