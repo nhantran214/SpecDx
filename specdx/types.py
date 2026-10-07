@@ -128,11 +128,13 @@ class Defect:
 
 @dataclass(frozen=True)
 class RefuteResult:
-    """Whether a state satisfying the targets was found (spec §3.6)."""
+    """Whether a state satisfying the targets was found (spec §3.6). attempted is False
+    when the probe budget ran out before any directed probe for the targets (§11)."""
 
     refuted: bool
     witness: str | None
     attempts: int
+    attempted: bool = True
 
 
 class Refuter(Protocol):

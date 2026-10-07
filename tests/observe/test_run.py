@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import psycopg
 import pytest
@@ -72,6 +74,18 @@ def test_a_different_context_digest_never_reuses_a_cached_run(db, pack, variant,
     assert key_a != key_b and second.executed == 1
     same_as_first.run(variant, grn12, REF)
     assert same_as_first.executed == 0
+
+
+def test_each_executed_run_is_logged_once(db, pack, variant, tmp_path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="specdx")
+    runner = Runner(db, RunCache(tmp_path / "r.jsonl"), lambda i, c, s: reference_executor(),
+                    STEPS, model_digest=lambda m: "d")
+    grn12 = canon_scenarios(pack)["grn12"]
+    runner.run(variant, grn12, REF, kind="probe")
+    runner.run(variant, grn12, REF, kind="probe")  # served from the cache: not logged
+    lines = [r.getMessage() for r in caplog.records if r.name == "specdx.observe.run"]
+    assert len(lines) == 1
+    assert all(part in lines[0] for part in ("base", "grn12", REF.key, "probe", "ok", " s"))
 
 
 def _ollama(handle):

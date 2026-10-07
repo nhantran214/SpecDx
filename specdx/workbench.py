@@ -12,7 +12,8 @@ from tonomyx.canon.pack import CanonPack
 from tonomyx.de.executor import DeExecutor
 from tonomyx.tools.catalog import build_registry
 
-from specdx.active.ddmin import localize_ambiguity
+from specdx.active.budget import ProbeBudget
+from specdx.active.ddmin import OutOfBudget, localize_ambiguity
 from specdx.active.loop import LoopContext, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
 from specdx.config import BASE_PACK, OLLAMA_URL, PDF_DIR, WORK_DIR
@@ -115,18 +116,21 @@ class Workbench:
         candidates = enumerate_scenarios(boundary_domain(pack))
         by_id = {s.id: s for s in [*canon.values(), *candidates]}
 
-        def refuter_factory(interps: Sequence[InterpreterId]) -> CombinedRefuter:
+        def refuter_factory(
+            interps: Sequence[InterpreterId], budget: ProbeBudget
+        ) -> CombinedRefuter:
             return CombinedRefuter(
                 clauses, SymbolicRepair(self.db, variant, clauses),
-                DirectedProbe(self.runner, variant, clauses, interps),
+                DirectedProbe(self.runner, variant, clauses, interps, budget=budget),
             )
 
-        def localizer(v: SpecVariant, defect: Defect, interps: Sequence[InterpreterId]
-                      ) -> tuple[str, ...]:
+        def localizer(v: SpecVariant, defect: Defect, interps: Sequence[InterpreterId],
+                      budget: ProbeBudget) -> tuple[str, ...] | None:
             scenario_id, step_id = defect.note.split("|", 1)
             scenario: Scenario = by_id[scenario_id]
             step = next(s for s in self.steps if s.id == step_id)
             query = f"{self.variants.statements[step.intent][0]} {' '.join(sorted(step.tables))}"
+            # Top 5 chunks, not §3.7's 20: bounds the ddmin cost in P1 (§11).
             chunks = v.corpus.search(query, k=5)
             pool = v.corpus.sentence_ids([c.id for c in chunks])
             one_per_family: dict[str, InterpreterId] = {}
@@ -137,14 +141,17 @@ class Workbench:
                 probe = SpecVariant(f"{v.name}+ddmin", v.pack, corpus)
                 classes = set()
                 for interp in one_per_family.values():
-                    b = self.runner.run(probe, scenario, interp)
+                    if not budget.take("ddmin"):
+                        raise OutOfBudget
+                    b = self.runner.run(probe, scenario, interp, kind="ddmin")
                     for view in lens.views(b, lens.violations(b)):
                         if view.item == defect.note:
                             classes.add(view.klass)
                 return len(classes) >= 2
 
-            return tuple(localize_ambiguity(v.corpus, pool, split_persists,
-                                            max_tests=config.localize_tests))
+            found = localize_ambiguity(v.corpus, pool, split_persists,
+                                       max_tests=config.localize_tests)
+            return None if found is None else tuple(found)
 
         return LoopContext(self.runner, lens, canon, candidates, discount_cap_pct(pack),
                            refuter_factory, localizer)

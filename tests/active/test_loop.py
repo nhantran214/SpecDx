@@ -1,3 +1,5 @@
+import dataclasses
+import json
 from pathlib import Path
 
 from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
@@ -17,7 +19,7 @@ class FakeRunner:
     def __init__(self, plan) -> None:
         self.plan, self.executed, self.calls = plan, 0, []
 
-    def run(self, variant, scenario, interp, suffix=""):
+    def run(self, variant, scenario, interp, suffix="", *, kind="population"):
         self.executed += 1
         self.calls.append(scenario.id)
         klass, bad = self.plan(scenario, interp)
@@ -59,9 +61,21 @@ def _hidden_plan(scenario, interp):
     return ("OK", set()) if good else (f"E{interp.seed}-{scenario.id}", {"noise"})
 
 
-def _ctx(runner, localizer=None):
-    return LoopContext(runner, FakeLens(), CANON, list(CANON.values()), 5,
-                       lambda interps: AlwaysRefute(), localizer)
+class NeverRefute:
+    """Every refutation that the probe budget allows fails; past the cap none is attempted."""
+
+    def __init__(self, budget) -> None:
+        self.budget = budget
+
+    def refute(self, targets, scenario, behaviours):
+        if self.budget.take("probe"):
+            return RefuteResult(False, None, 1)
+        return RefuteResult(False, None, 0, attempted=False)
+
+
+def _ctx(runner, localizer=None, lens=None, refuter=None):
+    return LoopContext(runner, lens or FakeLens(), CANON, list(CANON.values()), 5,
+                       refuter or (lambda interps, budget: AlwaysRefute()), localizer)
 
 
 def test_a_planted_hidden_requirement_is_reported_first() -> None:
@@ -95,7 +109,87 @@ def _split_plan(scenario, interp):
 
 def test_ambiguity_locations_are_replaced_by_the_localiser() -> None:
     report = run_specdx(
-        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i: ("A:01",)),
+        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: ("A:01",)),
         SpecDxConfig(MODELS, budget=200, synthesize=False),
     )
     assert any(d.type == "ambiguity" and d.location == ("A:01",) for d in report.defects)
+
+
+def test_an_unlocalised_ambiguity_keeps_its_type_with_an_empty_location() -> None:
+    report = run_specdx(
+        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: None),
+        SpecDxConfig(MODELS, budget=200, synthesize=False),
+    )
+    ambiguities = [d for d in report.defects if d.type == "ambiguity"]
+    assert ambiguities and all(d.location == () for d in ambiguities)
+
+
+def test_a_base_noise_ambiguity_is_removed_before_localisation() -> None:
+    config = SpecDxConfig(MODELS, budget=200, synthesize=False)
+    base = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan)),
+                      dataclasses.replace(config, localize=False))
+    assert [d for d in base.defects if d.type == "ambiguity"]
+    assert base.ambiguity_keys == {("ambiguity", "step", ("x.k",))}
+    calls = []
+
+    def localiser(v, d, i, b):
+        calls.append(d.note)
+        return (f"A:{len(calls):02d}",)  # another run, other sentence ids
+
+    mutant = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser), config, base=base)
+    assert not [d for d in mutant.defects if d.type == "ambiguity"] and calls == []
+    alone = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser), config)
+    assert [d.location for d in alone.defects if d.type == "ambiguity"] == [("A:01",)]
+
+
+class TwoStepLens(FakeLens):
+    """The step under test twice: the same split at two steps of one scenario."""
+
+    def views(self, b, violated):
+        out = super().views(b, violated)
+        return [*out, dataclasses.replace(out[0], item=f"{b.scenario.id}|step2")]
+
+
+def test_localised_ambiguities_that_share_a_location_are_merged() -> None:
+    report = run_specdx(
+        VARIANT,
+        _ctx(FakeRunner(_split_plan), lambda v, d, i, b: ("A:01",), lens=TwoStepLens()),
+        SpecDxConfig(MODELS, budget=200, synthesize=False),
+    )
+    assert len(report.ambiguity_keys) == 2
+    assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
+
+
+def test_an_unattempted_singleton_is_hidden_and_an_attempted_one_a_contradiction() -> None:
+    def run(probe_budget):
+        return run_specdx(
+            VARIANT, _ctx(FakeRunner(_hidden_plan), refuter=lambda i, b: NeverRefute(b)),
+            SpecDxConfig(MODELS, budget=100, synthesize=False, probe_budget=probe_budget),
+        )
+
+    capped = run(0)
+    top = capped.defects[0]
+    assert (top.type, top.location) == ("hidden", ("c1",)) and "budget" in top.note
+    assert capped.probe_runs == 0
+    attempted = run(10)
+    assert (attempted.defects[0].type, attempted.defects[0].location) == (
+        "contradiction", ("c1",))
+    # one candidate, refuted once per specification however many iterations see it
+    assert attempted.probe_runs == 1
+
+
+def test_the_report_counts_probe_and_ddmin_runs() -> None:
+    def localiser(v, d, i, budget):
+        for _ in range(3):
+            budget.take("ddmin")
+        return ("A:01",)
+
+    report = run_specdx(
+        VARIANT,
+        _ctx(FakeRunner(_split_plan), localiser, refuter=lambda i, b: NeverRefute(b)),
+        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=4),
+    )
+    assert report.ddmin_runs + report.probe_runs <= 4 and report.ddmin_runs >= 1
+    out = json.loads(report.to_json())
+    assert (out["runs"], out["probe_runs"], out["ddmin_runs"]) == (
+        report.runs, report.probe_runs, report.ddmin_runs)

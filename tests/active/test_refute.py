@@ -2,6 +2,7 @@ import dataclasses
 
 import pytest
 
+from specdx.active.budget import ProbeBudget
 from specdx.active.refute import (
     CombinedRefuter,
     DirectedProbe,
@@ -83,10 +84,25 @@ class _FakeRunner:
     def __init__(self, state: State) -> None:
         self.state, self.calls = state, 0
 
-    def run(self, variant, scenario, interp, suffix=""):
+    def run(self, variant, scenario, interp, suffix="", *, kind="population"):
         self.calls += 1
-        assert "Yêu cầu bổ sung" in suffix
+        assert "Yêu cầu bổ sung" in suffix and kind == "probe"
         return Behaviour(f"probe{self.calls}", interp, scenario, self.state)
+
+
+def test_the_probe_budget_caps_directed_probe_runs(clauses, variant) -> None:
+    runner = _FakeRunner(State.empty())  # every probe fails: nothing satisfies the targets
+    budget = ProbeBudget(4)
+    probe = DirectedProbe(runner, variant, clauses, [InterpreterId("m", "f", 0, 1)],
+                          budget=budget)
+    refuter = CombinedRefuter(clauses, None, probe)
+    first = refuter.refute(frozenset({"golden:so:SO-0031:trang_thai"}), GRN12, [])
+    assert not first.refuted and first.attempted and runner.calls == 3
+    second = refuter.refute(frozenset({"golden:po:PO-0015:trang_thai"}), GRN12, [])
+    assert second.attempted and runner.calls == 4
+    third = refuter.refute(frozenset({"golden:inv:INV-0031:trang_thai"}), GRN12, [])
+    assert not third.refuted and not third.attempted
+    assert runner.calls == 4 and budget.probe == 4 and budget.ddmin == 0
 
 
 def test_the_probe_refutes_and_results_are_memoised(clauses, variant, golden) -> None:

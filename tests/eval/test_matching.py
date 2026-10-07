@@ -20,6 +20,16 @@ def test_location_rules_per_kind() -> None:
     assert location_matches(_d("weak", "pay.so_tien", "pay.trang_thai"), field)
 
 
+def test_an_unlocalised_ambiguity_matches_no_truth() -> None:
+    unlocalised = Defect("ambiguity", (), ("s",), (), 0.9)
+    chunk = GroundTruth("m", "ambiguity", frozenset({"KB:KB-0003"}), "chunk")
+    sentence = GroundTruth("m", "ambiguity", frozenset({"KB:KB-0003:01"}), "sentence")
+    assert not location_matches(unlocalised, chunk)
+    assert not location_matches(unlocalised, sentence)
+    scores = evaluate_reports({"m": [unlocalised]}, {"m": sentence}, [])
+    assert (scores["ambiguity"].tp, scores["ambiguity"].fn) == (0, 1)
+
+
 def test_base_findings_are_removed_and_errors_counted() -> None:
     truths = {"m1": GroundTruth("m1", "hidden", frozenset({"c1"}), "clause"),
               "m2": GroundTruth("m2", "weak", frozenset({"pay.so_tien"}), "field")}

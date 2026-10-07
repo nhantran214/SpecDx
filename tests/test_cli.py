@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from specdx.cli import main
@@ -25,6 +27,15 @@ def test_frozen_paraphrases_are_not_regenerated_without_force(monkeypatch, capsy
     monkeypatch.setattr("specdx.interpreters.paraphrase.make_variants", no_model)
     assert main(["make-variants"]) == 2
     assert "frozen" in capsys.readouterr().err
+
+
+def test_the_cli_logs_specdx_progress_to_stderr(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)
+    main(["make-variants"])
+    capsys.readouterr()
+    logging.getLogger("specdx.observe.run").info("run base grn12 ok")
+    assert "run base grn12 ok" in capsys.readouterr().err
+    assert logging.getLogger("specdx").getEffectiveLevel() == logging.INFO
 
 
 def test_force_regenerates_and_saves_the_paraphrases(monkeypatch, capsys) -> None:

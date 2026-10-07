@@ -8,10 +8,16 @@ from collections.abc import Callable, Sequence
 from specdx.spec.tell import TellCorpus
 
 
+class OutOfBudget(Exception):
+    """No further test can be run; an oracle may raise it too."""
+
+
 def ddmin[T](
     items: Sequence[T], fails: Callable[[Sequence[T]], bool], *, max_tests: int | None = None
-) -> list[T]:
-    """A minimal subset on which `fails` still holds; anytime under max_tests."""
+) -> list[T] | None:
+    """A 1-minimal subset on which `fails` holds, or None when there is none to report:
+    the empty set already fails, the whole does not fail, or the tests run out (max_tests,
+    or the oracle raising OutOfBudget) before the result is 1-minimal."""
     tests = 0
     seen: dict[tuple, bool] = {}
 
@@ -20,41 +26,39 @@ def ddmin[T](
         key = tuple(subset)
         if key in seen:
             return seen[key]
+        if max_tests is not None and tests >= max_tests:
+            raise OutOfBudget
         tests += 1
         result = fails(subset)
         seen[key] = result
         return result
 
-    def out_of_budget() -> bool:
-        return max_tests is not None and tests >= max_tests
-
-    current = list(items)
-    if not current or not check(current):
-        return []
-    n = 2
-    while len(current) >= 2 and not out_of_budget():
-        size = math.ceil(len(current) / n)
-        chunks = [current[i:i + size] for i in range(0, len(current), size)]
-        reduced = False
-        for chunk in chunks:
-            if out_of_budget():
-                break
-            if check(chunk):
-                current, n, reduced = chunk, 2, True
-                break
-        if not reduced and n > 2:
+    try:
+        current = list(items)
+        if check([]) or not check(current):
+            return None
+        n = 2
+        while len(current) >= 2:
+            size = math.ceil(len(current) / n)
+            chunks = [current[i:i + size] for i in range(0, len(current), size)]
+            reduced = False
             for chunk in chunks:
-                if out_of_budget():
+                if check(chunk):
+                    current, n, reduced = chunk, 2, True
                     break
-                complement = [x for x in current if x not in chunk]
-                if complement and check(complement):
-                    current, n, reduced = complement, max(n - 1, 2), True
+            if not reduced and n > 2:
+                for chunk in chunks:
+                    complement = [x for x in current if x not in chunk]
+                    if complement and check(complement):
+                        current, n, reduced = complement, max(n - 1, 2), True
+                        break
+            if not reduced:
+                if n >= len(current):
                     break
-        if not reduced:
-            if n >= len(current):
-                break
-            n = min(len(current), 2 * n)
-    return current
+                n = min(len(current), 2 * n)
+        return current
+    except OutOfBudget:
+        return None
 
 
 def localize_ambiguity(
@@ -63,8 +67,9 @@ def localize_ambiguity(
     split_persists: Callable[[TellCorpus], bool],
     *,
     max_tests: int | None = None,
-) -> list[str]:
-    """The fewest candidate sentences that, kept, still let interpreters split."""
+) -> list[str] | None:
+    """The fewest candidate sentences that, kept, still let interpreters split; None when
+    the split does not depend on them or the tests run out first (unlocalised)."""
     pool = list(candidates)
 
     def fails(keep: Sequence[str]) -> bool:

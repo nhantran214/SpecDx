@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -11,7 +12,29 @@ from pathlib import Path
 from specdx.config import PDF_DIR, WORK_DIR
 
 
+class _Stderr(logging.Handler):
+    """Writes to whatever sys.stderr is at the time, so redirection is always honoured."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            sys.stderr.write(self.format(record) + "\n")
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001 - logging must never break a run
+            self.handleError(record)
+
+
+def _log_progress() -> None:
+    """One line per executed run, plus Ollama retries, on stderr."""
+    logger = logging.getLogger("specdx")
+    logger.setLevel(logging.INFO)
+    if not any(isinstance(h, _Stderr) for h in logger.handlers):
+        handler = _Stderr()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _log_progress()
     parser = argparse.ArgumentParser(prog="specdx", description="SpecDx phase P1")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("build-tell", help="extract and cache the Tell corpus from the PDFs")

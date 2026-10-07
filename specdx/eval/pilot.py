@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -69,6 +70,7 @@ class GateConfig:
     budget: int
     dev_per_type: int
     rng_seed: int
+    probe_budget: int = SpecDxConfig.probe_budget
 
     @classmethod
     def load(cls, path: Path) -> GateConfig:
@@ -77,11 +79,13 @@ class GateConfig:
             models_by_family={f: tuple(ms) for f, ms in raw["models_by_family"].items()},
             variants=tuple(raw["variants"]), seeds=tuple(raw["seeds"]), budget=int(raw["budget"]),
             dev_per_type=int(raw["dev_per_type"]), rng_seed=int(raw["rng_seed"]),
+            probe_budget=int(raw.get("probe_budget", SpecDxConfig.probe_budget)),
         )
 
     def specdx(self) -> SpecDxConfig:
         return SpecDxConfig(self.models_by_family, variants=self.variants, seeds=self.seeds,
-                            budget=self.budget, rng_seed=self.rng_seed)
+                            budget=self.budget, rng_seed=self.rng_seed,
+                            probe_budget=self.probe_budget)
 
 
 class BenchLike(Protocol):
@@ -123,7 +127,9 @@ def _baselines(report_behaviours, ctx: LoopContext, theta, canon_ids):
 def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) -> GateResult:
     cfg = config.specdx()
     base_ctx = bench.loop_context(bench.base, cfg)
-    base = run_specdx(bench.base, base_ctx, cfg)
+    # The base report is the differential's reference: its ambiguities are compared on
+    # step and fields, before localisation, so localising them would be wasted runs.
+    base = run_specdx(bench.base, base_ctx, dataclasses.replace(cfg, localize=False))
     canon_ids = set(base_ctx.canon)
     base_b2, base_b3 = _baselines(base.behaviours, base_ctx, base.theta, canon_ids)
     reports: dict[str, dict[str, list[Defect]]] = {"specdx": {}, "b2": {}, "b3": {}}
@@ -132,7 +138,7 @@ def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) ->
     for m in mutants:
         try:
             ctx = bench.loop_context(m.variant, cfg)
-            report = run_specdx(m.variant, ctx, cfg)
+            report = run_specdx(m.variant, ctx, cfg, base=base)
         except INFRASTRUCTURE_ERRORS:
             raise
         except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate

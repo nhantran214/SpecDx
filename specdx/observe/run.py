@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
@@ -24,6 +26,7 @@ from specdx.variant import SpecVariant
 
 ExecutorFactory = Callable[[InterpreterId, TellCorpus, str], DeExecutor]
 RUN_CLOCK = datetime(2026, 9, 1, 2, 0, tzinfo=UTC)
+log = logging.getLogger(__name__)
 
 
 class Runner:
@@ -44,8 +47,10 @@ class Runner:
         self.executed = 0
 
     def run(
-        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
+        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
+        *, kind: str = "population",
     ) -> Behaviour:
+        """kind (population, probe or ddmin) only labels the log line; it is not in the key."""
         key = run_key(
             variant.digest(), self._steps_digest, self.context_digest,
             json.dumps(scenario.params(), sort_keys=True), interp.key,
@@ -55,6 +60,7 @@ class Runner:
         if cached is not None:
             return dataclasses.replace(cached, scenario=scenario)
         self.executed += 1
+        started = time.monotonic()
         try:
             settings = self.db.use(variant.pack)
             executor = self.factory(interp, variant.corpus, suffix)
@@ -81,4 +87,6 @@ class Runner:
                 status="error", error=f"{type(exc).__name__}: {exc}",
             )
         self.cache.put(behaviour)
+        log.info("run %s %s %s %s %s %.1f s", variant.name, scenario.id, interp.key, kind,
+                 behaviour.status, time.monotonic() - started)
         return behaviour

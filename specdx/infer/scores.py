@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from itertools import combinations
 
 from specdx.infer.hitting import soft_hitting_sets
@@ -25,21 +25,37 @@ def run_weights(views: Iterable[ItemView], posterior: Posterior) -> dict[str, fl
     return {k: sum(r) / len(r) for k, r in acc.items()}
 
 
-def merge_defects(defects: Iterable[Defect]) -> list[Defect]:
-    merged: dict[tuple[str, tuple[str, ...]], Defect] = {}
+def ambiguity_key(d: Defect) -> tuple[str, str, tuple[str, ...]]:
+    """An ambiguity's identity before localisation: its step and the fields its admissible
+    classes differ on (its note is "scenario|step"). Localisation replaces the fields with
+    sentence ids that vary between runs, so differentials compare on this key (§11)."""
+    return (d.type, d.note.split("|", 1)[-1], d.location)
+
+
+def identity(d: Defect) -> tuple:
+    """What makes two findings one: type and location, and the step for an ambiguity
+    that is not localised yet."""
+    return ambiguity_key(d) if d.type == "ambiguity" else d.key
+
+
+def merge_defects(
+    defects: Iterable[Defect], key: Callable[[Defect], Hashable] = lambda d: d.key
+) -> list[Defect]:
+    merged: dict[Hashable, Defect] = {}
     for d in defects:
-        old = merged.get(d.key)
+        k = key(d)
+        old = merged.get(k)
         if old is None:
-            merged[d.key] = d
+            merged[k] = d
             continue
         best = d if d.score > old.score else old
-        merged[d.key] = Defect(
+        merged[k] = Defect(
             d.type, d.location,
             tuple(sorted(set(old.scenarios) | set(d.scenarios))),
             tuple(sorted(set(old.witnesses) | set(d.witnesses))),
             best.score, best.note,
         )
-    return sorted(merged.values(), key=lambda d: (-d.score, d.type, d.location))
+    return sorted(merged.values(), key=lambda d: (-d.score, d.type, d.location, d.note))
 
 
 def _scenario_of(item: str) -> str:
@@ -111,23 +127,34 @@ def diagnose(
     for b in behaviours:
         if b.status == "ok":
             groups[b.scenario.id].append(b)
+    # Every scenario's candidates, refuted in descending score order: the probe budget
+    # goes to the best supported candidates first (§11).
+    candidates: list[tuple[float, str, frozenset[str]]] = []
     for sid, group in groups.items():
-        scenario_items = sorted({v.item for v in views if _scenario_of(v.item) == sid})
         sets = [(violated[b.run_key], weights.get(b.run_key, 0.0)) for b in group]
-        for hitting, support in soft_hitting_sets(sets, tau=tau):
-            result = refuter.refute(hitting, group[0].scenario, group)
-            witnesses = tuple(b.run_key for b in group if violated[b.run_key] & hitting)
-            location = tuple(sorted(hitting))
-            if not result.refuted:
-                defects.append(Defect("contradiction", location, (sid,), witnesses, support,
-                                      f"unrefuted after {result.attempts} attempts"))
-            elif len(hitting) == 1:
-                clause = next(iter(hitting))
-                score = _hidden_score(clause, scenario_items, posterior, by_item)
-                if score is None:
-                    score = support
-                defects.append(Defect("hidden", location, (sid,), witnesses, score,
-                                      f"refuted by {result.witness}"))
+        candidates += [(support, sid, hitting)
+                       for hitting, support in soft_hitting_sets(sets, tau=tau)]
+    candidates.sort(key=lambda c: (-c[0], c[1], len(c[2]), sorted(c[2])))
+    for support, sid, hitting in candidates:
+        group = groups[sid]
+        result = refuter.refute(hitting, group[0].scenario, group)
+        witnesses = tuple(b.run_key for b in group if violated[b.run_key] & hitting)
+        location = tuple(sorted(hitting))
+        if not result.refuted and result.attempted:
+            defects.append(Defect("contradiction", location, (sid,), witnesses, support,
+                                  f"unrefuted after {result.attempts} attempts"))
+        elif len(hitting) == 1:
+            # Refuted, or never attempted because the probe budget ran out: a
+            # contradiction needs a failed refutation attempt (§11).
+            clause = next(iter(hitting))
+            scenario_items = sorted({v.item for v in views if _scenario_of(v.item) == sid})
+            score = _hidden_score(clause, scenario_items, posterior, by_item)
+            if score is None:
+                score = support
+            note = (f"refuted by {result.witness}" if result.refuted
+                    else "refutation not attempted: probe budget exhausted")
+            defects.append(Defect("hidden", location, (sid,), witnesses, score, note))
+        # A refuted set is dropped; so is an unattempted one, which is no contradiction.
     for item, ip in posterior.items.items():
         mine = by_item.get(item, [])
         projection = {v.klass: v.projection for v in mine}
@@ -149,4 +176,4 @@ def diagnose(
                 witnesses = tuple(v.run_key for v in mine if v.klass == klass)
                 defects.append(Defect("weak", tuple(sorted(fields)), (_scenario_of(item),),
                                       witnesses, score, note=item))
-    return merge_defects(defects)
+    return merge_defects(defects, key=identity)

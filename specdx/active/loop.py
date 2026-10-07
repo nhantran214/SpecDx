@@ -9,13 +9,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
+from specdx.active.budget import ProbeBudget
 from specdx.active.search import CellBandit, information_gain, should_escalate
 from specdx.infer.items import ItemView
 from specdx.infer.latent import Observation, Posterior, fit
-from specdx.infer.scores import diagnose
+from specdx.infer.scores import ambiguity_key, diagnose, identity, merge_defects
 from specdx.interpreters.population import committee, pilot
 from specdx.spec.columns import Projection
-from specdx.types import Behaviour, Defect, InterpreterId, Refuter, Scenario
+from specdx.types import Behaviour, Defect, InterpreterId, Refuter, RefuteResult, Scenario
 from specdx.variant import SpecVariant
 
 
@@ -23,7 +24,8 @@ class RunnerLike(Protocol):
     executed: int
 
     def run(
-        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
+        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
+        *, kind: str = "population",
     ) -> Behaviour: ...
 
 
@@ -35,7 +37,11 @@ class LensLike(Protocol):
     def diff(self, a: Projection, b: Projection) -> frozenset[str]: ...
 
 
-Localizer = Callable[[SpecVariant, Defect, Sequence[InterpreterId]], tuple[str, ...]]
+# The localised sentence ids, or None when the ambiguity stays unlocalised.
+Localizer = Callable[
+    [SpecVariant, Defect, Sequence[InterpreterId], ProbeBudget], tuple[str, ...] | None
+]
+AmbiguityKey = tuple[str, str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,8 @@ class SpecDxConfig:
     synthesize: bool = True
     localize: bool = True
     localize_tests: int = 40
+    # Directed-probe and ddmin runs requested per specification, cached or not (§11).
+    probe_budget: int = 100
 
 
 @dataclass
@@ -63,12 +71,15 @@ class LoopContext:
     canon: dict[str, Scenario]
     candidates: list[Scenario]
     cap_pct: int
-    refuter_factory: Callable[[Sequence[InterpreterId]], Refuter]
+    refuter_factory: Callable[[Sequence[InterpreterId], ProbeBudget], Refuter]
     localizer: Localizer | None = None
 
 
 @dataclass
 class Report:
+    """runs counts population runs; probe_runs and ddmin_runs the requested runs that the
+    probe budget charged. ambiguity_keys are the ambiguities found, before localisation."""
+
     variant: str
     defects: list[Defect]
     runs: int
@@ -76,14 +87,34 @@ class Report:
     scenarios: list[str]
     theta: dict[str, float]
     behaviours: list[Behaviour] = field(default_factory=list, repr=False)
+    probe_runs: int = 0
+    ddmin_runs: int = 0
+    ambiguity_keys: frozenset[AmbiguityKey] = frozenset()
 
     def to_json(self) -> str:
         return json.dumps(
             {"variant": self.variant, "defects": [asdict(d) for d in self.defects],
-             "runs": self.runs, "executed": self.executed, "scenarios": self.scenarios,
-             "theta": self.theta},
+             "runs": self.runs, "probe_runs": self.probe_runs, "ddmin_runs": self.ddmin_runs,
+             "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta},
             ensure_ascii=False, indent=2,
         )
+
+
+class _Memoised:
+    """One refutation per scenario and target set for the whole specification: the loop
+    builds a fresh refuter every iteration, and repeated requests would drain the budget."""
+
+    def __init__(self, refuter: Refuter, memo: dict) -> None:
+        self.refuter, self.memo = refuter, memo
+
+    def refute(
+        self, targets: frozenset[str], scenario: Scenario, behaviours: Sequence[Behaviour]
+    ) -> RefuteResult:
+        key = (scenario.signature(), targets)
+        if key not in self.memo:
+            self.memo[key] = self.refuter.refute(targets, scenario, behaviours)
+        result: RefuteResult = self.memo[key]
+        return result
 
 
 def ranked_interpreters(
@@ -97,8 +128,14 @@ def ranked_interpreters(
     return [InterpreterId(m, f, variants[0], 1) for m, f in models]
 
 
-def run_specdx(variant: SpecVariant, ctx: LoopContext, config: SpecDxConfig) -> Report:
+def run_specdx(
+    variant: SpecVariant, ctx: LoopContext, config: SpecDxConfig, *, base: Report | None = None
+) -> Report:
+    """base: the base specification's report. Ambiguities it already holds (same step and
+    fields) are dropped before localisation, so only the mutant's own are localised (§11)."""
     rng = random.Random(config.rng_seed)
+    budget = ProbeBudget(config.probe_budget)
+    refutations: dict = {}
     bandit = CellBandit(ctx.cap_pct)
     queue = [ctx.canon[name] for name in sorted(ctx.canon)]
     visited: set[tuple[int, ...]] = set()
@@ -157,28 +194,34 @@ def run_specdx(variant: SpecVariant, ctx: LoopContext, config: SpecDxConfig) -> 
             [Observation(v.item, v.run_key, v.model, v.family, v.klass) for v in views],
             k_max=config.k_max, p_single=config.p_single,
         )
-        refuter = ctx.refuter_factory(
-            ranked_interpreters(config.models_by_family, posterior.theta, config.variants)
-        )
+        refuter = _Memoised(ctx.refuter_factory(
+            ranked_interpreters(config.models_by_family, posterior.theta, config.variants),
+            budget,
+        ), refutations)
         defects = diagnose(
             behaviours, violated, views, posterior, refuter, ctx.lens.diff,
             tau=config.tau, ambig_threshold=config.ambig_threshold,
             weak_threshold=config.weak_threshold,
         )
-        scores = {f"{d.type}|{'|'.join(d.location)}": d.score for d in defects}
+        scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))
         previous = scores
 
+    found = frozenset(ambiguity_key(d) for d in defects if d.type == "ambiguity")
+    if base is not None:
+        defects = [d for d in defects
+                   if d.type != "ambiguity" or ambiguity_key(d) not in base.ambiguity_keys]
     if config.localize and ctx.localizer is not None:
         interps = ranked_interpreters(config.models_by_family, posterior.theta, config.variants)
         localised: list[Defect] = []
         for d in defects:
             if d.type == "ambiguity":
-                sentences = ctx.localizer(variant, d, interps)
-                if sentences:
-                    d = dataclasses.replace(d, location=tuple(sentences))
+                # Unlocalised: an empty location, which matches no ground truth.
+                sentences = ctx.localizer(variant, d, interps, budget)
+                d = dataclasses.replace(d, location=tuple(sentences or ()))
             localised.append(d)
-        defects = localised
+        defects = merge_defects(localised)
 
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
-                  dict(posterior.theta), behaviours)
+                  dict(posterior.theta), behaviours, probe_runs=budget.probe,
+                  ddmin_runs=budget.ddmin, ambiguity_keys=found)

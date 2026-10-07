@@ -16,6 +16,7 @@ from typing import Protocol
 from tonomyx.flow.case_0031 import CASE_ID
 from tonomyx.flow.handlers import PO, SO, VINV
 
+from specdx.active.budget import ProbeBudget
 from specdx.db import PackDatabase
 from specdx.observe.state import ERROR
 from specdx.spec.clauses import PAID, Clause, ClauseSet, describe
@@ -31,7 +32,8 @@ PROTECTED_TABLES = ("cases", "insp", "ncr", "ship")
 
 class RunnerLike(Protocol):
     def run(
-        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
+        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
+        *, kind: str = "population",
     ) -> Behaviour: ...
 
 
@@ -216,28 +218,38 @@ class DirectedProbe:
         *,
         attempts: int = 3,
         width: int = 3,
+        budget: ProbeBudget | None = None,
     ) -> None:
         self.runner, self.variant, self.clauses = runner, variant, clauses
         self.interpreters = list(interpreters)
-        self.attempts, self.width = attempts, width
+        self.attempts, self.width, self.budget = attempts, width, budget
+
+    @property
+    def out_of_budget(self) -> bool:
+        return self.budget is not None and self.budget.exhausted
 
     def search(
         self, targets: frozenset[str], scenario: Scenario, allowed: frozenset[str]
-    ) -> Behaviour | None:
+    ) -> tuple[Behaviour | None, int]:
+        """A witness behaviour or None, and how many probe runs were requested."""
         items = "; ".join(describe(self.clauses[c], scenario) for c in sorted(targets))
         suffix = GOAL.format(items=items)
+        runs = 0
         for interp in self.interpreters[: self.width]:
             for attempt in range(self.attempts):
+                if self.budget is not None and not self.budget.take("probe"):
+                    return None, runs
+                runs += 1
                 b = self.runner.run(
                     self.variant, scenario, dataclasses.replace(interp, seed=100 + attempt),
-                    suffix=suffix,
+                    suffix=suffix, kind="probe",
                 )
                 if b.status != "ok":
                     continue
                 bad = self.clauses.violations(b.state, scenario)
                 if not (bad & targets) and bad <= allowed:
-                    return b
-        return None
+                    return b, runs
+        return None, runs
 
 
 class CombinedRefuter:
@@ -266,10 +278,13 @@ class CombinedRefuter:
             if self.repair.search(targets, scenario, starts) is not None:
                 result = RefuteResult(True, "symbolic-repair", attempts)
         if result is None and self.probe is not None:
-            found = self.probe.search(targets, scenario, allowed)
-            attempts += self.probe.width * self.probe.attempts
+            found, probed = self.probe.search(targets, scenario, allowed)
+            attempts += probed
             if found is not None:
                 result = RefuteResult(True, found.run_key, attempts)
+            elif probed == 0 and self.probe.out_of_budget:
+                # The cap stopped the probe before it started: no refutation was attempted.
+                result = RefuteResult(False, None, attempts, attempted=False)
         if result is None:
             result = RefuteResult(False, None, attempts)
         self._memo[key] = result

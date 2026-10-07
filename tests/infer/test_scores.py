@@ -91,6 +91,61 @@ def test_hidden_score_follows_the_posterior() -> None:
     assert abs(found[0].score - expected_score) < 1e-9
 
 
+class _Unattempted:
+    """The probe budget ran out: no refutation was attempted."""
+
+    def refute(self, targets, scenario, behaviours):
+        return RefuteResult(False, None, 0, attempted=False)
+
+
+def test_an_unattempted_singleton_is_hidden_not_a_contradiction() -> None:
+    outputs = {m: [("K", {"c"})] * 3 for m in GOOD} | {m: [(f"E{i}", {"c", f"n{i}"})
+                                                           for i in range(3)] for m in BAD}
+    b, v, views, post = _world(outputs)
+    defects = diagnose(b, v, views, post, _Unattempted(), _diff)
+    assert not [d for d in defects if d.type == "contradiction"]
+    found = [d for d in defects if d.type == "hidden"]
+    assert found and found[0].location == ("c",) and "budget" in found[0].note
+
+
+def test_an_unattempted_set_is_no_contradiction() -> None:
+    outputs = {m: [("A", {"a"})] * 3 for m in GOOD[:2]} | {m: [("B", {"b"})] * 3
+                                                          for m in GOOD[2:]}
+    outputs |= {m: [(f"E{i}", {"a", "b"}) for i in range(3)] for m in BAD}
+    b, v, views, post = _world(outputs)
+    attempted = diagnose(b, v, views, post, _Refuter(False), _diff)
+    assert [d.location for d in attempted if d.type == "contradiction"] == [("a", "b")]
+    skipped = diagnose(b, v, views, post, _Unattempted(), _diff)
+    assert not [d for d in skipped if d.location == ("a", "b")]
+
+
+def test_candidates_are_refuted_in_descending_score_order(monkeypatch) -> None:
+    supports = {"low": 0.96, "high": 0.99}
+    monkeypatch.setattr(
+        "specdx.infer.scores.soft_hitting_sets",
+        lambda sets, tau: [(sets[0][0], supports[next(iter(sets[0][0]))])],
+    )
+    s2 = Scenario("s2", 15, 13, 0)
+    behaviours, violated, views = [], {}, []
+    for scenario, clause in ((S, "low"), (s2, "high")):
+        for m in GOOD:
+            key = f"{scenario.id}|{m}"
+            behaviours.append(Behaviour(key, InterpreterId(m, m[0], 0, 1), scenario, State({})))
+            violated[key] = frozenset({clause})
+            views.append(ItemView(f"{scenario.id}|step", key, m, m[0], "K",
+                                  frozenset({clause}), _proj("K")))
+    post = fit([Observation(v.item, v.run_key, v.model, v.family, v.klass) for v in views])
+    order = []
+
+    class _Recording:
+        def refute(self, targets, scenario, behaviours):
+            order.append(next(iter(targets)))
+            return RefuteResult(True, "w", 1)
+
+    diagnose(behaviours, violated, views, post, _Recording(), _diff)
+    assert order == ["high", "low"]
+
+
 def test_weak_tie_break_is_deterministic() -> None:
     views = [
         ItemView("item", f"model|{i}", "model", "m", klass, frozenset(),

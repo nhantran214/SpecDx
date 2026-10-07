@@ -76,7 +76,7 @@ class _Bench:
 
     def loop_context(self, variant, config):
         return LoopContext(_Runner(variant.name == "broken"), _Lens(), CANON,
-                           list(CANON.values()), 5, lambda i: _Refute())
+                           list(CANON.values()), 5, lambda i, b: _Refute())
 
 
 def _mutant(mid, kind, location):

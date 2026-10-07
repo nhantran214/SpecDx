@@ -7,6 +7,7 @@
   "variants": [0, 1, 2],
   "seeds": [1, 2, 3],
   "budget": 200,
+  "probe_budget": 100,
   "dev_per_type": 5,
   "rng_seed": 20261006
 }
