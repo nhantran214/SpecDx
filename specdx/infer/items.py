@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from specdx.orchestrate.work_orders import WorkStep
-from specdx.spec.clauses import Clause, ClauseSet
+from specdx.spec.clauses import Clause, ClauseSet, rows_read
 from specdx.spec.columns import ColumnModel, Projection
 from specdx.types import Behaviour
 
@@ -35,6 +35,12 @@ def _keyed(step: WorkStep, table: str) -> set[str] | None:
     return keys
 
 
+def _owns(step: WorkStep, table: str, key: str | None) -> bool:
+    """Whether the step's slice owns these rows: the whole table, or the keyed row."""
+    keys = _keyed(step, table)
+    return keys is None or (key is not None and key in keys)
+
+
 def _relevant(step: WorkStep, clause: Clause) -> bool:
     if clause.kind == "step":
         return bool(clause.payload["step"] == step.id)
@@ -56,7 +62,10 @@ def _relevant(step: WorkStep, clause: Clause) -> bool:
     if clause.kind == "blank":
         keys = _keyed(step, clause.payload["table"])
         return keys is None
-    return bool(clause.tables & step.tables)
+    if clause.kind in ("expectation", "reconcile", "guard_pay"):
+        # Cross-cutting: only the steps owning the rows read, never mere table overlap.
+        return any(_owns(step, table, key) for table, key in rows_read(clause))
+    raise ValueError(f"unknown clause kind {clause.kind!r}")
 
 
 class SpecLens:

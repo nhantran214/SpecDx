@@ -160,6 +160,28 @@ def derive_outcome(state: State) -> dict[str, str]:
     }
 
 
+# The rows each cross-cutting clause reads, as (table, key), key None for every row of
+# the table. Only steps whose work-order slice owns them are answerable for the clause.
+# The expectation rows mirror derive_outcome above.
+Rows = tuple[tuple[str, str | None], ...]
+EXPECTATION_ROWS: dict[str, Rows] = {
+    "apr_0102": (("evt", SO),),
+    "three_way": (("vinv", VINV),),
+    "pay_units": (("grn", None),),
+    "open_units": (("po", PO), ("grn", None)),
+}
+
+
+def rows_read(clause: Clause) -> Rows:
+    if clause.kind == "expectation":
+        return EXPECTATION_ROWS.get(clause.payload["key"], ())
+    if clause.kind == "reconcile":
+        return (("vinv", None),)
+    if clause.kind == "guard_pay":
+        return (("pay", None),)
+    raise ValueError(f"{clause.kind!r} clauses are not cross-cutting")
+
+
 def evaluate(
     clause: Clause, state: State, scenario: Scenario,
     master: Mapping[str, list[dict[str, str]]],

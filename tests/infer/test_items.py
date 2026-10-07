@@ -35,6 +35,24 @@ def test_blank_clauses_belong_only_to_steps_owning_the_whole_table(lens) -> None
     assert "blank:pay.so_tien" not in lens.relevant["DE-SM-02:draft_quote"]
 
 
+def test_cross_cutting_clauses_belong_to_the_steps_owning_the_rows_they_read(lens) -> None:
+    def owners(clause_id: str) -> list[str]:
+        assert clause_id in lens.clauses.ids, clause_id
+        return [step for step, ids in lens.relevant.items() if clause_id in ids]
+
+    for name in ("discount8", "grn12", "happy", "in"):
+        assert owners(f"expect:apr_0102:{name}") == ["DE-SM-02:draft_quote"]
+        assert owners(f"expect:three_way:{name}") == ["DE-FN-02:reconcile"]
+    assert owners("guard:pay") == ["DE-FN-03:draft_payment"]
+    assert owners("reconcile:consistency") == ["DE-FN-02:reconcile"]
+    assert owners("expect:pay_units") == ["DE-OP-02:record_goods_receipt"]
+    for name in ("discount8", "grn12", "happy"):
+        # po is owned by its drafter and its approver, grn by the receipt step
+        assert owners(f"expect:open_units:{name}") == [
+            "DE-FN-04:draft_purchase_order", "P6:decide_po", "DE-OP-02:record_goods_receipt"
+        ]
+
+
 @pytest.mark.db
 def test_equal_behaviours_share_classes_and_a_difference_splits_one_step(lens, golden) -> None:
     a = _behaviour(golden, "a", "Chờ duyệt")
