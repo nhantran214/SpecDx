@@ -128,7 +128,8 @@ def test_gate_records_a_broken_mutant_and_continues(tmp_path) -> None:
 def test_the_report_shows_the_verdict_and_the_literal_comparison(tmp_path) -> None:
     result = run_gate(_config(tmp_path), _Bench(), [_mutant("H1-00", "hidden", {"c1"})])
     report = gate_markdown(result)
-    assert "typed F1 against the baselines' untyped F1" in report
+    assert "| contradiction | > baselines' untyped F1 |" in report
+    assert "| ambiguity | ≥ 0.40 (baselines cannot locate it) |" in report
     assert "typed against typed" in report
     assert set(json.loads(result.to_json())["literal_wins"]) == set(result.wins)
 

@@ -1,6 +1,11 @@
+import pytest
+
 from specdx.eval.matching import (
+    ABSOLUTE_BAR,
+    BASELINE_BLIND,
     Prf,
     evaluate_reports,
+    gate_rule,
     gate_verdict,
     literal_wins,
     location_matches,
@@ -61,7 +66,7 @@ def test_f1_and_the_gate_verdict() -> None:
                                "weak": True}
 
 
-def test_beating_the_baselines_typed_f1_alone_does_not_pass_the_gate() -> None:
+def test_beating_the_baselines_typed_f1_alone_does_not_win_contradiction_or_hidden() -> None:
     types = ("contradiction", "hidden", "ambiguity", "weak")
     mine, zero, located = Prf(tp=2, fp=2, fn=2), Prf(fn=4), Prf(tp=4, fp=1, fn=0)
     typed = {"specdx": dict.fromkeys(types, mine), "b2": dict.fromkeys(types, zero),
@@ -70,7 +75,26 @@ def test_beating_the_baselines_typed_f1_alone_does_not_pass_the_gate() -> None:
                "b3": dict.fromkeys(types, zero)}
     assert all(literal_wins(typed).values())  # typed against typed: vacuous wins
     passed, wins = gate_verdict(typed, untyped)
-    assert not passed and not any(wins.values())
+    assert not passed and not wins["contradiction"] and not wins["hidden"]
+
+
+def test_ambiguity_and_weak_must_reach_the_absolute_bar() -> None:
+    assert sorted(BASELINE_BLIND) == ["ambiguity", "weak"] and ABSOLUTE_BAR == 0.4
+    one_hit = Prf(tp=1, fp=0, fn=4)  # one TP of 5 truths, no FP
+    two_hits = Prf(tp=2, fp=3, fn=3)  # precision 0.4, recall 0.4
+    assert one_hit.f1 == pytest.approx(1 / 3) and two_hits.f1 == pytest.approx(0.4)
+    good, zero = Prf(tp=3, fp=1, fn=1), Prf(fn=5)
+    types = ("contradiction", "hidden", "ambiguity", "weak")
+    typed = {"specdx": {"contradiction": good, "hidden": good, "ambiguity": one_hit,
+                        "weak": two_hits},
+             "b2": dict.fromkeys(types, zero), "b3": dict.fromkeys(types, zero)}
+    untyped = {"specdx": typed["specdx"], "b2": dict.fromkeys(types, zero),
+               "b3": dict.fromkeys(types, zero)}
+    passed, wins = gate_verdict(typed, untyped)
+    # 0.333 beats the baselines' 0 but is no win; 0.4 is
+    assert wins == {"contradiction": True, "hidden": True, "ambiguity": False, "weak": True}
+    assert passed
+    assert "0.40" in gate_rule("weak") and "untyped" in gate_rule("hidden")
 
 
 def test_untyped_false_positives_belong_to_the_mutant_type() -> None:

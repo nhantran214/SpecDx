@@ -17,8 +17,10 @@ from specdx.baselines.b2_single import b2_report
 from specdx.baselines.b3_irt import b3_report
 from specdx.config import OLLAMA_URL
 from specdx.eval.matching import (
+    ABSOLUTE_BAR,
     Prf,
     evaluate_reports,
+    gate_rule,
     gate_verdict,
     literal_wins,
     match_findings,
@@ -255,20 +257,21 @@ def gate_markdown(result: GateResult) -> str:
     if result.failed:
         lines += [f"{len(result.failed)} mutant(s) could not run, so no verdict is given.", ""]
     lines += [
-        "## Verdict: SpecDx typed F1 against the baselines' untyped F1",
+        "## Verdict",
         "",
-        "A type is a win when SpecDx's typed F1 exceeds both baselines' untyped F1; the gate "
-        "needs 3 wins of 4 (spec §4.8, §11). The baselines cannot assign a type, so their "
-        "untyped F1 is the fair bar.",
+        "The gate needs 3 wins of 4 (spec §4.8, §11 item 12). Contradiction and hidden: "
+        "SpecDx's typed F1 must exceed both baselines' untyped F1, since the baselines "
+        "cannot assign a type. Ambiguity and weak: the baselines report clauses, which can "
+        f"never locate those truths, so SpecDx's typed F1 must reach {ABSOLUTE_BAR:.2f}.",
         "",
-        "| type | SpecDx typed | B2 untyped | B3 untyped | SpecDx untyped | SpecDx wins |",
-        "|---|---:|---:|---:|---:|---|",
+        "| type | rule | SpecDx typed | B2 untyped | B3 untyped | SpecDx untyped | SpecDx wins |",
+        "|---|---|---:|---:|---:|---:|---|",
     ]
     for t in DEFECT_TYPES:
         lines.append(
-            f"| {t} | {f1(result.scores, 'specdx', t)} | {f1(result.untyped, 'b2', t)} | "
-            f"{f1(result.untyped, 'b3', t)} | {f1(result.untyped, 'specdx', t)} | "
-            f"{win(result.wins, t)} |"
+            f"| {t} | {gate_rule(t)} | {f1(result.scores, 'specdx', t)} | "
+            f"{f1(result.untyped, 'b2', t)} | {f1(result.untyped, 'b3', t)} | "
+            f"{f1(result.untyped, 'specdx', t)} | {win(result.wins, t)} |"
         )
     lines += [
         "",

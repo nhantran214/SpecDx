@@ -87,10 +87,27 @@ def evaluate_reports(
     return scores
 
 
+# Types whose truths the baselines cannot locate: B2 and B3 report clause ids, which never
+# match a Tell-sentence (ambiguity) or locked-field (weak) truth. Measured over every
+# mutant: 0/7 A and 0/13 W truths, against 9/9 C and 7/7 H. Their untyped F1 there is 0 by
+# construction, so beating it would prove nothing (spec §11 item 12).
+BASELINE_BLIND: frozenset[str] = frozenset({"ambiguity", "weak"})
+# SpecDx's typed F1 must reach this on a baseline-blind type. One TP and no FP on 5 truths
+# gives 1/3, so the bar needs at least two true positives.
+ABSOLUTE_BAR = 0.4
+
+
 def _wins(
     mine: Mapping[str, Prf], theirs: Sequence[Mapping[str, Prf]]
 ) -> dict[str, bool]:
     return {t: mine[t].f1 > max(other[t].f1 for other in theirs) for t in DEFECT_TYPES}
+
+
+def gate_rule(defect_type: str) -> str:
+    """How the verdict judges this type, as the report states it."""
+    if defect_type in BASELINE_BLIND:
+        return f"≥ {ABSOLUTE_BAR:.2f} (baselines cannot locate it)"
+    return "> baselines' untyped F1"
 
 
 def gate_verdict(
@@ -101,10 +118,13 @@ def gate_verdict(
     baselines: Sequence[str] = ("b2", "b3"),
     required: int = 3,
 ) -> tuple[bool, dict[str, bool]]:
-    """Spec §4.8 as clarified in §11: a type is a win when SpecDx's typed F1 exceeds every
-    baseline's untyped F1 for it. The baselines cannot assign a type by construction (they
-    report hidden only), so typed against typed would be won by any one true positive."""
-    wins = _wins(typed[method], [untyped[b] for b in baselines])
+    """Spec §4.8 as clarified in §11 item 12. Contradiction and hidden: SpecDx's typed F1
+    must exceed every baseline's untyped F1 (the baselines report hidden only, so their
+    typed F1 is no bar). Ambiguity and weak: the baselines cannot locate those truths at
+    all, so SpecDx's typed F1 must reach ABSOLUTE_BAR. The gate needs `required` wins."""
+    compared = _wins(typed[method], [untyped[b] for b in baselines])
+    wins = {t: typed[method][t].f1 >= ABSOLUTE_BAR if t in BASELINE_BLIND else compared[t]
+            for t in DEFECT_TYPES}
     return sum(wins.values()) >= required, wins
 
 
