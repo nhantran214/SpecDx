@@ -8,7 +8,7 @@ from specdx import db as db_module
 from specdx.config import BASE_PACK
 from specdx.db import PackDatabase, pack_digest, split_background
 from specdx.observe.state import reconcile_value
-from specdx.types import State
+from specdx.types import InfrastructureError, State
 
 pytestmark = pytest.mark.db
 
@@ -97,16 +97,14 @@ def test_two_pack_databases_in_one_process_share_the_lock_and_stay_honest(db, tm
         assert conn.execute("SELECT count(*) AS n FROM cust").fetchone()["n"] > 0
 
 
-def test_a_second_process_holding_the_lock_is_refused_fast(db) -> None:
-    held = db_module._LOCKS.pop(db.url)  # act as if this process had never taken the lock
-    held.close()
-    with psycopg.connect(db.url, autocommit=True) as other:
-        other.execute("SELECT pg_advisory_lock(%s)", (db_module.LOCK_KEY,))
-        started = time.monotonic()
-        with pytest.raises(RuntimeError, match="another process"):
-            PackDatabase(db.url).use(BASE_PACK)
-        assert time.monotonic() - started < 5
-    db.use(BASE_PACK)  # the other session has ended: the lock is free again
+def test_a_second_process_holding_the_lock_is_refused_fast(db, lock_held_elsewhere) -> None:
+    started = time.monotonic()
+    with pytest.raises(InfrastructureError, match="another process"):
+        PackDatabase(db.url).use(BASE_PACK)
+    assert time.monotonic() - started < 5 and db.url not in db_module._LOCKS
+
+
+def test_the_lock_is_taken_back_once_the_other_session_ends(db) -> None:
     assert db.url in db_module._LOCKS
 
 

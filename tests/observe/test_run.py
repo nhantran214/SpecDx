@@ -5,7 +5,6 @@ import psycopg
 import pytest
 from tonomyx.tools.catalog import build_registry
 
-from specdx import db as db_module
 from specdx.config import BASE_PACK
 from specdx.db import PackDatabase
 from specdx.interpreters.cache import RunCache
@@ -64,17 +63,68 @@ def test_a_database_outage_is_not_cached(db, pack, variant, tmp_path) -> None:
     assert len(cache) == 0
 
 
-def test_a_database_another_process_holds_is_never_cached(db, pack, variant, tmp_path) -> None:
-    db_module._LOCKS.pop(db.url).close()  # act as if this process had never taken the lock
+def test_a_database_another_process_holds_is_never_cached(
+    db, pack, variant, tmp_path, lock_held_elsewhere
+) -> None:
     cache = RunCache(tmp_path / "r.jsonl")
-    with psycopg.connect(db.url, autocommit=True) as other:
-        other.execute("SELECT pg_advisory_lock(%s)", (db_module.LOCK_KEY,))
-        runner = Runner(PackDatabase(db.url), cache, lambda i, c, s: reference_executor(),
-                        STEPS, model_digest=lambda m: "d")
-        with pytest.raises(InfrastructureError, match="another process"):
-            runner.run(variant, canon_scenarios(pack)["grn12"], REF)
+    runner = Runner(PackDatabase(db.url), cache, lambda i, c, s: reference_executor(),
+                    STEPS, model_digest=lambda m: "d")
+    with pytest.raises(InfrastructureError, match="another process"):
+        runner.run(variant, canon_scenarios(pack)["grn12"], REF)
     assert len(cache) == 0
-    db.use(BASE_PACK)
+
+
+def test_an_outage_flagged_before_another_error_is_still_not_cached(
+    db, pack, variant, tmp_path, monkeypatch
+) -> None:
+    class Flagging:
+        infra_failure = None
+
+    def broken_run_case(runtime, scenario, steps):
+        runtime.executor.infra_failure = "Ollama failed 5 times for m; last: ConnectError"
+        raise RuntimeError("bookkeeping broke after the outage")
+
+    monkeypatch.setattr("specdx.observe.run.run_case", broken_run_case)
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, lambda i, c, s: Flagging(), STEPS, model_digest=lambda m: "d")
+    with pytest.raises(InfrastructureError, match="Ollama failed"):
+        runner.run(variant, canon_scenarios(pack)["grn12"], REF)
+    assert len(cache) == 0
+
+
+def test_a_wedged_ollama_where_every_call_times_out_is_not_cached(
+    db, pack, variant, tmp_path
+) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    factory, sleeps = _ollama(handle)
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, factory, STEPS, model_digest=lambda m: "d")
+    with pytest.raises(InfrastructureError, match="all calls timed out"):
+        runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
+    assert len(cache) == 0 and sleeps == []
+    assert len(calls) == sum(1 for s in STEPS if s.kind != "env")  # one call per LLM step
+
+
+def test_timeouts_mixed_with_answers_stay_behaviour(db, pack, variant, tmp_path) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) in (1, 3):
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Xong."}})
+
+    factory, sleeps = _ollama(handle)
+    cache = RunCache(tmp_path / "r.jsonl")
+    runner = Runner(db, cache, factory, STEPS, model_digest=lambda m: "d")
+    b = runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
+    assert b.status == "ok" and len(cache) == 1 and sleeps == []
+    assert "ollama call failed" in b.claims["DE-SM-02:draft_quote"]
 
 
 def test_a_different_context_digest_never_reuses_a_cached_run(db, pack, variant, tmp_path) -> None:

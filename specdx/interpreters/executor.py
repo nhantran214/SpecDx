@@ -89,8 +89,9 @@ def _ollama_failed(exc: httpx.HTTPError) -> bool:
 
 
 class SpecInterpreterExecutor:
-    """infra_failure is set when Ollama kept failing. DeRuntime swallows the error into a
-    step result, so the Runner reads this flag to keep the run out of the cache."""
+    """infra_failure is set when Ollama kept failing, or when every call so far ended in a
+    read timeout (a wedged Ollama). DeRuntime swallows the error into a step result, so
+    the Runner reads this flag after the run to keep it out of the cache."""
 
     def __init__(
         self,
@@ -113,15 +114,33 @@ class SpecInterpreterExecutor:
         self.variant, self.seed, self.temperature = variant, seed, temperature
         self.base_url, self.max_steps, self.timeout = base_url, max_steps, timeout
         self.transport, self.suffix, self.sleep = transport, suffix, sleep
-        self.infra_failure: str | None = None
+        self._outage: str | None = None
+        self._calls = self._timeouts = 0
         self._gated = OllamaExecutor(model, tools)
 
+    @property
+    def infra_failure(self) -> str | None:
+        if self._outage is not None:
+            return self._outage
+        if self._calls and self._timeouts == self._calls:
+            return (f"all calls timed out ({self._calls} of {self._calls}) for {self.model}: "
+                    "Ollama may be wedged")
+        return None
+
+    @infra_failure.setter
+    def infra_failure(self, value: str | None) -> None:
+        """Set an outage, or clear the flag (and the timeout count) before a run."""
+        self._outage = value
+        if value is None:
+            self._calls = self._timeouts = 0
+
     def run(self, task: TaskEnvelope, ctx: ToolContext) -> ResultEnvelope:
-        if self.infra_failure is not None:
+        if self._outage is not None:
             # The run is void already; do not wait out the retries again on every step.
+            # (Timeouts do not stop the run: a later answer makes them behaviour.)
             return ResultEnvelope(
                 task_id=task.task_id, case_id=task.case_id, status=ResultStatus.ERROR,
-                next_hint=f"not attempted: {self.infra_failure}",
+                next_hint=f"not attempted: {self._outage}",
             )
         schemas = [*tool_schemas(self.tools, ctx.pack, names=ctx.token.tools), SEARCH_SCHEMA]
         messages: list[dict[str, Any]] = [
@@ -163,20 +182,23 @@ class SpecInterpreterExecutor:
             body["think"] = False
         attempts = len(RETRY_PAUSES) + 1
         for attempt in range(1, attempts + 1):
+            self._calls += 1
             try:
                 response = client.post(f"{self.base_url}/api/chat", json=body)
                 response.raise_for_status()
                 message: dict[str, Any] = response.json()["message"]
                 return message
             except httpx.HTTPError as exc:
+                if isinstance(exc, httpx.ReadTimeout):
+                    self._timeouts += 1
                 if not _ollama_failed(exc):
                     raise
                 reason = _describe(exc)
                 if attempt == attempts:
-                    self.infra_failure = (
+                    self._outage = (
                         f"Ollama failed {attempts} times for {self.model}; last: {reason}"
                     )
-                    log.error("%s", self.infra_failure)
+                    log.error("%s", self._outage)
                     raise
                 pause = RETRY_PAUSES[attempt - 1]
                 log.warning("Ollama call for %s failed (%s); retry %d of %d in %.0f s",

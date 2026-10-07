@@ -76,6 +76,7 @@ class Runner:
             return dataclasses.replace(cached, scenario=scenario, interpreter=interp)
         self.executed += 1
         started = time.monotonic()
+        executor: DeExecutor | None = None
         try:
             settings = self.db.use(variant.pack)
             executor = self.factory(interp, variant.corpus, suffix)
@@ -97,6 +98,9 @@ class Runner:
         except (psycopg.OperationalError, psycopg.InterfaceError, InfrastructureError):
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run is data, never dropped
+            failure = getattr(executor, "infra_failure", None)
+            if failure:  # Ollama had already failed: whatever broke next is not behaviour
+                raise InfrastructureError(failure) from exc
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=State.empty(),
                 status="error", error=f"{type(exc).__name__}: {exc}", model_digest=digest,

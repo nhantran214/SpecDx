@@ -129,7 +129,9 @@ def test_a_read_timeout_is_data_and_is_not_retried(db, corpus) -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        raise httpx.ReadTimeout("slow", request=request)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Xong."}})
 
     sleeps: list[float] = []
     executor = SpecInterpreterExecutor(
@@ -139,9 +141,12 @@ def test_a_read_timeout_is_data_and_is_not_retried(db, corpus) -> None:
     with db.isolated() as conn:
         runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
         open_case(runtime.repo)
-        envelope = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
-    assert envelope.status is ResultStatus.ERROR
-    assert len(calls) == 1 and sleeps == [] and executor.infra_failure is None
+        slow = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+        assert executor.infra_failure is not None  # so far every call timed out
+        later = runtime.run("DE-OP-01", "check_availability", "CASE-0031", {"ma_so": "SO-0031"})
+    assert "ollama call failed: ReadTimeout" in (slow.next_hint or "")
+    assert "ollama call failed" not in (later.next_hint or "")  # the model answered
+    assert len(calls) == 2 and sleeps == [] and executor.infra_failure is None
 
 
 def test_an_exhausted_server_error_flags_the_executor_and_stops_calling(db, corpus) -> None:
