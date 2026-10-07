@@ -1,5 +1,16 @@
-from specdx.orchestrate.work_orders import load_work_orders, render_inputs
+from specdx.orchestrate.work_orders import (
+    TEMPLATE_NAMES,
+    load_work_orders,
+    render_inputs,
+    template_values,
+)
 from specdx.types import Scenario
+
+
+def test_the_template_names_are_what_a_scenario_fills_in() -> None:
+    names = set(template_values(Scenario("x", 15, 12, 0)))
+    assert names == TEMPLATE_NAMES
+    assert names == {"ordered", "received", "discount_pct", "grn_count", "deliveries"}
 
 
 def test_the_work_order_has_eleven_steps_in_canon_order() -> None:

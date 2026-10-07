@@ -38,6 +38,40 @@ def test_the_cli_logs_specdx_progress_to_stderr(monkeypatch, capsys) -> None:
     assert logging.getLogger("specdx").getEffectiveLevel() == logging.INFO
 
 
+def test_only_regenerates_named_entries_at_one_variant_without_force(monkeypatch, capsys) -> None:
+    saved: list[TellVariants] = []
+    asked = []
+
+    def fake_regenerate(variants, keys, index, *, model):
+        asked.append((keys, index, model))
+        return TellVariants(variants.standing, {"x": ("1", "2-new", "3")})
+
+    monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)
+    monkeypatch.setattr("specdx.interpreters.prompt.save_variants", saved.append)
+    monkeypatch.setattr("specdx.interpreters.paraphrase.regenerate", fake_regenerate)
+    assert main(["make-variants", "--only", "x,standing", "--variant", "1",
+                 "--model", "qwen2.5:14b"]) == 0
+    assert asked == [(["x", "standing"], 1, "qwen2.5:14b")]
+    assert saved[0].statements["x"] == ("1", "2-new", "3")
+
+
+def test_only_needs_a_variant_index(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)
+    assert main(["make-variants", "--only", "x"]) == 2
+    assert "--variant" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("args", [["--only", "x", "--variant", "3"],
+                                  ["--only", "x", "--variant", "0"],
+                                  ["--only", "nope", "--variant", "1"]])
+def test_a_bad_entry_or_index_is_refused_before_any_model_call(monkeypatch, capsys, args) -> None:
+    saved: list[TellVariants] = []
+    monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)
+    monkeypatch.setattr("specdx.interpreters.prompt.save_variants", saved.append)
+    assert main(["make-variants", *args]) == 2
+    assert "error:" in capsys.readouterr().err and saved == []
+
+
 def test_force_regenerates_and_saves_the_paraphrases(monkeypatch, capsys) -> None:
     saved: list[TellVariants] = []
     monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)

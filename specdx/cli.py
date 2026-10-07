@@ -46,6 +46,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     mv.add_argument("--count", type=int, default=2)
     mv.add_argument("--force", action="store_true",
                     help="replace paraphrases that already exist (they are frozen otherwise)")
+    mv.add_argument("--only", metavar="KEY[,KEY]",
+                    help="remake just these entries (standing or statement keys) at --variant; "
+                         "the rest of the file is left as it is")
+    mv.add_argument("--variant", type=int, metavar="N",
+                    help="with --only: the paraphrase index to remake (1 .. count-1)")
     cap = sub.add_parser("capability", help="check native tool calling of local models")
     cap.add_argument("models", nargs="+")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
@@ -67,10 +72,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "make-variants":
-        from specdx.interpreters.paraphrase import make_variants
+        from specdx.interpreters import paraphrase as paraphrases
         from specdx.interpreters.prompt import load_variants, save_variants
 
         current = load_variants()
+        if args.only is not None:
+            if args.variant is None:
+                print("error: --only needs --variant N, the paraphrase index to remake",
+                      file=sys.stderr)
+                return 2
+            keys = [k.strip() for k in args.only.split(",") if k.strip()]
+            try:
+                remade = paraphrases.regenerate(current, keys, args.variant, model=args.model)
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            save_variants(remade)
+            print(f"remade {', '.join(keys)} at variant {args.variant} with {args.model}")
+            return 0
         if current.count > 1 and not args.force:
             print(
                 f"error: {current.count - 1} paraphrase variant(s) already exist and are frozen; "
@@ -78,7 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        made = make_variants(current, model=args.model, count=args.count)
+        made = paraphrases.make_variants(current, model=args.model, count=args.count)
         save_variants(made)
         print(f"variants: {made.count}")
         return 0

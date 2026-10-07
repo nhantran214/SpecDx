@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from specdx.types import Scenario
+from specdx.types import PARAMETERS, Scenario
 
 WORK_ORDERS = Path(__file__).with_name("work_orders.json")
 _WHOLE = re.compile(r"^\{(\w+)\}$")
@@ -38,9 +38,19 @@ def load_work_orders(path: Path = WORK_ORDERS) -> tuple[WorkStep, ...]:
     )
 
 
-def render_inputs(step: WorkStep, scenario: Scenario) -> dict[str, str]:
+def template_values(scenario: Scenario) -> dict[str, str]:
+    """What an input template may name: the scenario's parameters, and its receipts."""
     values = {k: str(v) for k, v in scenario.params().items()}
     values["deliveries"] = ",".join(f"{grn}:{n}" for grn, n in scenario.deliveries())
+    return values
+
+
+# The input keys a scenario fills in; a Tell statement that names one must keep it.
+TEMPLATE_NAMES: frozenset[str] = frozenset({*PARAMETERS, "deliveries"})
+
+
+def render_inputs(step: WorkStep, scenario: Scenario) -> dict[str, str]:
+    values = template_values(scenario)
     out: dict[str, str] = {}
     for key, template in step.inputs.items():
         whole = _WHOLE.match(template)

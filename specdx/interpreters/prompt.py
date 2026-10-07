@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from tonomyx.canon.pack import CanonPack
@@ -24,8 +24,13 @@ _NOTE = (
 
 @dataclass(frozen=True)
 class TellVariants:
+    """provenance: for "standing" and each statement key, who wrote each variant index
+    ("hand-written", a model name, or None when unknown). It is a record only: the
+    context digest covers the texts, never the provenance."""
+
     standing: tuple[str, ...]
     statements: dict[str, tuple[str, ...]]
+    provenance: dict[str, tuple[str | None, ...]] = field(default_factory=dict)
 
     @property
     def count(self) -> int:
@@ -37,15 +42,18 @@ def load_variants(path: Path = VARIANTS_PATH) -> TellVariants:
     return TellVariants(
         standing=tuple(raw["standing"]),
         statements={k: tuple(v) for k, v in raw["statements"].items()},
+        provenance={k: tuple(v) for k, v in raw.get("provenance", {}).items()},
     )
 
 
 def save_variants(variants: TellVariants, path: Path = VARIANTS_PATH) -> None:
-    payload = {
-        "_note": _NOTE,
-        "standing": list(variants.standing),
-        "statements": {k: list(v) for k, v in variants.statements.items()},
-    }
+    """Provenance, when there is any, goes before the texts: changing one variant then
+    changes only its own line and its provenance line."""
+    payload: dict[str, object] = {"_note": _NOTE}
+    if variants.provenance:
+        payload["provenance"] = {k: list(v) for k, v in variants.provenance.items()}
+    payload["standing"] = list(variants.standing)
+    payload["statements"] = {k: list(v) for k, v in variants.statements.items()}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

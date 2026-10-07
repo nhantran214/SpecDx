@@ -1,7 +1,9 @@
+import dataclasses
+
 import pytest
 
 from specdx.active.loop import SpecDxConfig
-from specdx.interpreters.prompt import TellVariants
+from specdx.interpreters.prompt import TellVariants, load_variants
 from specdx.orchestrate.reference import reference_executor
 from specdx.types import InterpreterId
 from specdx.workbench import Workbench
@@ -42,6 +44,13 @@ def test_any_interpreter_visible_setting_changes_the_context_digest(
     assert _context(tmp_path) == before
     monkeypatch.setattr(setting, value)
     assert _context(tmp_path) != before
+
+
+def test_provenance_stays_outside_the_context_digest(tmp_path, monkeypatch) -> None:
+    plain = _context(tmp_path)
+    marked = dataclasses.replace(load_variants(), provenance={"standing": ("hand-written",)})
+    monkeypatch.setattr("specdx.workbench.load_variants", lambda: marked)
+    assert _context(tmp_path) == plain
 
 
 def test_interpreters_run_with_the_settings_in_the_digest(tmp_path, monkeypatch) -> None:

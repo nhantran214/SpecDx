@@ -1,30 +1,47 @@
+import difflib
 import json
 
 import httpx
 import pytest
 
-from specdx.interpreters.paraphrase import make_variants, paraphrase
-from specdx.interpreters.prompt import load_variants
+from specdx.interpreters.paraphrase import (
+    label_lines,
+    make_variants,
+    paraphrase,
+    prompt_for,
+    regenerate,
+    rejection,
+)
+from specdx.interpreters.prompt import TellVariants, load_variants, save_variants
 
 
 def _model(*answers, seen=None):
-    """Answers in turn; once they run out, echoes the text it was asked to rewrite."""
+    """Answers in turn; once they run out, returns the text it was asked to rewrite with a
+    numbered line appended: a different, valid paraphrase every call."""
     queue = list(answers)
+    calls = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         prompt = body["messages"][0]["content"]
+        calls.append(prompt)
         if seen is not None:
             seen.append(prompt)
-        text = queue.pop(0) if queue else prompt.split("\n\n", 1)[1]
+        text = queue.pop(0) if queue else f"{prompt.split(chr(10) * 2, 1)[1]}\nBản {len(calls)}."
         return httpx.Response(200, json={"message": {"role": "assistant", "content": text}})
 
     return httpx.MockTransport(handle)
 
 
-def _paraphrase(text, *answers, seen=None):
+def _paraphrase(text, *answers, seen=None, avoid=()):
     with httpx.Client(transport=_model(*answers, seen=seen)) as client:
-        return paraphrase(text, model="m", seed=1, client=client, base_url="http://x")
+        return paraphrase(text, model="m", seed=1, client=client, base_url="http://x",
+                          avoid=avoid)
+
+
+STANDING = load_variants().standing[0]
+LABELS = ["Vụ việc: {case_id}. Nhiệm vụ: {statement}.", "Dữ liệu vào: {inputs}.",
+          "Bảng được đọc: {read}.", "Bảng được soạn nháp: {draft}."]
 
 
 def test_a_paraphrase_must_keep_every_placeholder() -> None:
@@ -111,3 +128,99 @@ def test_make_variants_adds_count_versions_of_everything() -> None:
     made = make_variants(base, model="m", count=2, base_url="http://x", transport=_model())
     assert made.count == 3 and made.standing[0] == base.standing[0]
     assert all(len(v) == 3 for v in made.statements.values())
+    assert made.provenance["standing"] == ("hand-written", "m", "m")
+    assert set(made.provenance) == {"standing", *base.statements}
+
+
+def test_an_input_key_without_an_underscore_is_protected_too() -> None:
+    text = "ghi nhận phiếu nhập kho theo các lần giao thực tế (deliveries liệt kê từng lần giao)"
+    seen: list[str] = []
+    kept = "ghi phiếu nhập theo từng lần giao (deliveries kê từng lần)"
+    assert _paraphrase(text, "ghi phiếu nhập theo từng lần giao thực tế", kept,
+                       seen=seen) == kept
+    assert "định danh (deliveries)" in seen[0].split("\n\n", 1)[0]
+    assert rejection(text, "ghi phiếu nhập theo các lần giao") == "identifiers differ"
+
+
+def test_the_rewrite_instruction_forbids_new_details_and_foreign_jargon() -> None:
+    assert ("Không thêm, bớt hay thay đổi chi tiết, điều kiện hay đối tượng nào; "
+            "không dùng thuật ngữ của lĩnh vực khác.") in prompt_for("duyệt báo giá")
+
+
+def test_a_paraphrase_identical_to_variant_zero_or_an_earlier_one_is_rejected() -> None:
+    text = "soạn đề nghị chi cho hóa đơn nhà cung cấp"
+    earlier = "lập đề nghị thanh toán cho hóa đơn nhà cung cấp"
+    assert rejection(text, f"  {text} ") == "duplicate"
+    assert rejection(text, earlier, avoid=[earlier]) == "duplicate"
+    fresh = "chuẩn bị đề nghị chi cho hóa đơn của nhà cung cấp"
+    assert _paraphrase(text, text, earlier, fresh, avoid=[earlier]) == fresh
+
+
+def test_make_variants_never_repeats_an_earlier_variant() -> None:
+    small = TellVariants(("Bạn là {role}.",), {"pay": ("soạn đề nghị chi",)})
+    answers = {"Bạn là {role}.": ["Với vai {role}.", "Với vai {role}.", "Trong vai {role}."],
+               "soạn đề nghị chi": ["lập đề nghị chi", "lập đề nghị chi", "chuẩn bị đề nghị chi"]}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        source = json.loads(request.content)["messages"][0]["content"].split("\n\n", 1)[1]
+        reply = answers[source].pop(0)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": reply}})
+
+    made = make_variants(small, model="m", count=2, base_url="http://x",
+                         transport=httpx.MockTransport(handle))
+    assert made.standing == ("Bạn là {role}.", "Với vai {role}.", "Trong vai {role}.")
+    assert made.statements["pay"] == ("soạn đề nghị chi", "lập đề nghị chi",
+                                      "chuẩn bị đề nghị chi")
+
+
+def test_label_lines_are_found_listed_and_kept_verbatim() -> None:
+    assert label_lines(STANDING) == LABELS
+    instructions = prompt_for(STANDING).split("\n\n", 1)[0]
+    assert all(f"“{line}”" in instructions for line in LABELS)
+    changed = STANDING.replace("Bảng được đọc: {read}.", "Bảng đã đọc: {read}.")
+    assert rejection(STANDING, changed) == "a label line changed"
+    reworded = STANDING.replace("Quy tắc làm việc:", "Nguyên tắc làm việc:")
+    assert rejection(STANDING, reworded) is None
+
+
+def test_regenerate_remakes_only_the_named_entries_at_one_index() -> None:
+    base = TellVariants(("A {role}.", "B {role}.", "C {role}."),
+                        {"x": ("x0", "x1", "x2"), "y": ("y0", "y1", "y2")},
+                        {"x": ("hand-written", "old", "old")})
+    made = regenerate(base, ["standing", "x"], 2, model="new", base_url="http://x",
+                      transport=_model("D {role}.", "x1", "x2", "x-new"))
+    assert made.standing == ("A {role}.", "B {role}.", "D {role}.")
+    assert made.statements == {"x": ("x0", "x1", "x-new"), "y": ("y0", "y1", "y2")}
+    assert made.provenance == {"x": ("hand-written", "old", "new"),
+                               "standing": ("hand-written", None, "new")}
+
+
+@pytest.mark.parametrize(("keys", "index"), [(["x"], 0), (["x"], 3), (["nope"], 1)])
+def test_regenerate_refuses_a_bad_index_or_key_before_calling_a_model(keys, index) -> None:
+    base = TellVariants(("A {role}.", "B {role}.", "C {role}."), {"x": ("x0", "x1", "x2")})
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no model call expected")
+
+    with pytest.raises(ValueError):
+        regenerate(base, keys, index, model="m", base_url="http://x",
+                   transport=httpx.MockTransport(handle))
+
+
+def test_a_regenerated_entry_changes_only_its_own_lines_in_the_file(tmp_path) -> None:
+    path = tmp_path / "variants.json"
+    base = make_variants(TellVariants(("A {role}.",), {"x": ("x0",), "y": ("y0",)}),
+                         model="old", count=2, base_url="http://x", transport=_model())
+    save_variants(base, path)
+    before = path.read_text(encoding="utf-8").splitlines()
+    loaded = load_variants(path)
+    assert loaded == base
+    save_variants(regenerate(loaded, ["x"], 1, model="new", base_url="http://x",
+                             transport=_model("x-new")), path)
+    after = path.read_text(encoding="utf-8").splitlines()
+    diff = list(difflib.ndiff(before, after))
+    removed = [line[2:] for line in diff if line.startswith("- ")]
+    added = [line[2:] for line in diff if line.startswith("+ ")]
+    assert len(before) == len(after)
+    assert sorted(added) == sorted(['      "new",', '      "x-new",'])  # the entry, its model
+    assert len(removed) == 2 and '      "old",' in removed
