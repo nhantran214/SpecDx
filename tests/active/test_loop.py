@@ -160,6 +160,27 @@ def test_localised_ambiguities_that_share_a_location_are_merged() -> None:
     assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
 
 
+def test_unlocalised_ambiguities_at_different_steps_stay_apart() -> None:
+    report = run_specdx(
+        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: None, lens=TwoStepLens()),
+        SpecDxConfig(MODELS, budget=200, synthesize=False),
+    )
+    unlocalised = [d for d in report.defects if d.type == "ambiguity"]
+    assert [d.location for d in unlocalised] == [(), ()]
+    assert sorted(d.note.split("|")[1] for d in unlocalised) == ["step", "step2"]
+
+
+def test_the_report_records_the_ambiguities_the_differential_dropped() -> None:
+    config = SpecDxConfig(MODELS, budget=200, synthesize=False)
+    base = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan)),
+                      dataclasses.replace(config, localize=False))
+    mutant = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), lens=TwoStepLens()), config,
+                        base=base)
+    assert mutant.ambiguity_keys == {("ambiguity", "step", ("x.k",)),
+                                     ("ambiguity", "step2", ("x.k",))}
+    assert mutant.ambiguity_dropped == {("ambiguity", "step", ("x.k",))}
+
+
 def test_an_unattempted_singleton_is_hidden_and_an_attempted_one_a_contradiction() -> None:
     def run(probe_budget):
         return run_specdx(

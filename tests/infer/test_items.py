@@ -2,7 +2,7 @@ import pytest
 
 from specdx.infer.items import SpecLens
 from specdx.orchestrate.work_orders import load_work_orders
-from specdx.spec.clauses import ClauseSet
+from specdx.spec.clauses import Clause, ClauseSet, rows_read
 from specdx.spec.columns import ColumnModel
 from specdx.types import Behaviour, InterpreterId, Scenario, State
 
@@ -51,6 +51,13 @@ def test_cross_cutting_clauses_belong_to_the_steps_owning_the_rows_they_read(len
         assert owners(f"expect:open_units:{name}") == [
             "DE-FN-04:draft_purchase_order", "P6:decide_po", "DE-OP-02:record_goods_receipt"
         ]
+
+
+def test_an_expectation_with_undeclared_rows_is_an_error() -> None:
+    clause = Clause("expect:new_key:grn12", "expectation", "anchored", "grn12",
+                    frozenset(), "kỳ vọng new_key", {"key": "new_key", "eq": "1", "members": []})
+    with pytest.raises(ValueError, match="new_key"):
+        rows_read(clause)
 
 
 @pytest.mark.db

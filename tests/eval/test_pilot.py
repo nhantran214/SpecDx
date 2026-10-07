@@ -148,6 +148,8 @@ def test_every_mutant_and_the_base_are_written_one_per_line(tmp_path) -> None:
     assert set(hit["matches"]["b2"]) == {"typed", "untyped"}
     assert hit["defects"]["specdx"][0]["location"] == ["c1"]
     assert set(hit["runs"]) == {"population", "probe", "ddmin", "executed"}
+    assert hit["ambiguity_keys"] == [] and hit["ambiguity_dropped"] == []
+    assert base["ambiguity_keys"] == []
     assert "bad SQL" in broken["failure"] and broken["matches"] is None
 
 

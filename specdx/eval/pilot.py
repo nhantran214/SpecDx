@@ -150,6 +150,11 @@ def _runs(report: Report) -> dict[str, int]:
             "ddmin": report.ddmin_runs, "executed": report.executed}
 
 
+def _keys(keys: frozenset[tuple[str, str, tuple[str, ...]]]) -> list[list[Any]]:
+    """Ambiguity identities (type, step, fields), sorted, as JSON."""
+    return [[t, step, list(fields)] for t, step, fields in sorted(keys)]
+
+
 def _mutant_line(
     m: Mutant,
     found: dict[str, list[Defect]] | None,
@@ -177,6 +182,9 @@ def _mutant_line(
         "defects": None if found is None else {k: _defects(v) for k, v in found.items()},
         "matches": matches,
         "runs": None if report is None else _runs(report),
+        # before the differential, and the base noise it removed (spec §11 item 9)
+        "ambiguity_keys": None if report is None else _keys(report.ambiguity_keys),
+        "ambiguity_dropped": None if report is None else _keys(report.ambiguity_dropped),
         "failure": failure,
     }
 
@@ -213,7 +221,8 @@ def run_gate(
 
     try:
         write({"base": True, "variant": base.variant,
-               "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base)})
+               "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base),
+               "ambiguity_keys": _keys(base.ambiguity_keys)})
         for m in mutants:
             report: Report | None = None
             try:

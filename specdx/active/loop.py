@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
@@ -81,7 +81,7 @@ class LoopContext:
 class Report:
     """runs counts population runs; probe_runs and ddmin_runs the requested runs charged to
     the probe and localisation budgets. ambiguity_keys are the ambiguities found, before
-    localisation."""
+    the differential and localisation; ambiguity_dropped those the differential removed."""
 
     variant: str
     defects: list[Defect]
@@ -93,6 +93,7 @@ class Report:
     probe_runs: int = 0
     ddmin_runs: int = 0
     ambiguity_keys: frozenset[AmbiguityKey] = frozenset()
+    ambiguity_dropped: frozenset[AmbiguityKey] = frozenset()  # base noise, removed
 
     def to_json(self) -> str:
         return json.dumps(
@@ -211,9 +212,8 @@ def run_specdx(
         previous = scores
 
     found = frozenset(ambiguity_key(d) for d in defects if d.type == "ambiguity")
-    if base is not None:
-        defects = [d for d in defects
-                   if d.type != "ambiguity" or ambiguity_key(d) not in base.ambiguity_keys]
+    dropped = found & base.ambiguity_keys if base is not None else frozenset()
+    defects = [d for d in defects if d.type != "ambiguity" or ambiguity_key(d) not in dropped]
     if config.localize and ctx.localizer is not None:
         interps = ranked_interpreters(config.models_by_family, posterior.theta, config.variants)
         # Best supported first, until the localisation budget runs out; from then on every
@@ -224,11 +224,16 @@ def run_specdx(
             sentences = (None if budget.exhausted("ddmin")
                          else ctx.localizer(variant, defects[i], interps, budget))
             located[i] = tuple(sentences or ())
-        defects = merge_defects(
-            dataclasses.replace(d, location=located[i]) if i in located else d
-            for i, d in enumerate(defects)
-        )
+        # Localised defects that now share type and location merge; unlocalised ones keep
+        # their identity from before localisation (step and fields), so they stay apart.
+        merge_key: dict[int, Hashable] = {}
+        out: list[Defect] = []
+        for i, d in enumerate(defects):
+            new = dataclasses.replace(d, location=located[i]) if i in located else d
+            merge_key[id(new)] = ambiguity_key(d) if i in located and not located[i] else new.key
+            out.append(new)
+        defects = merge_defects(out, key=lambda d: merge_key[id(d)])
 
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
                   dict(posterior.theta), behaviours, probe_runs=budget.probe,
-                  ddmin_runs=budget.ddmin, ambiguity_keys=found)
+                  ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped)

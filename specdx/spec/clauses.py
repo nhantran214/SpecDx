@@ -174,7 +174,10 @@ EXPECTATION_ROWS: dict[str, Rows] = {
 
 def rows_read(clause: Clause) -> Rows:
     if clause.kind == "expectation":
-        return EXPECTATION_ROWS.get(clause.payload["key"], ())
+        key = clause.payload["key"]
+        if key not in EXPECTATION_ROWS:
+            raise ValueError(f"expectation {key!r} declares no rows: add it to EXPECTATION_ROWS")
+        return EXPECTATION_ROWS[key]
     if clause.kind == "reconcile":
         return (("vinv", None),)
     if clause.kind == "guard_pay":

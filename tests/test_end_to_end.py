@@ -67,6 +67,9 @@ def test_the_gate_runs_end_to_end_on_real_mutants(tmp_path) -> None:
     assert ["contradiction", ["golden:po:PO-0015:trang_thai"]] in c2["matches"]["specdx"]["typed"]
     # the deviant's split is base noise: the differential removes it from both mutants
     assert not [d for x in lines[1:] for d in x["defects"]["specdx"] if d["type"] == "ambiguity"]
+    noise = ["ambiguity", "DE-OP-02:record_goods_receipt", ["evt:FLAGGED:GRN-0015"]]
+    assert lines[0]["ambiguity_keys"] == [noise]
+    assert all(x["ambiguity_dropped"] == [noise] for x in lines[1:])
 
 
 def test_a_split_that_no_tell_sentence_causes_stays_unlocalised(tmp_path) -> None:
