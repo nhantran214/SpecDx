@@ -100,6 +100,31 @@ def test_gate_records_a_broken_mutant_and_continues(tmp_path) -> None:
     assert "| hidden |" in gate_markdown(result)
 
 
+def test_the_report_shows_the_verdict_and_the_literal_comparison(tmp_path) -> None:
+    result = run_gate(_config(tmp_path), _Bench(), [_mutant("H1-00", "hidden", {"c1"})])
+    report = gate_markdown(result)
+    assert "typed F1 against the baselines' untyped F1" in report
+    assert "typed against typed" in report
+    assert set(json.loads(result.to_json())["literal_wins"]) == set(result.wins)
+
+
+def test_every_mutant_and_the_base_are_written_one_per_line(tmp_path) -> None:
+    out = tmp_path / "results" / "p1-gate-mutants.jsonl"
+    mutants = [_mutant("H1-00", "hidden", {"c1"}), _mutant("broken", "weak", {"x.y"})]
+    run_gate(_config(tmp_path), _Bench(), mutants, mutants_out=out)
+    lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert [x.get("mutant") for x in lines] == [None, "H1-00", "broken"]
+    base, hit, broken = lines
+    assert base["base"] is True and set(base["defects"]) == {"specdx", "b2", "b3"}
+    assert hit["base"] is False and hit["type"] == "hidden" and hit["failure"] is None
+    assert hit["truth"] == {"location": ["c1"], "kind": "clause"}
+    assert hit["matches"]["specdx"]["typed"] == [["hidden", ["c1"]]]
+    assert set(hit["matches"]["b2"]) == {"typed", "untyped"}
+    assert hit["defects"]["specdx"][0]["location"] == ["c1"]
+    assert set(hit["runs"]) == {"population", "probe", "ddmin", "executed"}
+    assert "bad SQL" in broken["failure"] and broken["matches"] is None
+
+
 def test_a_failed_mutant_makes_the_gate_incomplete(tmp_path) -> None:
     mutants = [_mutant("H1-00", "hidden", {"c1"}), _mutant("broken", "weak", {"x.y"})]
     result = run_gate(_config(tmp_path), _Bench(), mutants)

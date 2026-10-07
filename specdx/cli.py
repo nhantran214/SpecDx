@@ -11,6 +11,9 @@ from pathlib import Path
 
 from specdx.config import PDF_DIR, WORK_DIR
 
+# Per-mutant gate results, written next to --out.
+MUTANTS_FILE = "p1-gate-mutants.jsonl"
+
 
 class _Stderr(logging.Handler):
     """Writes to whatever sys.stderr is at the time, so redirection is always honoured."""
@@ -119,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     mutants = dev_split(all_mutants(bench.base, bench.pdf, bench.work_dir),
                         config.dev_per_type, config.rng_seed)
-    result = run_gate(config, bench, mutants)
+    result = run_gate(config, bench, mutants, mutants_out=args.out.parent / MUTANTS_FILE)
     args.out.write_text(result.to_json(), encoding="utf-8")
     args.out.with_suffix(".md").write_text(gate_markdown(result), encoding="utf-8")
     print(gate_markdown(result))

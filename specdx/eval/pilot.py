@@ -5,18 +5,24 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 import psycopg
 
-from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
+from specdx.active.loop import LoopContext, Report, SpecDxConfig, run_specdx
 from specdx.baselines.b2_single import b2_report
 from specdx.baselines.b3_irt import b3_report
 from specdx.config import OLLAMA_URL
-from specdx.eval.matching import Prf, evaluate_reports, gate_verdict
+from specdx.eval.matching import (
+    Prf,
+    evaluate_reports,
+    gate_verdict,
+    literal_wins,
+    match_findings,
+)
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.types import DEFECT_TYPES, Defect, InfrastructureError
 from specdx.variant import SpecVariant
@@ -101,6 +107,7 @@ class GateResult:
     passed: bool
     wins: dict[str, bool]
     failed: dict[str, str] = field(default_factory=dict)
+    literal_wins: dict[str, bool] = field(default_factory=dict)
 
     @property
     def headline(self) -> str:
@@ -113,7 +120,7 @@ class GateResult:
         def table(s: dict[str, dict[str, Prf]]) -> dict[str, Any]:
             return {m: {t: p.as_dict() for t, p in by.items()} for m, by in s.items()}
         return json.dumps({"headline": self.headline, "passed": self.passed, "wins": self.wins,
-                           "failed": self.failed,
+                           "literal_wins": self.literal_wins, "failed": self.failed,
                            "typed": table(self.scores), "untyped": table(self.untyped)},
                           ensure_ascii=False, indent=2)
 
@@ -124,7 +131,55 @@ def _baselines(report_behaviours, ctx: LoopContext, theta, canon_ids):
             b3_report(report_behaviours, violated))
 
 
-def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) -> GateResult:
+def _defects(defects: Sequence[Defect]) -> list[dict[str, Any]]:
+    return [asdict(d) for d in defects]
+
+
+def _runs(report: Report) -> dict[str, int]:
+    return {"population": report.runs, "probe": report.probe_runs,
+            "ddmin": report.ddmin_runs, "executed": report.executed}
+
+
+def _mutant_line(
+    m: Mutant,
+    found: dict[str, list[Defect]] | None,
+    bases: dict[str, list[Defect]],
+    report: Report | None,
+    failure: str | None,
+) -> dict[str, Any]:
+    matches = None
+    if found is not None:
+        matches = {
+            method: {
+                ("typed" if typed else "untyped"): [
+                    [d.type, list(d.location)]
+                    for d in match_findings(found[method], m.truth, bases[method],
+                                            typed=typed)[1]
+                ]
+                for typed in (True, False)
+            }
+            for method in found
+        }
+    return {
+        "base": False, "mutant": m.id, "operator": m.operator, "site": m.site,
+        "type": m.truth.type,
+        "truth": {"location": sorted(m.truth.location), "kind": m.truth.location_kind},
+        "defects": None if found is None else {k: _defects(v) for k, v in found.items()},
+        "matches": matches,
+        "runs": None if report is None else _runs(report),
+        "failure": failure,
+    }
+
+
+def run_gate(
+    config: GateConfig,
+    bench: BenchLike,
+    mutants: Sequence[Mutant],
+    *,
+    mutants_out: Path | None = None,
+) -> GateResult:
+    """mutants_out, if given, receives one JSON line for the base and one per mutant,
+    written as each finishes."""
     cfg = config.specdx()
     base_ctx = bench.loop_context(bench.base, cfg)
     # The base report is the differential's reference: its ambiguities are compared on
@@ -132,49 +187,92 @@ def run_gate(config: GateConfig, bench: BenchLike, mutants: Sequence[Mutant]) ->
     base = run_specdx(bench.base, base_ctx, dataclasses.replace(cfg, localize=False))
     canon_ids = set(base_ctx.canon)
     base_b2, base_b3 = _baselines(base.behaviours, base_ctx, base.theta, canon_ids)
+    bases = {"specdx": base.defects, "b2": base_b2, "b3": base_b3}
     reports: dict[str, dict[str, list[Defect]]] = {"specdx": {}, "b2": {}, "b3": {}}
     truths: dict[str, GroundTruth] = {}
     failed: dict[str, str] = {}
-    for m in mutants:
-        try:
-            ctx = bench.loop_context(m.variant, cfg)
-            report = run_specdx(m.variant, ctx, cfg, base=base)
-        except INFRASTRUCTURE_ERRORS:
-            raise
-        except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate
-            failed[m.id] = f"{type(exc).__name__}: {exc}"
-            continue
-        if report.behaviours and all(b.status == "error" for b in report.behaviours):
-            failed[m.id] = report.behaviours[0].error
-            continue
-        truths[m.id] = m.truth
-        reports["specdx"][m.id] = report.defects
-        reports["b2"][m.id], reports["b3"][m.id] = _baselines(
-            report.behaviours, ctx, report.theta, canon_ids
-        )
-    bases = {"specdx": base.defects, "b2": base_b2, "b3": base_b3}
+    lines = None
+    if mutants_out is not None:
+        mutants_out.parent.mkdir(parents=True, exist_ok=True)
+        lines = mutants_out.open("w", encoding="utf-8")
+
+    def write(line: dict[str, Any]) -> None:
+        if lines is not None:
+            lines.write(json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n")
+            lines.flush()
+
+    try:
+        write({"base": True, "variant": base.variant,
+               "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base)})
+        for m in mutants:
+            report: Report | None = None
+            try:
+                ctx = bench.loop_context(m.variant, cfg)
+                report = run_specdx(m.variant, ctx, cfg, base=base)
+            except INFRASTRUCTURE_ERRORS:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate
+                failed[m.id] = f"{type(exc).__name__}: {exc}"
+                write(_mutant_line(m, None, bases, report, failed[m.id]))
+                continue
+            if report.behaviours and all(b.status == "error" for b in report.behaviours):
+                failed[m.id] = report.behaviours[0].error
+                write(_mutant_line(m, None, bases, report, failed[m.id]))
+                continue
+            truths[m.id] = m.truth
+            reports["specdx"][m.id] = report.defects
+            reports["b2"][m.id], reports["b3"][m.id] = _baselines(
+                report.behaviours, ctx, report.theta, canon_ids
+            )
+            found = {n: reports[n][m.id] for n in reports}
+            write(_mutant_line(m, found, bases, report, None))
+    finally:
+        if lines is not None:
+            lines.close()
     scores = {n: evaluate_reports(reports[n], truths, bases[n]) for n in reports}
     untyped = {n: evaluate_reports(reports[n], truths, bases[n], typed=False) for n in reports}
-    passed, wins = gate_verdict(scores)
-    return GateResult(scores, untyped, passed and not failed, wins, failed)
+    passed, wins = gate_verdict(scores, untyped)
+    return GateResult(scores, untyped, passed and not failed, wins, failed,
+                      literal_wins(scores))
 
 
 def gate_markdown(result: GateResult) -> str:
+    def f1(table: dict[str, dict[str, Prf]], method: str, t: str) -> str:
+        return f"{table[method][t].f1:.2f}"
+
+    def win(w: dict[str, bool], t: str) -> str:
+        return "yes" if w.get(t) else "no"
+
     lines = [f"# P1 gate: {result.headline}", ""]
     if result.failed:
         lines += [f"{len(result.failed)} mutant(s) could not run, so no verdict is given.", ""]
     lines += [
-        "Typed F1 (verdict) and untyped F1 (location only) per defect type.",
+        "## Verdict: SpecDx typed F1 against the baselines' untyped F1",
         "",
-        "| type | SpecDx | B2 | B3 | SpecDx untyped | B2 untyped | B3 untyped | SpecDx wins |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "A type is a win when SpecDx's typed F1 exceeds both baselines' untyped F1; the gate "
+        "needs 3 wins of 4 (spec §4.8, §11). The baselines cannot assign a type, so their "
+        "untyped F1 is the fair bar.",
+        "",
+        "| type | SpecDx typed | B2 untyped | B3 untyped | SpecDx untyped | SpecDx wins |",
+        "|---|---:|---:|---:|---:|---|",
     ]
     for t in DEFECT_TYPES:
         lines.append(
-            f"| {t} | {result.scores['specdx'][t].f1:.2f} | {result.scores['b2'][t].f1:.2f} | "
-            f"{result.scores['b3'][t].f1:.2f} | {result.untyped['specdx'][t].f1:.2f} | "
-            f"{result.untyped['b2'][t].f1:.2f} | {result.untyped['b3'][t].f1:.2f} | "
-            f"{'yes' if result.wins[t] else 'no'} |"
+            f"| {t} | {f1(result.scores, 'specdx', t)} | {f1(result.untyped, 'b2', t)} | "
+            f"{f1(result.untyped, 'b3', t)} | {f1(result.untyped, 'specdx', t)} | "
+            f"{win(result.wins, t)} |"
+        )
+    lines += [
+        "",
+        "## Literal comparison (typed against typed), for transparency only",
+        "",
+        "| type | SpecDx typed | B2 typed | B3 typed | SpecDx wins |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for t in DEFECT_TYPES:
+        lines.append(
+            f"| {t} | {f1(result.scores, 'specdx', t)} | {f1(result.scores, 'b2', t)} | "
+            f"{f1(result.scores, 'b3', t)} | {win(result.literal_wins, t)} |"
         )
     if result.failed:
         lines += ["", "## Mutants that could not run", ""]

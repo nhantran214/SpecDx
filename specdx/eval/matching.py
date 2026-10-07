@@ -47,6 +47,23 @@ def location_matches(defect: Defect, truth: GroundTruth) -> bool:
     raise ValueError(f"unknown location kind {kind!r}")
 
 
+def match_findings(
+    defects: Sequence[Defect],
+    truth: GroundTruth,
+    base: Sequence[Defect],
+    *,
+    typed: bool = True,
+    k: int | None = None,
+) -> tuple[list[Defect], list[Defect]]:
+    """The findings new against the base report (top k if given), and those that match."""
+    base_keys = {d.key for d in base}
+    new = [d for d in defects if d.key not in base_keys]
+    if k is not None:
+        new = new[:k]
+    hits = [d for d in new if (not typed or d.type == truth.type) and location_matches(d, truth)]
+    return new, hits
+
+
 def evaluate_reports(
     reports: Mapping[str, Sequence[Defect]],
     truths: Mapping[str, GroundTruth],
@@ -57,14 +74,9 @@ def evaluate_reports(
 ) -> dict[str, Prf]:
     """One TP or FN per mutant under its true type; every unmatched new finding is an FP."""
     scores = {t: Prf() for t in DEFECT_TYPES}
-    base_keys = {d.key for d in base}
     for mutant_id, defects in reports.items():
         truth = truths[mutant_id]
-        new = [d for d in defects if d.key not in base_keys]
-        if k is not None:
-            new = new[:k]
-        hits = [d for d in new
-                if (not typed or d.type == truth.type) and location_matches(d, truth)]
+        new, hits = match_findings(defects, truth, base, typed=typed, k=k)
         if hits:
             scores[truth.type].tp += 1
         else:
@@ -75,13 +87,32 @@ def evaluate_reports(
     return scores
 
 
+def _wins(
+    mine: Mapping[str, Prf], theirs: Sequence[Mapping[str, Prf]]
+) -> dict[str, bool]:
+    return {t: mine[t].f1 > max(other[t].f1 for other in theirs) for t in DEFECT_TYPES}
+
+
 def gate_verdict(
-    scores: Mapping[str, Mapping[str, Prf]],
+    typed: Mapping[str, Mapping[str, Prf]],
+    untyped: Mapping[str, Mapping[str, Prf]],
     *,
     method: str = "specdx",
     baselines: Sequence[str] = ("b2", "b3"),
     required: int = 3,
 ) -> tuple[bool, dict[str, bool]]:
-    wins = {t: scores[method][t].f1 > max(scores[b][t].f1 for b in baselines)
-            for t in DEFECT_TYPES}
+    """Spec §4.8 as clarified in §11: a type is a win when SpecDx's typed F1 exceeds every
+    baseline's untyped F1 for it. The baselines cannot assign a type by construction (they
+    report hidden only), so typed against typed would be won by any one true positive."""
+    wins = _wins(typed[method], [untyped[b] for b in baselines])
     return sum(wins.values()) >= required, wins
+
+
+def literal_wins(
+    typed: Mapping[str, Mapping[str, Prf]],
+    *,
+    method: str = "specdx",
+    baselines: Sequence[str] = ("b2", "b3"),
+) -> dict[str, bool]:
+    """§4.8 read literally, typed against typed: reported for transparency, never the verdict."""
+    return _wins(typed[method], [typed[b] for b in baselines])

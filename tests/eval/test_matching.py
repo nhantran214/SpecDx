@@ -1,4 +1,10 @@
-from specdx.eval.matching import Prf, evaluate_reports, gate_verdict, location_matches
+from specdx.eval.matching import (
+    Prf,
+    evaluate_reports,
+    gate_verdict,
+    literal_wins,
+    location_matches,
+)
 from specdx.mutate.operators import GroundTruth
 from specdx.types import Defect
 
@@ -46,11 +52,25 @@ def test_f1_and_the_gate_verdict() -> None:
     assert Prf(tp=2, fp=2, fn=0).f1 == 2 * 0.5 * 1.0 / 1.5
     good, poor = Prf(tp=3, fp=1, fn=1), Prf(tp=1, fp=3, fn=3)
     types = ("contradiction", "hidden", "ambiguity", "weak")
-    scores = {"specdx": dict.fromkeys(types, good), "b2": dict.fromkeys(types, poor),
-              "b3": {t: (good if t == "hidden" else poor) for t in types}}
-    passed, wins = gate_verdict(scores)
+    typed = {"specdx": dict.fromkeys(types, good), "b2": dict.fromkeys(types, Prf(fn=4)),
+             "b3": dict.fromkeys(types, Prf(fn=4))}
+    untyped = {"specdx": dict.fromkeys(types, good), "b2": dict.fromkeys(types, poor),
+               "b3": {t: (good if t == "hidden" else poor) for t in types}}
+    passed, wins = gate_verdict(typed, untyped)
     assert passed and wins == {"contradiction": True, "hidden": False, "ambiguity": True,
                                "weak": True}
+
+
+def test_beating_the_baselines_typed_f1_alone_does_not_pass_the_gate() -> None:
+    types = ("contradiction", "hidden", "ambiguity", "weak")
+    mine, zero, located = Prf(tp=2, fp=2, fn=2), Prf(fn=4), Prf(tp=4, fp=1, fn=0)
+    typed = {"specdx": dict.fromkeys(types, mine), "b2": dict.fromkeys(types, zero),
+             "b3": dict.fromkeys(types, zero)}
+    untyped = {"specdx": dict.fromkeys(types, mine), "b2": dict.fromkeys(types, located),
+               "b3": dict.fromkeys(types, zero)}
+    assert all(literal_wins(typed).values())  # typed against typed: vacuous wins
+    passed, wins = gate_verdict(typed, untyped)
+    assert not passed and not any(wins.values())
 
 
 def test_untyped_false_positives_belong_to_the_mutant_type() -> None:
