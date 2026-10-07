@@ -30,6 +30,8 @@ KEEP_IDENTIFIERS = (
 )
 ONLY = "Chỉ trả về đoạn văn đã viết lại."
 HAND_WRITTEN = "hand-written"
+# An entry no model could paraphrase faithfully keeps the variant-0 wording.
+ORIGINAL = "original: no faithful paraphrase"
 _PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 _CODE = re.compile(r"[A-Z]{2,}-\d+")
 # Tool and input names such as search_spec and discount_pct, plus the input keys a
@@ -161,11 +163,17 @@ def regenerate(
     index: int,
     *,
     model: str,
+    seed: int | None = None,
+    original: bool = False,
     base_url: str = OLLAMA_URL,
     transport: httpx.BaseTransport | None = None,
 ) -> TellVariants:
     """Variant `index` of the named entries ("standing" or statement keys) made again,
-    different from every variant it has now; everything else is left as it is."""
+    different from every variant it has now; everything else is left as it is.
+
+    `seed` (default: the index) picks other samples when a remake keeps cycling through
+    the same rejected outputs. `original` gives up on paraphrasing these entries at this
+    index: they keep the variant-0 wording, marked ORIGINAL, with no model call."""
     if not 1 <= index < variants.count:
         raise ValueError(f"variant {index} is not a paraphrase: choose 1 to "
                          f"{variants.count - 1} (variant 0 is hand-written)")
@@ -179,9 +187,13 @@ def regenerate(
     with httpx.Client(transport=transport, timeout=300.0) as client:
         for key in keys:
             texts = standing if key == "standing" else statements[key]
-            texts[index] = paraphrase(texts[0], model=model, seed=index, client=client,
-                                      base_url=base_url, avoid=texts[1:])
             marks = provenance.setdefault(key, [HAND_WRITTEN] + [None] * (variants.count - 1))
-            marks[index] = model
+            if original:
+                texts[index], marks[index] = texts[0], ORIGINAL
+                continue
+            texts[index] = paraphrase(texts[0], model=model,
+                                      seed=index if seed is None else seed, client=client,
+                                      base_url=base_url, avoid=texts[1:])
+            marks[index] = model if seed is None else f"{model} seed {seed}"
     return TellVariants(tuple(standing), {k: tuple(v) for k, v in statements.items()},
                         {k: tuple(v) for k, v in provenance.items()})

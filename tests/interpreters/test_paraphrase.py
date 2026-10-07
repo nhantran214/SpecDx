@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from specdx.interpreters.paraphrase import (
+    ORIGINAL,
     label_lines,
     make_variants,
     paraphrase,
@@ -193,6 +194,30 @@ def test_regenerate_remakes_only_the_named_entries_at_one_index() -> None:
     assert made.statements == {"x": ("x0", "x1", "x-new"), "y": ("y0", "y1", "y2")}
     assert made.provenance == {"x": ("hand-written", "old", "new"),
                                "standing": ("hand-written", None, "new")}
+
+
+def test_regenerate_can_sample_another_seed_or_keep_the_original_wording() -> None:
+    base = TellVariants(("A {role}.", "B {role}.", "C {role}."),
+                        {"x": ("x0", "x1", "x2"), "y": ("y0", "y1", "y2")})
+    seeds: list[int] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seeds.append(json.loads(request.content)["options"]["seed"])
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "x-new"}})
+
+    made = regenerate(base, ["x"], 1, model="m", seed=7, base_url="http://x",
+                      transport=httpx.MockTransport(handle))
+    assert made.statements["x"] == ("x0", "x-new", "x2") and seeds == [70]
+    assert made.provenance["x"] == ("hand-written", "m seed 7", None)
+
+    def no_call(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no model call expected")
+
+    kept = regenerate(made, ["y"], 2, model="m", original=True, base_url="http://x",
+                      transport=httpx.MockTransport(no_call))
+    assert kept.statements["y"] == ("y0", "y1", "y0")
+    assert kept.provenance["y"] == ("hand-written", None, ORIGINAL)
+    assert kept.statements["x"] == made.statements["x"]
 
 
 @pytest.mark.parametrize(("keys", "index"), [(["x"], 0), (["x"], 3), (["nope"], 1)])

@@ -51,6 +51,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "the rest of the file is left as it is")
     mv.add_argument("--variant", type=int, metavar="N",
                     help="with --only: the paraphrase index to remake (1 .. count-1)")
+    mv.add_argument("--seed", type=int, metavar="S",
+                    help="with --only: sample with seed S instead of the variant index")
+    mv.add_argument("--original", action="store_true",
+                    help="with --only: keep the variant-0 wording for these entries at --variant "
+                         "(no faithful paraphrase exists); no model is called")
     cap = sub.add_parser("capability", help="check native tool calling of local models")
     cap.add_argument("models", nargs="+")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
@@ -83,12 +88,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 2
             keys = [k.strip() for k in args.only.split(",") if k.strip()]
             try:
-                remade = paraphrases.regenerate(current, keys, args.variant, model=args.model)
+                remade = paraphrases.regenerate(current, keys, args.variant, model=args.model,
+                                                seed=args.seed, original=args.original)
             except ValueError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
             save_variants(remade)
-            print(f"remade {', '.join(keys)} at variant {args.variant} with {args.model}")
+            source = "the variant-0 wording" if args.original else args.model
+            print(f"remade {', '.join(keys)} at variant {args.variant} with {source}")
             return 0
         if current.count > 1 and not args.force:
             print(

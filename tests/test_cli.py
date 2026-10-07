@@ -42,8 +42,8 @@ def test_only_regenerates_named_entries_at_one_variant_without_force(monkeypatch
     saved: list[TellVariants] = []
     asked = []
 
-    def fake_regenerate(variants, keys, index, *, model):
-        asked.append((keys, index, model))
+    def fake_regenerate(variants, keys, index, *, model, seed, original):
+        asked.append((keys, index, model, seed, original))
         return TellVariants(variants.standing, {"x": ("1", "2-new", "3")})
 
     monkeypatch.setattr("specdx.interpreters.prompt.load_variants", _frozen)
@@ -51,7 +51,7 @@ def test_only_regenerates_named_entries_at_one_variant_without_force(monkeypatch
     monkeypatch.setattr("specdx.interpreters.paraphrase.regenerate", fake_regenerate)
     assert main(["make-variants", "--only", "x,standing", "--variant", "1",
                  "--model", "qwen2.5:14b"]) == 0
-    assert asked == [(["x", "standing"], 1, "qwen2.5:14b")]
+    assert asked == [(["x", "standing"], 1, "qwen2.5:14b", None, False)]
     assert saved[0].statements["x"] == ("1", "2-new", "3")
 
 
