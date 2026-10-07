@@ -158,6 +158,10 @@ def test_candidates_are_refuted_in_descending_score_order(monkeypatch) -> None:
 
     diagnose(behaviours, violated, views, post, _Recording(), _diff)
     assert order == ["high", "low"]
+    # On a mutant, a location the base report already holds goes last, whatever its score
+    order.clear()
+    diagnose(behaviours, violated, views, post, _Recording(), _diff, known=frozenset({("high",)}))
+    assert order == ["low", "high"]
 
 
 def test_weak_tie_break_is_deterministic() -> None:

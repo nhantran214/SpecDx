@@ -9,8 +9,10 @@ from specdx.eval.matching import (
     gate_verdict,
     literal_wins,
     location_matches,
+    match_findings,
     reaches_bar,
 )
+from specdx.infer.scores import UNATTEMPTED
 from specdx.mutate.operators import GroundTruth
 from specdx.types import Defect
 
@@ -52,6 +54,16 @@ def test_base_findings_are_removed_and_errors_counted() -> None:
     assert (typed["hidden"].tp, typed["hidden"].fp, typed["weak"].fn) == (1, 1, 1)
     untyped = evaluate_reports(reports, truths, base, typed=False)
     assert untyped["weak"].tp == 1
+
+
+def test_an_unattempted_hidden_finding_at_a_base_location_is_base_noise() -> None:
+    truth = GroundTruth("m", "hidden", frozenset({"c1"}), "clause")
+    base = [Defect("contradiction", ("x",), ("s",), (), 1.0)]
+    unattempted = Defect("hidden", ("x",), ("s",), (), 1.0, UNATTEMPTED)
+    refuted = Defect("hidden", ("x",), ("s",), (), 1.0, "refuted by w")
+    fresh = Defect("hidden", ("y",), ("s",), (), 1.0, UNATTEMPTED)
+    new, _ = match_findings([unattempted, refuted, fresh], truth, base)
+    assert new == [refuted, fresh]
 
 
 def test_f1_and_the_gate_verdict() -> None:

@@ -124,6 +124,22 @@ def test_an_unlocalised_ambiguity_keeps_its_type_with_an_empty_location() -> Non
     assert ambiguities and all(d.location == () for d in ambiguities)
 
 
+def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) -> None:
+    config = SpecDxConfig(MODELS, budget=100, synthesize=False)
+    base = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config)
+    assert ("c1",) in {d.location for d in base.defects}
+    seen = []
+    real = run_specdx.__globals__["diagnose"]
+
+    def recording(*args, known=frozenset(), **kwargs):
+        seen.append(known)
+        return real(*args, known=known, **kwargs)
+
+    monkeypatch.setitem(run_specdx.__globals__, "diagnose", recording)
+    run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=base)
+    assert seen and all(("c1",) in known for known in seen)
+
+
 def test_a_base_noise_ambiguity_is_removed_before_localisation() -> None:
     config = SpecDxConfig(MODELS, budget=200, synthesize=False)
     base = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan)),

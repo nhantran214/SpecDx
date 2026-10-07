@@ -136,7 +136,8 @@ def run_specdx(
     variant: SpecVariant, ctx: LoopContext, config: SpecDxConfig, *, base: Report | None = None
 ) -> Report:
     """base: the base specification's report. Ambiguities it already holds (same step and
-    fields) are dropped before localisation, so only the mutant's own are localised (§11)."""
+    fields) are dropped before localisation, so only the mutant's own are localised, and
+    candidates at locations it already holds are refuted last (§11)."""
     rng = random.Random(config.rng_seed)
     budget = RunBudget(config.probe_budget, config.localize_budget)
     refutations: dict = {}
@@ -154,6 +155,9 @@ def run_specdx(
     runs = 0
     executed_before = ctx.runner.executed
     members = committee(config.models_by_family, config.variants, config.seeds)
+    known = (frozenset(d.location for d in base.defects
+                       if d.type in ("contradiction", "hidden"))
+             if base is not None else frozenset())
 
     while runs < config.budget:
         if queue:
@@ -205,7 +209,7 @@ def run_specdx(
         defects = diagnose(
             behaviours, violated, views, posterior, refuter, ctx.lens.diff,
             tau=config.tau, ambig_threshold=config.ambig_threshold,
-            weak_threshold=config.weak_threshold,
+            weak_threshold=config.weak_threshold, known=known,
         )
         scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))

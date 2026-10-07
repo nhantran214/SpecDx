@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 
+from specdx.infer.scores import UNATTEMPTED
 from specdx.mutate.operators import GroundTruth
 from specdx.spec.tell import TellCorpus
 from specdx.types import DEFECT_TYPES, Defect
@@ -56,9 +57,13 @@ def match_findings(
     typed: bool = True,
     k: int | None = None,
 ) -> tuple[list[Defect], list[Defect]]:
-    """The findings new against the base report (top k if given), and those that match."""
+    """The findings new against the base report (top k if given), and those that match.
+    A hidden finding whose refutation was never attempted carries no type evidence, so it
+    is base noise when the base report holds its location under any type (§11)."""
     base_keys = {d.key for d in base}
-    new = [d for d in defects if d.key not in base_keys]
+    base_locations = {d.location for d in base}
+    new = [d for d in defects if d.key not in base_keys
+           and not (d.note == UNATTEMPTED and d.location in base_locations)]
     if k is not None:
         new = new[:k]
     hits = [d for d in new if (not typed or d.type == truth.type) and location_matches(d, truth)]

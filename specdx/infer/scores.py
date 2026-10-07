@@ -108,6 +108,11 @@ def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[
     return chosen, score
 
 
+# The note of a singleton typed hidden only because the probe budget ran out before any
+# refutation attempt: its type is a default, not evidence (§11).
+UNATTEMPTED = "refutation not attempted: probe budget exhausted"
+
+
 def diagnose(
     behaviours: Sequence[Behaviour],
     violated: Mapping[str, frozenset[str]],
@@ -120,7 +125,11 @@ def diagnose(
     ambig_threshold: float = 0.5,
     weak_threshold: float = 0.5,
     weak_min_runs: int = 2,
+    known: frozenset[tuple[str, ...]] = frozenset(),
 ) -> list[Defect]:
+    """known: locations the base specification's report already holds. On a mutant they
+    are refuted last, so base noise does not spend the probe budget meant for the
+    mutant's own candidates."""
     defects: list[Defect] = []
     weights = run_weights(views, posterior)
     by_item: dict[str, list[ItemView]] = defaultdict(list)
@@ -130,14 +139,16 @@ def diagnose(
     for b in behaviours:
         if b.status == "ok":
             groups[b.scenario.id].append(b)
-    # Every scenario's candidates, refuted in descending score order: the probe budget
-    # goes to the best supported candidates first (§11).
+    # Every scenario's candidates, refuted in descending score order, locations the base
+    # report does not hold first: the probe budget goes to the best supported new
+    # candidates first (§11).
     candidates: list[tuple[float, str, frozenset[str]]] = []
     for sid, group in groups.items():
         sets = [(violated[b.run_key], weights.get(b.run_key, 0.0)) for b in group]
         candidates += [(support, sid, hitting)
                        for hitting, support in soft_hitting_sets(sets, tau=tau)]
-    candidates.sort(key=lambda c: (-c[0], c[1], len(c[2]), sorted(c[2])))
+    candidates.sort(key=lambda c: (tuple(sorted(c[2])) in known, -c[0], c[1], len(c[2]),
+                                   sorted(c[2])))
     for support, sid, hitting in candidates:
         group = groups[sid]
         result = refuter.refute(hitting, group[0].scenario, group)
@@ -154,8 +165,7 @@ def diagnose(
             score = _hidden_score(clause, scenario_items, posterior, by_item)
             if score is None:
                 score = support
-            note = (f"refuted by {result.witness}" if result.refuted
-                    else "refutation not attempted: probe budget exhausted")
+            note = f"refuted by {result.witness}" if result.refuted else UNATTEMPTED
             defects.append(Defect("hidden", location, (sid,), witnesses, score, note))
         # A refuted set is dropped; so is an unattempted one, which is no contradiction.
     for item, ip in posterior.items.items():
