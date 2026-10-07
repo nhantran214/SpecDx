@@ -1,6 +1,7 @@
 import dataclasses
 
 import pytest
+from tonomyx.canon.pack import CanonPack
 
 from specdx.active.budget import ProbeBudget
 from specdx.active.refute import (
@@ -8,8 +9,10 @@ from specdx.active.refute import (
     DirectedProbe,
     SymbolicRepair,
     _facts_kept,
+    propose,
 )
 from specdx.config import BASE_PACK
+from specdx.mutate.operators import all_mutants
 from specdx.orchestrate.work_orders import load_work_orders
 from specdx.spec.clauses import Clause, ClauseSet
 from specdx.spec.tell import TellCorpus
@@ -146,6 +149,45 @@ def test_repair_can_fix_so_when_grn_starts_diverged(db, clauses, variant, golden
     found = SymbolicRepair(db, variant, clauses).search(target, GRN12, [modified])
     assert found is not None
     assert found.tables["grn"][0]["sl_nhan"] == "10"
+
+
+@pytest.fixture(scope="module")
+def h2_mutants(pack, tmp_path_factory):
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(pack, []))
+    found = [m for m in all_mutants(base, [], tmp_path_factory.mktemp("work"))
+             if m.operator == "H2"]
+    assert [m.id for m in found] == ["H2-00", "H2-01"]
+    return found
+
+
+def test_repair_refutes_the_real_h2_mutants_with_one_event(db, golden, h2_mutants) -> None:
+    for m in h2_mutants:
+        mutant = ClauseSet.from_pack(CanonPack(m.variant.pack), STEPS)
+        target = frozenset(m.truth.location)
+        start = _done(golden)
+        assert mutant.violations(start, GRN12) == target, m.id
+        found = SymbolicRepair(db, m.variant, mutant).search(target, GRN12, [start])
+        assert found is not None, m.id
+        kind, ref = m.site.split(":")
+        assert [e["ref"] for e in found.tables["evt"] if e["kind"] == kind] == [ref], m.id
+        assert mutant.violations(found, GRN12) == frozenset(), m.id
+
+
+def test_an_evt_count_proposal_appends_or_removes_one_matching_event() -> None:
+    clause = Clause("inv:x", "invariant", "anchored", "grn12", frozenset({"evt"}), "x",
+                    {"invariant": {"id": "x", "desc": "x", "table": "evt",
+                                   "where": {"kind": "PAID", "ref": "PAY-0031"},
+                                   "assert": {"count": 1}}})
+    paid = {"case_id": "CASE-0031", "kind": "PAID", "ref": "PAY-0031", "actor": "AI",
+            "basis": "b", "at": "2026-09-01 02:00:00+00"}
+    other = {**paid, "kind": "DRAFTED"}
+    [added] = propose(clause, State({"evt": [other]}), GRN12)
+    assert [(e["kind"], e["ref"]) for e in added.tables["evt"]] == [
+        ("DRAFTED", "PAY-0031"), ("PAID", "PAY-0031")]
+    [removed] = propose(clause, State({"evt": [paid, other, dict(paid)]}), GRN12)
+    assert [(e["kind"], e["ref"]) for e in removed.tables["evt"]] == [
+        ("PAID", "PAY-0031"), ("DRAFTED", "PAY-0031")]
+    assert propose(clause, State({"evt": [paid]}), GRN12) == []
 
 
 def test_facts_kept_with_protected_table_rows() -> None:

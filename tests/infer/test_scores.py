@@ -1,6 +1,8 @@
+import pytest
+
 from specdx.infer.items import ItemView
 from specdx.infer.latent import ItemPosterior, Observation, fit
-from specdx.infer.scores import _weak, diagnose
+from specdx.infer.scores import _weak, diagnose, run_weights
 from specdx.types import Behaviour, InterpreterId, RefuteResult, Scenario, State
 
 GOOD = ("g1", "g2", "g3", "g4")
@@ -39,6 +41,18 @@ def _world(outputs):
                       frozenset(), _proj("OK")) for j in range(6) for m in outputs]
     obs = [Observation(v.item, v.run_key, v.model, v.family, v.klass) for v in views + clean]
     return behaviours, violated, views + clean, fit(obs)
+
+
+def test_run_weights_are_admissibility_times_competence() -> None:
+    outputs = {m: [("K", set())] * 3 for m in GOOD} | {m: [(f"E{i}", {f"n{i}"}) for i in range(3)]
+                                                    for m in BAD}
+    _, _, views, post = _world(outputs)
+    weights = run_weights(views, post)
+    for key, model in (("g1|0", "g1"), ("b1|0", "b1")):
+        mine = [v for v in views if v.run_key == key]
+        admissible = sum(post.items[v.item].responsibility[key] for v in mine) / len(mine)
+        assert weights[key] == pytest.approx(admissible * post.theta[model])
+    assert post.theta["g1"] > post.theta["b1"]
 
 
 def test_a_shared_violation_that_repair_refutes_is_hidden() -> None:

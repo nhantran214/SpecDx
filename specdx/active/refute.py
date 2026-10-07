@@ -69,6 +69,26 @@ def _facts_kept(candidate: State, start: State, scenario: Scenario) -> bool:
     return now == truth
 
 
+def _evt_count(inv: dict, state: State) -> list[State]:
+    """A count invariant over events: append one event matching its filter (kind, ref,
+    and so on) when there are too few, or drop the last matching one when too many."""
+    where = {k: str(v) for k, v in (inv.get("where") or {}).items()}
+    want = int(inv["assert"]["count"])
+    tables = _tables(state)
+    events = tables.setdefault("evt", [])
+    matching = [i for i, e in enumerate(events)
+                if all(str(e.get(k, "")).strip() == v for k, v in where.items())]
+    if len(matching) < want:
+        if "kind" not in where:
+            return []
+        events.append({**_event(where["kind"], where.get("ref", ""), "AI"), **where})
+    elif len(matching) > want:
+        del events[matching[-1]]
+    else:
+        return []
+    return [dataclasses.replace(state, tables=tables)]
+
+
 def propose(clause: Clause, state: State, scenario: Scenario) -> list[State]:
     """Candidate edits that would make this one clause true, if any edit can."""
     p = instantiate(clause.payload, scenario)
@@ -84,6 +104,8 @@ def propose(clause: Clause, state: State, scenario: Scenario) -> list[State]:
         return [replace(state, tables=tables)]
     if clause.kind == "invariant":
         inv = p["invariant"]
+        if inv["table"] == "evt" and "count" in inv["assert"]:
+            return _evt_count(inv, state)
         cond = inv["assert"].get("all", inv["assert"])
         if "col" not in cond:
             return []

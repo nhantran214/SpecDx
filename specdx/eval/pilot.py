@@ -52,8 +52,12 @@ class Capability:
 def check_model(
     model: str, *, base_url: str = OLLAMA_URL, transport: httpx.BaseTransport | None = None
 ) -> Capability:
+    """An HTTP error (a model Ollama does not have, a crashed runner) is raised: only a
+    model that answers can be judged unusable."""
     with httpx.Client(transport=transport, timeout=300.0) as client:
-        show = client.post(f"{base_url}/api/show", json={"model": model}).json()
+        response = client.post(f"{base_url}/api/show", json={"model": model})
+        response.raise_for_status()
+        show = response.json()
         if "tools" not in show.get("capabilities", []):
             return Capability(model, False, False)
         body: dict[str, Any] = {
@@ -62,7 +66,9 @@ def check_model(
         }
         if model.startswith("qwen3"):
             body["think"] = False
-        message = client.post(f"{base_url}/api/chat", json=body).json().get("message", {})
+        reply = client.post(f"{base_url}/api/chat", json=body)
+        reply.raise_for_status()
+        message = reply.json().get("message", {})
     calls = message.get("tool_calls") or []
     return Capability(model, True, any((c.get("function") or {}).get("name") == "echo"
                                        for c in calls))

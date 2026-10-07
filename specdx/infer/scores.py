@@ -16,13 +16,16 @@ Diff = Callable[[Projection, Projection], frozenset[str]]
 
 
 def run_weights(views: Iterable[ItemView], posterior: Posterior) -> dict[str, float]:
-    """How faithful each run looks, averaged over its items."""
+    """Spec §3.3 step 1: a run's admissibility weight (its responsibility, averaged over
+    its items) times the competence θ of its model."""
     acc: dict[str, list[float]] = defaultdict(list)
+    model: dict[str, str] = {}
     for v in views:
         item = posterior.items.get(v.item)
         if item is not None:
             acc[v.run_key].append(item.responsibility.get(v.run_key, 0.0))
-    return {k: sum(r) / len(r) for k, r in acc.items()}
+            model[v.run_key] = v.model
+    return {k: sum(r) / len(r) * posterior.theta.get(model[k], 0.0) for k, r in acc.items()}
 
 
 def ambiguity_key(d: Defect) -> tuple[str, str, tuple[str, ...]]:

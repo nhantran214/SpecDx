@@ -63,14 +63,17 @@ class Runner:
         *, kind: str = "population",
     ) -> Behaviour:
         """kind (population, probe or ddmin) only labels the log line; it is not in the key."""
+        digest = self.model_digest(interp.model)
         key = run_key(
             variant.digest(), self._steps_digest, self.context_digest,
             json.dumps(scenario.params(), sort_keys=True), interp.key,
-            suffix, self.model_digest(interp.model),
+            suffix, digest,
         )
         cached = self.cache.get(key)
         if cached is not None:
-            return dataclasses.replace(cached, scenario=scenario)
+            # The key holds the parameters, not the scenario's name or the family: the
+            # caller's own scenario and interpreter are the ones that ran here.
+            return dataclasses.replace(cached, scenario=scenario, interpreter=interp)
         self.executed += 1
         started = time.monotonic()
         try:
@@ -89,14 +92,14 @@ class Runner:
                 state = capture_state(conn, runtime.pack, case.statuses)
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=state,
-                refused=tuple(case.refused), claims=dict(case.claims),
+                refused=tuple(case.refused), claims=dict(case.claims), model_digest=digest,
             )
         except (psycopg.OperationalError, psycopg.InterfaceError, InfrastructureError):
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run is data, never dropped
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=State.empty(),
-                status="error", error=f"{type(exc).__name__}: {exc}",
+                status="error", error=f"{type(exc).__name__}: {exc}", model_digest=digest,
             )
         self.cache.put(behaviour)
         log.info("run %s %s %s %s %s %.1f s", variant.name, scenario.id, interp.key, kind,

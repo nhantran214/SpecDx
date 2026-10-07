@@ -34,6 +34,24 @@ def test_a_model_without_the_tools_capability_is_not_usable() -> None:
     assert not cap.declares_tools and not cap.usable
 
 
+def test_a_model_ollama_does_not_have_is_an_error_not_unusable() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "model 'missing:7b' not found"})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        check_model("missing:7b", base_url="http://x", transport=httpx.MockTransport(handle))
+
+
+def test_a_failing_chat_call_is_an_error_too() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["completion", "tools"]})
+        return httpx.Response(500, json={"error": "llama runner process has terminated"})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        check_model("m", base_url="http://x", transport=httpx.MockTransport(handle))
+
+
 CANON = {"grn12": Scenario("grn12", 15, 12, 0)}
 
 

@@ -33,11 +33,13 @@ def test_a_run_is_executed_once_then_served_from_cache(db, pack, variant, tmp_pa
                     STEPS, model_digest=lambda m: "d")
     grn12 = canon_scenarios(pack)["grn12"]
     first = runner.run(variant, grn12, REF)
-    assert first.status == "ok"
+    assert first.status == "ok" and first.model_digest == "d"
     assert ClauseSet.from_pack(pack, STEPS).violations(first.state, grn12) == frozenset()
-    renamed = runner.run(variant, Scenario("o15-r12-d0-g1", 15, 12, 0), REF)
+    other_family = InterpreterId("reference", "other", 0, 1)  # same run key: family is not in it
+    renamed = runner.run(variant, Scenario("o15-r12-d0-g1", 15, 12, 0), other_family)
     assert runner.executed == 1
     assert renamed.scenario.id == "o15-r12-d0-g1" and renamed.state == first.state
+    assert renamed.interpreter == other_family
 
 
 def test_a_crashing_factory_yields_an_error_behaviour(db, pack, variant, tmp_path) -> None:

@@ -91,6 +91,7 @@ class Behaviour:
     claims: dict[str, str] = field(default_factory=dict)
     status: str = "ok"
     error: str = ""
+    model_digest: str = ""  # the Ollama digest the run used (spec §4.2)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
@@ -107,6 +108,7 @@ class Behaviour:
             claims=dict(raw["claims"]),
             status=raw["status"],
             error=raw["error"],
+            model_digest=str(raw.get("model_digest", "")),
         )
 
 

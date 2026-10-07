@@ -1,3 +1,5 @@
+import json
+
 from specdx.types import Behaviour, Defect, InterpreterId, Scenario, State
 
 
@@ -22,8 +24,17 @@ def test_a_behaviour_survives_a_json_round_trip() -> None:
         ),
         refused=(("s", "write_draft"),),
         claims={"s": "Xong."},
+        model_digest="sha256:abc",
     )
     assert Behaviour.from_json(b.to_json()) == b
+    assert json.loads(b.to_json())["model_digest"] == "sha256:abc"
+
+
+def test_a_behaviour_cached_before_model_digests_still_loads() -> None:
+    b = Behaviour("k", InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0), State({}))
+    raw = json.loads(b.to_json())
+    del raw["model_digest"]
+    assert Behaviour.from_json(json.dumps(raw)).model_digest == ""
 
 
 def test_a_defect_key_is_its_type_and_location() -> None:
