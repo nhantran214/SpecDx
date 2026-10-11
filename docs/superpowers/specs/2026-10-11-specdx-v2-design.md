@@ -364,7 +364,7 @@ Both signals are computed per observable item.
   - scorability on the real base pack with scripted behaviours.
 - **Offline replay check, before any new run:** run the v2 inference on the P1 cache (old population). It uses no GPU and is a **mechanism check** (author's ruling, 2026-10-12). It holds when:
   - (a) on the base and on every development mutant, stage 1 gives the model that never writes (llama3.1:8b) the lowest κ;
-  - (b) every model with acted behaviour keeps θ ≥ 0.5, so there is no collapse like P1's 0.003;
+  - (b) every model with acted behaviour keeps θ ≥ 0.5, so there is no collapse like P1's 0.003, and at least one model acted;
   - (c) at least 50% of the P1 base findings become Unobservable.
 
   A θ ordering between models is not judged on the P1 cache: only one family writes there, and Proposition 2′ needs two. That ordering is checked on the screened population after the smoke run, before gate v2. A failure stops P1b before the gate.
