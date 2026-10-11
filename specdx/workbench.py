@@ -15,7 +15,8 @@ from specdx.active.ddmin import OutOfBudget, localize_ambiguity
 from specdx.active.loop import LoopContext, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
 from specdx.config import BASE_PACK, OLLAMA_URL, PDF_DIR, WORK_DIR
-from specdx.db import PackDatabase
+from specdx.db import PackDatabase, golden_tables, split_background
+from specdx.infer.act import drafting_steps
 from specdx.infer.items import SpecLens
 from specdx.interpreters.cache import RunCache
 from specdx.interpreters.executor import SpecInterpreterExecutor, interpreter_settings
@@ -109,7 +110,9 @@ class Workbench:
             )
         pack = CanonPack(variant.pack)
         clauses = ClauseSet.from_pack(pack, self.steps)
-        lens = SpecLens(clauses, self.steps, ColumnModel.of(pack))
+        background, _ = split_background(golden_tables(pack))
+        lens = SpecLens(clauses, self.steps, ColumnModel.of(pack),
+                        drafting=drafting_steps(pack, self.steps), initial=background)
         canon = canon_scenarios(pack)
         candidates = enumerate_scenarios(boundary_domain(pack))
         by_id = {s.id: s for s in [*canon.values(), *candidates]}
