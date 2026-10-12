@@ -1,17 +1,20 @@
 """Every pre-registered value (spec v2 §3.10, experiments/p1b-preregistration.md) is the
 value the code uses. Changing one after a P1b result is seen breaks this test."""
 
+import inspect
 from pathlib import Path
 
 import pytest
 
+from specdx.active.loop import SpecDxConfig
 from specdx.eval import matching, observability, screen
 from specdx.eval.pilot import GateConfig
 from specdx.infer import act, latent, scores, sensitivity
-from specdx.interpreters import harness
+from specdx.interpreters import executor, harness
 from specdx.scenarios import tguided
 
 ROOT = Path(__file__).parents[1]
+_CFG = SpecDxConfig.__dataclass_fields__
 
 
 @pytest.mark.parametrize(("value", "registered"), [
@@ -26,6 +29,14 @@ ROOT = Path(__file__).parents[1]
     (tguided.MAX_TBOUNDARY, 12), (tguided.WINDOW, 40),
     (observability.SCORABLE_K, 3), (matching.MIN_SCORABLE, 3),
     (matching.ABSOLUTE_BAR, 0.4),
+    (inspect.signature(act.fit_rasch).parameters["tol"].default, 1e-6),
+    (inspect.signature(act.fit_rasch).parameters["max_iter"].default, 100),
+    (_CFG["k_max"].default, 6), (_CFG["p_single"].default, 0.9),
+    (_CFG["tau"].default, 0.05), (_CFG["ambig_threshold"].default, 0.5),
+    (executor.TEMPERATURE, 0.7),
+    (inspect.signature(matching.gate_verdict).parameters["required"].default, 3),
+    (screen.SCREEN_SCENARIO, "happy"),
+    (screen.SCREEN_VARIANTS, (0, 1, 2)), (screen.SCREEN_SEEDS, (1, 2, 3)),
 ])
 def test_the_code_uses_the_pre_registered_values(value, registered) -> None:
     assert value == registered
@@ -52,5 +63,10 @@ def test_the_pre_registration_states_each_value() -> None:
     text = (ROOT / "experiments" / "p1b-preregistration.md").read_text(encoding="utf-8")
     for needle in ("Beta(7, 3)", "τ_H = 0.5", "ω = 0.3", "m_min = 3", "λ = 1.0", "2000",
                    "q = 0.1", "k = 3", "≥ 0.6", "≥ 0.8", "at most 12", "GO criterion",
-                   "mechanism check", "θ ≥ 0.5", "θ ordering"):
+                   "mechanism check", "θ ≥ 0.5", "θ ordering",
+                   "population 200, probe 100, localise 80", "≤ 2 per family", "≤ 4 in all",
+                   "temperature 0.7", "K_max = 6", "τ = 0.05", "at least one acted behaviour",
+                   "Run weight", "NO-GO on all 21 specifications", "0.961", "0.743", "24 items",
+                   "0.918 against 0.515", "0.75 against 0.507", "Proposition 2′",
+                   "(a) On the base", "(c) At least 50%", "e66bfa5", "0d30803"):
         assert needle in text, needle

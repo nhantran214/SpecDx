@@ -2,24 +2,26 @@
 
 - **Spec:** `docs/superpowers/specs/2026-10-11-specdx-v2-design.md` (v2), a delta on `2026-10-06-specdx-design.md` (v1).
 - **Plan:** `docs/superpowers/plans/2026-10-11-specdx-p1b.md`.
-- **Rule:** this file is committed before the capability screen runs. Nothing in it changes after any P1b result is seen. `tests/test_preregistration.py` pins every value below to the code.
+- **Rule:** this file is committed before the capability screen runs. Nothing in it changes after any P1b result is seen. `tests/test_preregistration.py` pins every named constant below to the code (for example `MAX_NUDGES`, `RASCH_L2`, `TAU_H`, the screen constants, `SpecDxConfig` defaults); the oracle's seed 1 is a literal in `specdx/active/loop.py` and is not pinned by a constant.
 
-## 1. Offline replay (before any new run)
+## 1. Offline replay
 
-The v2 inference runs on the P1 run cache: the base specification and the 20 development mutants, with the old population (qwen3:14b, qwen2.5:7b-instruct-q4_K_M, llama3.1:8b) and their 200 population runs each. No run is executed and no refutation is attempted.
+The mechanism-check criterion below was committed in the plan (commits e66bfa5 and 5dcf5fb) before the replay ran. The replay then ran, read-only, and its verdict was **GO** (`results/p1b-replay.md`, commits 0d30803 and 50036a4). The v2 inference ran on the P1 run cache: the base specification and the 20 development mutants, with the old population (qwen3:14b, qwen2.5:7b-instruct-q4_K_M, llama3.1:8b) and their 200 population runs per specification, 4,200 in all. No run was executed and no refutation was attempted.
 
 - **GO criterion: a mechanism check** (author's ruling, 2026-10-12). It holds when all three are true:
-  1. On the base and on each of the 20 development mutants, stage 1 gives llama3.1:8b, which never writes, a κ strictly below every other model's.
-  2. On the same 21 specifications, every model with at least one acted behaviour has θ ≥ 0.5, and at least one model acted.
-  3. At least 50% of the P1 base findings become Unobservable.
+  - (a) On the base and on each of the 20 development mutants, stage 1 gives llama3.1:8b, which never writes, a κ strictly below every other model's.
+  - (b) On the same 21 specifications, every model with at least one acted behaviour has θ ≥ 0.5, and at least one model acted.
+  - (c) At least 50% of the P1 base findings become Unobservable.
+- **Caveat on (a).** The 21 specifications of criterion (a) are not 21 independent stage-1 fits: in the replay (`results/p1b-replay.md`), 14 of the 20 development mutants share one κ triple to three decimals and 2 share another, so there are 7 distinct κ triples across the 21 specifications.
 - **Disclosure: the criterion was revised after a planning pre-check.**
   - The first draft required both of these on every specification: the model with the highest κ does not have the lowest θ, and θ(qwen3:14b) ≥ θ(llama3.1:8b).
-  - The pre-check measured θ(llama3.1:8b) 0.961 against θ(qwen3:14b) 0.743, κ ranking qwen3 > qwen2.5 > llama, and 61 of 91 P1 base findings becoming Unobservable.
-  - On the P1 population only one family (qwen) writes. Proposition 2′ needs at least two acting families, so a θ ordering there carries no information about v2.
+  - Under that criterion the replay verdict was NO-GO on all 21 specifications: θ(llama3.1:8b) = 0.961 against θ(qwen3:14b) = 0.743. κ ranks qwen3 > qwen2.5 > llama, and 61 of 91 P1 base findings become Unobservable.
+  - Only the 24 items of the three non-drafting steps (check_availability, P2, P6) are observable on the P1 population, and llama "acts" there by completing the step without writing.
+  - The verdict does not depend on resolutions 2 and 4: with P1's plug-in ε, θ is 0.918 against 0.515; if every interpreter step must write to act, llama never acts and keeps 0.75 against 0.507.
+  - The author's reason: on the P1 population only one family (qwen) writes, and Proposition 2′ needs at least two acting families, so a θ ordering there carries no information about v2.
   - The author therefore moved the θ ordering to the screened population (§4) and kept the mechanism check for the P1 cache.
-  - The 21 specifications of criterion (a) are not 21 independent stage-1 fits: in the replay (`results/p1b-replay.md`), 14 of the 20 development mutants share one κ triple to three decimals and 2 share another, so there are 7 distinct κ triples across the 21 specifications.
 - **Reported in addition:** the number of P1 base findings that become Unobservable, Oₛ per item, and the S2 p-values.
-- **NO-GO** stops P1b before any infrastructure work, and the result goes to the author.
+- **NO-GO** would have stopped P1b before any infrastructure work, with the result going to the author.
 
 ## 2. Interpreter population
 
@@ -45,20 +47,30 @@ The v2 inference runs on the P1 run cache: the base specification and the 20 dev
 | Observable item | Oₛ ≥ ω = 0.3 and at least m_min = 3 acted behaviours |
 | Classes | the ≡_S projection of the step's slice (locked values and blank presence), without the step status |
 | Stage 2 data | acted behaviours only |
-| θ prior | Beta(7, 3); M-step θₘ = (Sₘ + 6) / (nₘ + 8); a model with no acted behaviour keeps 0.75 |
+| θ prior | Beta(7, 3); θ is the closed-form MAP, M-step θₘ = (Sₘ + 6) / (nₘ + 8); a listed model with no acted behaviour gets 0.75. The family effect (a family's mean logit θ minus the population's) is estimated and reported, but does not feed θ |
+| Run weight | the mean, over the items where the run acted, of P([b] ∈ Aₛ) × θₘ; 0 for a run that acted nowhere |
 | Error distribution ε | re-estimated in each EM iteration from the outputs not explained as faithful (add-one smoothing) |
-| K_max, P(\|A\| = 1) | 6, 0.9 |
+| K_max, P(\|A\| = 1), τ | K_max = 6, P(\|A\| = 1) = 0.9, τ = 0.05 (the hitting sets cover at least 1 − τ of the weighted mass) |
 | V(b) | violated clauses relevant to an item where b acted |
 | Typing | only candidates whose every clause is read by an observable item; others are Unobservable, never scored |
-| Hidden | refuted or unattempted singleton with Hidden(c) ≥ τ_H = 0.5 |
-| Weak | v1 rule on an observable item; the reference is the most probable class of the (clean) MAP set |
+| Hidden | refuted or unattempted singleton with Hidden(c) ≥ τ_H = 0.5; Hidden(c) is 0 when no acted view supports c, and is maximised over the scenario's observable items only |
+| Weak | v1 rule on an observable item; a weak deviant is compared with the most probable class of the (clean) MAP set |
 | S1 | P(\|Aₛ\| ≥ 2), reported at ≥ 0.5 |
 | S2 | competent models θₘ ≥ 0.5; plug-in I(K; V \| M); 2000 permutations of V within each model, seeded; p = (1 + #{I_perm ≥ I_obs}) / (R + 1); tested with ≥ 6 behaviours, ≥ 2 classes, ≥ 2 variants; Benjamini–Hochberg at q = 0.1 per specification |
-| Ambiguity score | max(S1, 1 − pₛ) |
-| ddmin oracle | one re-run per (competent model, Tell variant) at seed 1; passes while two acted re-runs differ on the ambiguity's fields |
+| Ambiguity score | max(S1, 1 − pₛ), with 1 − pₛ = 0 when S2 did not test the item |
+| ddmin oracle | one re-run per (model with θₘ ≥ 0.5 and at least one acted behaviour in the specification, Tell variant) at seed 1, most competent first; a prior-only θ (0.75, no acted behaviour) is not evidence of competence, and with no such model the ambiguity stays unlocalised; passes while two acted re-runs differ on the ambiguity's fields |
 | T-boundary scenarios | number within 40 characters of a comparison keyword in the same sentence; % or phần trăm → discount_pct; near số lượng, đơn vị, units or quantity → received; v − 1, v, v + 1 on the anchor; at most 12 per specification; queued after the canon scenarios |
 | Budgets | population 200, probe 100, localise 80 per specification |
 | Sampling | temperature 0.7, Tell variants 0–2, seeds 1–3 |
+
+**Other rules the code applies.**
+
+- Weak: the members of an ambiguity reported at the item are excluded from its weak check.
+- An S2-only ambiguity takes the two most frequent classes among the acted readings of competent models, ties by class key, and is reported only when its members differ on some field.
+- T-boundary selection: only physical scenarios (grn_count ≤ received ≤ ordered + 1, 0 ≤ discount ≤ 100); canon points and repeats are skipped; the literal order (source, chunk, sentence, offset) decides which 12 are kept; dates, times and fractions are not literals.
+- Harness: text calls are parsed only when the reply has no native call, and several run in order; a model with zero calls has valid-call rate 0; there is no nudge on the last round.
+- All attempts of one DirectedProbe candidate are charged, then dispatched as one batch; the witness is the first in submission order (planning resolution 11).
+- The Rasch Newton iteration uses step halving.
 
 **Execution and reproduction.** A report made with N workers is byte-identical to the one-worker report over the same cached runs; fresh runs with `OLLAMA_NUM_PARALLEL` above 1 are not guaranteed to be bit-identical, because the model server batches inference.
 
