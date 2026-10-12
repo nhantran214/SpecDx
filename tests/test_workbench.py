@@ -73,3 +73,13 @@ def test_configured_tell_variants_must_exist(tmp_path) -> None:
     config = SpecDxConfig({"ref": ("reference",)}, variants=(0, 1))
     with pytest.raises(ValueError, match="make-variants"):
         bench.loop_context(bench.base, config)
+
+
+def test_the_context_carries_the_t_literals_and_t_boundary_scenarios(tmp_path) -> None:
+    bench = Workbench.open(tmp_path, factory=lambda i, c, s: reference_executor(),
+                           model_digest=lambda m: m)
+    ctx = bench.loop_context(bench.base, SpecDxConfig({"ref": ("reference",)}))
+    assert {x.bound for x in ctx.literals} == {("discount_pct", 5), ("discount_pct", 8)}
+    assert [s.id for s in ctx.tboundary] == [f"o15-r12-d{d}-g1" for d in (4, 5, 6, 7, 8, 9)]
+    signatures = {s.signature() for s in ctx.candidates}
+    assert all(s.signature() in signatures for s in ctx.tboundary)

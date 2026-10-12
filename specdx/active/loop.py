@@ -17,6 +17,7 @@ from specdx.infer.items import ItemView, acted_violations, observations
 from specdx.infer.latent import Posterior, fit
 from specdx.infer.scores import ambiguity_key, diagnose, identity, merge_defects
 from specdx.interpreters.population import committee, pilot
+from specdx.scenarios.tguided import TLiteral
 from specdx.spec.columns import Projection
 from specdx.types import Behaviour, Defect, InterpreterId, Refuter, RefuteResult, Scenario
 from specdx.variant import SpecVariant
@@ -74,6 +75,9 @@ class SpecDxConfig:
 
 @dataclass
 class LoopContext:
+    """tboundary: the T-boundary scenarios, queued after the canon ones; literals: the T
+    literals they come from, reported per specification (spec v2 §3.7)."""
+
     runner: RunnerLike
     lens: LensLike
     canon: dict[str, Scenario]
@@ -81,6 +85,8 @@ class LoopContext:
     cap_pct: int
     refuter_factory: Callable[[Sequence[InterpreterId], RunBudget], Refuter]
     localizer: Localizer | None = None
+    tboundary: list[Scenario] = field(default_factory=list)
+    literals: list[TLiteral] = field(default_factory=list)
 
 
 @dataclass

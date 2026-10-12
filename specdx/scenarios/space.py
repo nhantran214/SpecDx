@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Iterable
 
 from tonomyx.canon.pack import CanonPack
 from tonomyx.flow.handlers import PO
@@ -34,22 +35,31 @@ def discount_cap_pct(pack: CanonPack) -> int:
     return round(float(row["gia_tri"]) * 100)
 
 
-def boundary_domain(pack: CanonPack) -> dict[str, list[int]]:
-    """Canon values plus the values on either side of every literal that matters."""
+def boundary_domain(
+    pack: CanonPack, bound: Iterable[tuple[str, int]] = ()
+) -> dict[str, list[int]]:
+    """Canon values plus the values on either side of every literal that matters: the
+    lifted clauses' literals, and each (parameter, value) bound from T (spec v2 §3.7).
+    enumerate_scenarios keeps only the physical combinations; discounts stay in 0..100."""
     canon = canon_scenarios(pack)
     anchor = canon[ANCHOR]
     ordered = anchor.ordered
     cap = discount_cap_pct(pack)
-    return {
-        "ordered": sorted({ordered - 1, ordered, ordered + 1}),
-        "received": sorted(
+    domain = {
+        "ordered": {ordered - 1, ordered, ordered + 1},
+        "received": (
             {s.received for s in canon.values()}
             | {ordered - 1, ordered, ordered + 1}
             | {anchor.received - 1, anchor.received + 1}
         ),
-        "discount_pct": sorted({s.discount_pct for s in canon.values()} | {cap - 1, cap, cap + 1}),
-        "grn_count": [1, 2],
+        "discount_pct": {s.discount_pct for s in canon.values()} | {cap - 1, cap, cap + 1},
+        "grn_count": {1, 2},
     }
+    for parameter, value in bound:
+        for v in (value - 1, value, value + 1):
+            if v >= 0 and (parameter != "discount_pct" or v <= 100):
+                domain[parameter].add(v)
+    return {k: sorted(v) for k, v in domain.items()}
 
 
 def enumerate_scenarios(domain: dict[str, list[int]]) -> list[Scenario]:

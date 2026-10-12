@@ -29,6 +29,7 @@ from specdx.scenarios.space import (
     discount_cap_pct,
     enumerate_scenarios,
 )
+from specdx.scenarios.tguided import extract_literals, tboundary_scenarios
 from specdx.spec.clauses import ClauseSet
 from specdx.spec.columns import ColumnModel
 from specdx.spec.tell import Chunk, TellCorpus, pdf_chunks
@@ -120,8 +121,10 @@ class Workbench:
         lens = SpecLens(clauses, self.steps, ColumnModel.of(pack),
                         drafting=drafting_steps(pack, self.steps), initial=background)
         canon = canon_scenarios(pack)
-        candidates = enumerate_scenarios(boundary_domain(pack))
-        by_id = {s.id: s for s in [*canon.values(), *candidates]}
+        literals = extract_literals(variant.corpus)
+        candidates = enumerate_scenarios(boundary_domain(pack, [x.bound for x in literals]))
+        tboundary = tboundary_scenarios(canon, literals)
+        by_id = {s.id: s for s in [*canon.values(), *candidates, *tboundary]}
 
         def refuter_factory(
             interps: Sequence[InterpreterId], budget: RunBudget
@@ -161,4 +164,4 @@ class Workbench:
             return None if found is None else tuple(found)
 
         return LoopContext(self.runner, lens, canon, candidates, discount_cap_pct(pack),
-                           refuter_factory, localizer)
+                           refuter_factory, localizer, tboundary=tboundary, literals=literals)
