@@ -105,7 +105,8 @@ class Report:
     the probe and localisation budgets. ambiguity_keys are the ambiguities found, before
     the differential and localisation; ambiguity_dropped those the differential removed.
     The v2 additions (spec v2 §3.8): κ per model; per item δ, O_s, whether it is
-    observable, and its ambiguity signals S1, S2, p; the Unobservable list; the T literals."""
+    observable, and its ambiguity signals S1, S2, p; the Unobservable list; the T literals.
+    family_effect is the model-family effect on the logit scale (spec v2 §3.3)."""
 
     variant: str
     defects: list[Defect]
@@ -121,6 +122,7 @@ class Report:
     # Singleton locations that spent probes and were dropped below τ_H (Diagnosis.spent).
     spent: frozenset[tuple[str, ...]] = frozenset()
     kappa: dict[str, float] = field(default_factory=dict)
+    family_effect: dict[str, float] = field(default_factory=dict)
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     unobservable: list[Defect] = field(default_factory=list)
     literals: list[TLiteral] = field(default_factory=list)
@@ -131,7 +133,7 @@ class Report:
              "unobservable": [asdict(d) for d in self.unobservable],
              "runs": self.runs, "probe_runs": self.probe_runs, "ddmin_runs": self.ddmin_runs,
              "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta,
-             "kappa": self.kappa, "items": self.items,
+             "kappa": self.kappa, "family_effect": self.family_effect, "items": self.items,
              "literals": [x.as_dict() for x in self.literals],
              "spent": [list(loc) for loc in sorted(self.spent)]},
             ensure_ascii=False, indent=2,
@@ -316,5 +318,6 @@ def run_specdx(
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
                   dict(posterior.theta), behaviours, probe_runs=budget.probe,
                   ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped,
-                  spent=spent, kappa=dict(rasch.kappa), items=item_table(rasch, diagnosis),
+                  spent=spent, kappa=dict(rasch.kappa),
+                  family_effect=dict(posterior.family_effect), items=item_table(rasch, diagnosis),
                   unobservable=diagnosis.unobservable, literals=list(ctx.literals))

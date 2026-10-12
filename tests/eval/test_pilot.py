@@ -242,12 +242,19 @@ def test_scorability_comes_from_the_base_runs_and_only_scorable_mutants_count(
     assert base["touches"] == {"H1-00": 4, "H1-01": 0}
     assert base["theta"] and base["kappa"] is not None and base["unobservable"] == []
     assert set(base["items"]) == {"grn12|s"}
+    assert base["literals"] == [] and set(base["family_effect"]) and all(
+        isinstance(v, float) for v in base["family_effect"].values())
     data = json.loads(result.to_json())
     assert set(data["primary"]) == {"typed", "untyped"} and data["touches"] == base["touches"]
     assert data["scorable"] == ["H1-00"]
     assert data["scorable_per_type"]["hidden"] == 1 and data["mutants_per_type"]["hidden"] == 2
     assert [(x["mutant"], x["scorable"]) for x in mutants] == [("H1-00", True), ("H1-01", False)]
     assert all(x["unobservable"] == [] and x["delta_shift"] == {"grn12|s": 0.0} for x in mutants)
+    # the per-specification report fields (spec v2 §3.7, §3.8), on every mutant that ran
+    for x in mutants:
+        assert x["theta"] == base["theta"] and x["kappa"] == base["kappa"]
+        assert x["family_effect"] == base["family_effect"]
+        assert set(x["items"]) == {"grn12|s"} and x["literals"] == []
     report = gate_markdown(result)
     assert "| hidden | 1 of 2 |" in report and "| H1-01 | hidden | 0 | no |" in report
 

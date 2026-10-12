@@ -133,3 +133,46 @@ def test_cache_info_prints_the_cached_runs(monkeypatch, tmp_path, capsys) -> Non
     monkeypatch.setattr("specdx.cli.WORK_DIR", tmp_path)
     assert main(["cache-info"]) == 0
     assert "| qwen3:14b | abc | ok | 1 |" in capsys.readouterr().out
+
+
+def _run_config(tmp_path, population) -> Path:
+    import json
+
+    path = tmp_path / "gate.json"
+    path.write_text(json.dumps({"models_by_family": population, "variants": [0], "seeds": [1],
+                                "budget": 1, "dev_per_type": 1, "rng_seed": 1}))
+    return path
+
+
+def test_run_refuses_an_empty_population_before_any_pack_is_built(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    opened = []
+    monkeypatch.setattr("specdx.workbench.Workbench.open",
+                        lambda workers: opened.append(workers) or SimpleNamespace())
+    with pytest.raises(ValueError, match="empty"):
+        main(["run", "--config", str(_run_config(tmp_path, {})),
+              "--out", str(tmp_path / "r.json")])
+    assert opened == []
+
+
+@pytest.mark.parametrize(("variant", "localize"), [("base", False), ("H1-00", True)])
+def test_run_localises_only_when_the_variant_is_not_the_base(
+    monkeypatch, tmp_path, variant, localize
+) -> None:
+    from types import SimpleNamespace
+
+    from specdx.active.loop import Report
+
+    seen = []
+    mutant = SimpleNamespace(id="H1-00", variant=SimpleNamespace(name="H1-00"))
+    bench = SimpleNamespace(base=SimpleNamespace(name="base"), pdf=None, work_dir=tmp_path,
+                            loop_context=lambda v, c: None)
+    monkeypatch.setattr("specdx.workbench.Workbench.open", lambda workers: bench)
+    monkeypatch.setattr("specdx.mutate.operators.all_mutants", lambda *a: [mutant])
+    monkeypatch.setattr("specdx.active.loop.run_specdx",
+                        lambda v, ctx, cfg: seen.append(cfg.localize) or Report(
+                            v.name, [], 0, 0, [], {}))
+    assert main(["run", "--config", str(_run_config(tmp_path, {"q": ["a"]})),
+                 "--variant", variant, "--out", str(tmp_path / "r.json")]) == 0
+    assert seen == [localize]

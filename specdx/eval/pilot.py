@@ -254,6 +254,11 @@ def _mutant_line(
         "ambiguity_dropped": None if report is None else _keys(report.ambiguity_dropped),
         "touches": touched, "scorable": is_scorable,
         "unobservable": None if report is None else _defects(report.unobservable),
+        "theta": None if report is None else report.theta,
+        "kappa": None if report is None else report.kappa,
+        "family_effect": None if report is None else report.family_effect,
+        "items": None if report is None else report.items,
+        "literals": None if report is None else [x.as_dict() for x in report.literals],
         "delta_shift": None if report is None or base is None else delta_shift(base, report),
         "failure": failure,
     }
@@ -299,7 +304,8 @@ def run_gate(
                "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base),
                "ambiguity_keys": _keys(base.ambiguity_keys),
                "unobservable": _defects(base.unobservable), "theta": base.theta,
-               "kappa": base.kappa, "items": base.items, "touches": touched})
+               "kappa": base.kappa, "family_effect": base.family_effect, "items": base.items,
+               "literals": [x.as_dict() for x in base.literals], "touches": touched})
         for m in mutants:
             report: Report | None = None
             try:
@@ -329,7 +335,7 @@ def run_gate(
             lines.close()
     scores = {n: evaluate_reports(reports[n], truths, bases[n]) for n in reports}
     untyped = {n: evaluate_reports(reports[n], truths, bases[n], typed=False) for n in reports}
-    
+
     def primary_of(typed: bool) -> dict[str, dict[str, Prf]]:
         return {n: evaluate_reports({k: v for k, v in reports[n].items() if k in keep},
                                     truths, bases[n], typed=typed) for n in reports}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import sys
 from collections import Counter
@@ -151,10 +152,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"| {model} | {c.declares_tools} | {c.calls_tool} | {c.usable} |")
         return 0
 
-    if args.command == "gate":
+    if args.command in ("gate", "run"):
         from specdx.eval.pilot import GateConfig as _GateConfig
 
-        # Refuse an empty or unscreened population before any pack is built.
+        # Refuse an empty or unscreened population before any pack is built; the smoke
+        # run is held to it too.
         _GateConfig.load(args.config).check_population()
 
     from specdx.mutate.operators import all_mutants, dev_split
@@ -194,6 +196,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             mutants = {m.id: m for m in all_mutants(bench.base, bench.pdf, bench.work_dir)}
             variant = mutants[args.variant].variant
         cfg = config.specdx()
+        if args.variant == "base":  # the gate's base run does not localise either
+            cfg = dataclasses.replace(cfg, localize=False)
         report = run_specdx(variant, bench.loop_context(variant, cfg), cfg)
         args.out.write_text(report.to_json(), encoding="utf-8")
         for d in report.defects[:10]:

@@ -17,7 +17,7 @@ from specdx.active.ddmin import OutOfBudget, localize_ambiguity
 from specdx.active.loop import LoopContext, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
 from specdx.config import BASE_PACK, OLLAMA_URL, OLLAMA_URLS, PDF_DIR, WORK_DIR
-from specdx.db import PackDatabase, golden_tables, split_background
+from specdx.db import PackDatabase, _hold_lock, golden_tables, split_background
 from specdx.infer.act import drafting_steps
 from specdx.infer.items import SpecLens
 from specdx.interpreters.cache import RunCache
@@ -112,6 +112,7 @@ class Workbench:
         variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
                     variants, pdf, base, work_dir)
+        _hold_lock(bench.db.url)  # one SpecDx process per run cache, whatever the workers
         digests = model_digest or ollama_digests(hosts)
         context = context_digest(tell_payload(variants), bench.settings)
 

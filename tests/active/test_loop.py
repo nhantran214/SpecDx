@@ -352,6 +352,9 @@ def test_the_report_carries_stage_one_the_signals_and_the_literals() -> None:
     out = json.loads(report.to_json())
     assert out["literals"] == [literal.as_dict()] and out["unobservable"] == []
     assert set(out["items"]) == set(report.items) and out["kappa"] == report.kappa
+    # the family effect the pre-registration promises: one value per family, in the report
+    assert out["family_effect"] == report.family_effect
+    assert set(report.family_effect) == {"qwen", "llama"}
 
 
 class IdleLens(FakeLens):

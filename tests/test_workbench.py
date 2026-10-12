@@ -3,6 +3,7 @@ import dataclasses
 import pytest
 
 from specdx.active.loop import SpecDxConfig
+from specdx.db import _hold_lock
 from specdx.interpreters.prompt import TellVariants, load_variants
 from specdx.orchestrate.reference import reference_executor
 from specdx.types import InterpreterId
@@ -161,3 +162,13 @@ def test_an_empty_oracle_leaves_the_ambiguity_unlocalised_and_spends_nothing(
 ) -> None:
     persists, budget, _, _ = _split_oracle(tmp_path, monkeypatch, [])
     assert persists(None) is False and budget.ddmin == 0
+
+
+def test_opening_a_workbench_takes_the_main_database_lock(tmp_path, monkeypatch) -> None:
+    taken = []
+    real = _hold_lock
+    monkeypatch.setattr("specdx.workbench._hold_lock",
+                        lambda url: taken.append(url) or real(url), raising=False)
+    bench = Workbench.open(tmp_path, factory=lambda i, c, s: reference_executor(),
+                           model_digest=lambda m: m)
+    assert taken == [bench.db.url]

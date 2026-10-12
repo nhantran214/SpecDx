@@ -146,6 +146,8 @@ def _item_posterior(
 
 
 def _family_effect(theta: dict[str, float], family: dict[str, str]) -> dict[str, float]:
+    """Each family's mean logit θ minus the population's mean logit θ. A listed model with no
+    acted behaviour is in the mean at logit(0.75), the prior's mode (its θ is unshrunk)."""
     logits = {m: _logit(min(max(th, _EDGE), 1 - _EDGE)) for m, th in theta.items()}
     mu = sum(logits.values()) / len(logits)
     out: dict[str, float] = {}
