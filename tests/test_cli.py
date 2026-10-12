@@ -12,7 +12,8 @@ def test_help_lists_every_subcommand(capsys) -> None:
         main(["--help"])
     assert exit_info.value.code == 0
     out = capsys.readouterr().out
-    for command in ("build-tell", "make-variants", "capability", "mutants", "run", "gate"):
+    for command in ("build-tell", "make-variants", "capability", "screen", "mutants", "run",
+                    "gate"):
         assert command in out
 
 
@@ -102,3 +103,21 @@ def test_the_gate_refuses_an_empty_population_before_building_any_pack(
     monkeypatch.setattr("specdx.mutate.operators.all_mutants", boom)
     with pytest.raises(ValueError, match="empty"):
         main(["gate", "--config", str(config), "--out", str(tmp_path / "g.json")])
+
+
+def test_screen_writes_both_files_and_exits_3_on_the_stop_rule(monkeypatch, tmp_path) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from tests.eval.test_screen import BASE, CANON, _Lens, _Runner
+
+    profile = tmp_path / "gpu.json"
+    profile.write_text(json.dumps({"profile": "gpu", "workers": 1, "ollama_num_parallel": 1,
+                                   "candidates": {"a": ["good"], "b": ["idle"]}}))
+    bench = SimpleNamespace(base=BASE, runner=_Runner(),
+                            loop_context=lambda v, c: SimpleNamespace(lens=_Lens(), canon=CANON))
+    monkeypatch.setattr("specdx.workbench.Workbench.open", lambda: bench)
+    out = tmp_path / "results" / "screen"
+    assert main(["screen", "--profile", str(profile), "--out", str(out)]) == 3
+    assert json.loads((tmp_path / "results" / "screen.json").read_text())["stop"] is True
+    assert "STOP" in (tmp_path / "results" / "screen.md").read_text()

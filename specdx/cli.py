@@ -61,6 +61,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "(no faithful paraphrase exists); no model is called")
     cap = sub.add_parser("capability", help="check native tool calling of local models")
     cap.add_argument("models", nargs="+")
+    scr = sub.add_parser("screen", help="run the capability screen and choose the population")
+    scr.add_argument("--profile", required=True,
+                     help="a hardware profile: a name under experiments/profiles, or a path")
+    scr.add_argument("--out", type=Path, required=True,
+                     help="writes OUT.md and OUT.json (exit status 3 when the stop rule holds)")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
     run = sub.add_parser("run", help="run SpecDx on the base specification or one mutant")
     run.add_argument("--variant", default="base")
@@ -131,6 +136,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     from specdx.workbench import Workbench
 
     bench = Workbench.open()
+    if args.command == "screen":
+        from specdx.active.loop import SpecDxConfig
+        from specdx.eval.screen import SCREEN_VARIANTS, load_profile, run_screen, screen_markdown
+
+        profile = load_profile(args.profile)
+        ctx = bench.loop_context(bench.base, SpecDxConfig(profile.candidates,
+                                                          variants=SCREEN_VARIANTS))
+        screen = run_screen(bench.runner, bench.base, ctx.lens, ctx.canon, profile.candidates)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.with_suffix(".json").write_text(screen.to_json(), encoding="utf-8")
+        text = screen_markdown(screen, profile.name)
+        args.out.with_suffix(".md").write_text(text, encoding="utf-8")
+        print(text)
+        return 3 if screen.stop else 0
+
     if args.command == "mutants":
         for m in all_mutants(bench.base, bench.pdf, bench.work_dir):
             location = ", ".join(sorted(m.truth.location))
