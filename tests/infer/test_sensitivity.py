@@ -31,20 +31,28 @@ def test_the_type_one_error_is_controlled_under_the_null() -> None:
     rejected = sum(p <= 0.1 for p in pvalues.values()) / len(pvalues)
     assert len(pvalues) >= 190 and rejected <= 0.1 + 0.05
     assert len(benjamini_hochberg(pvalues, 0.1)) / len(pvalues) <= 0.1 + 0.05
-    # Regression: tie tolerance must not be zero. Use a strong effect case where
-    # floating-point differences could otherwise lose permutations at the margin.
-    tie_readings = (
-        [Reading("m1", 0, "A"), Reading("m1", 0, "A"),
-         Reading("m1", 1, "B"), Reading("m1", 1, "B"),
-         Reading("m1", 2, "C"), Reading("m1", 2, "C")] +
-        [Reading("m2", 0, "A"), Reading("m2", 0, "A"),
-         Reading("m2", 1, "B"), Reading("m2", 1, "B"),
-         Reading("m2", 2, "C"), Reading("m2", 2, "C")]
-    )
-    stat, p = permutation_test(tie_readings, permutations=2000, seed=999, item="tie_test")
-    # With _TIE=1e-12, permutations within floating-point noise of observed are counted.
-    # This specific case gives p≈0.006; the tie tolerance guard ensures consistency.
-    assert 0.004 <= p <= 0.015, f"p-value {p} out of expected range (tie tolerance may be broken)"
+    # Regression: tie tolerance must not be zero. Without it, permutations within
+    # floating-point epsilon of observed are missed, altering p-values significantly.
+    # This case was found by searching random 2-model, 3-variant datasets.
+    tie_readings = [
+        Reading('m2', 2, 'C'),
+        Reading('m1', 1, 'A'),
+        Reading('m1', 0, 'A'),
+        Reading('m2', 1, 'A'),
+        Reading('m2', 2, 'A'),
+        Reading('m1', 0, 'C'),
+        Reading('m1', 1, 'B'),
+        Reading('m1', 1, 'A'),
+        Reading('m1', 0, 'C'),
+        Reading('m2', 0, 'A'),
+        Reading('m1', 0, 'A'),
+        Reading('m1', 0, 'A'),
+        Reading('m2', 1, 'A'),
+    ]
+    import pytest
+    stat, p = permutation_test(tie_readings)
+    # With _TIE=1e-12: p ≈ 0.5882; with _TIE=0.0: p ≈ 0.5087 (diff ≈ 0.0795).
+    assert p == pytest.approx(0.588205897051474, abs=1e-12)
 
 
 def test_the_test_is_deterministic_for_a_seed() -> None:
