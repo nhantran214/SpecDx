@@ -58,3 +58,20 @@ def test_escalate_on_a_new_correction_set_or_a_pilot_split() -> None:
     assert not should_escalate(agree, [frozenset(), frozenset()], seen)
     assert should_escalate(agree, [frozenset({"c"}), frozenset()], seen)
     assert should_escalate(split, [frozenset(), frozenset()], seen)
+
+
+def _unacted(item, klass):
+    return ItemView(item, "r", "m", "f", klass, frozenset(), (), acted=False)
+
+
+def test_a_class_split_with_one_unacted_view_does_not_escalate() -> None:
+    seen = {frozenset()}
+    sets = [frozenset(), frozenset()]
+    assert not should_escalate([_view("s|1", "K"), _unacted("s|1", "L")], sets, seen)
+    assert not should_escalate([_unacted("s|1", "K"), _unacted("s|1", "L")], sets, seen)
+
+
+def test_a_class_split_between_two_acted_views_escalates() -> None:
+    seen = {frozenset()}
+    views = [_view("s|1", "K"), _view("s|1", "L"), _unacted("s|1", "M")]
+    assert should_escalate(views, [frozenset(), frozenset()], seen)

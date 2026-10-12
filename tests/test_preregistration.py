@@ -68,5 +68,6 @@ def test_the_pre_registration_states_each_value() -> None:
                    "temperature 0.7", "K_max = 6", "τ = 0.05", "at least one acted behaviour",
                    "Run weight", "NO-GO on all 21 specifications", "0.961", "0.743", "24 items",
                    "0.918 against 0.515", "0.75 against 0.507", "Proposition 2′",
-                   "(a) On the base", "(c) At least 50%", "e66bfa5", "0d30803"):
+                   "(a) On the base", "(c) At least 50%", "e66bfa5", "0d30803",
+                   "counts acted views only"):
         assert needle in text, needle

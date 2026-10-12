@@ -70,8 +70,10 @@ OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve
 ## 5. The capability screen
 
 ```bash
-.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 2
+.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 1
 ```
+
+The examples use `--workers 1`. Use `--workers 2` only on a host where `OLLAMA_NUM_PARALLEL` is at least 2 and both models fit on the GPU together (§4).
 
 Each candidate runs the base specification on scenario `happy`, 3 Tell variants × 3 seeds, through the neutral harness. A model is admitted with act rate ≥ 0.6 and valid-call rate ≥ 0.8. The population keeps at most 2 models per family and 4 in all, and needs at least 2 families. With fewer, the command exits with status 3 and prints STOP: P1b stops and reports, and the thresholds are never lowered.
 
@@ -90,7 +92,7 @@ A short smoke run first:
 
 ```bash
 jq '.budget = 60' experiments/p1b-gate.json > work/smoke.json
-.venv/bin/specdx run --variant base --config work/smoke.json --out work/smoke-base.json --workers 2
+.venv/bin/specdx run --variant base --config work/smoke.json --out work/smoke-base.json --workers 1
 ```
 
 Check the pre-registered θ ordering before launching the gate. The population model with the highest κ must have a θ above the lowest θ of the others:
@@ -109,7 +111,7 @@ Then the gate, detached from the terminal so that closing it does not stop the r
 
 ```bash
 setsid nohup .venv/bin/specdx gate --config experiments/p1b-gate.json \
-  --out results/p1b-gate.json --workers 2 > work/p1b-gate.log 2>&1 < /dev/null &
+  --out results/p1b-gate.json --workers 1 > work/p1b-gate.log 2>&1 < /dev/null &
 echo $! > work/p1b-gate.pid
 tail -f work/p1b-gate.log                 # one line per executed run
 ```
@@ -168,7 +170,7 @@ The headline is PASSED, NOT PASSED or INCOMPLETE (a mutant could not run). After
    ```
 3. Kiểm tra máy và chọn cấu hình: `.venv/bin/specdx doctor`. Lệnh này gợi ý một profile (gpu16, gpu24, gpu48, gpu80) và in các lệnh `ollama pull` còn thiếu.
 4. Nếu Ollama chạy ở máy GPU khác: trên máy đó chạy `OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve`; trên máy này đặt `export SPECDX_OLLAMA_URL=http://may-gpu:11434` (nhiều máy thì cách nhau bằng dấu phẩy). Lưu ý: `--workers` không được vượt quá `OLLAMA_NUM_PARALLEL` của máy Ollama (mặc định 1), vì yêu cầu phải xếp hàng có thể hết thời gian chờ và bị ghi vĩnh viễn vào cache như hành vi của mô hình; nếu không chắc, dùng `--workers 1`.
-5. Sàng lọc năng lực: `.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 2`. Mã thoát 3 nghĩa là STOP: ít hơn 2 họ mô hình đạt, P1b dừng.
-6. Ghi quần thể vào cấu hình gate (lệnh `jq` ở mục 5), rồi chạy gate nền: `setsid nohup .venv/bin/specdx gate --config experiments/p1b-gate.json --out results/p1b-gate.json --workers 2 > work/p1b-gate.log 2>&1 < /dev/null &`.
+5. Sàng lọc năng lực: `.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 1`. Mã thoát 3 nghĩa là STOP: ít hơn 2 họ mô hình đạt, P1b dừng. Các lệnh ở đây dùng `--workers 1`; chỉ dùng `--workers 2` khi máy Ollama có `OLLAMA_NUM_PARALLEL` ≥ 2 và cả hai mô hình cùng vừa trong GPU (mục 4).
+6. Ghi quần thể vào cấu hình gate (lệnh `jq` ở mục 5), rồi chạy gate nền: `setsid nohup .venv/bin/specdx gate --config experiments/p1b-gate.json --out results/p1b-gate.json --workers 1 > work/p1b-gate.log 2>&1 < /dev/null &`.
 7. Tạm dừng: `kill -STOP <pid>`; chạy tiếp: `kill -CONT <pid>`. Không bao giờ chạy hai tiến trình trên cùng một cơ sở dữ liệu. Nếu bị ngắt, chạy lại đúng lệnh cũ: các lần chạy đã xong được lấy từ bộ nhớ đệm.
 8. Kết quả nằm ở `results/p1b-gate.md`.

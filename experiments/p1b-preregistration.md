@@ -71,6 +71,7 @@ The mechanism-check criterion below was committed in the plan (commits e66bfa5 a
 - Harness: text calls are parsed only when the reply has no native call, and several run in order; a model with zero calls has valid-call rate 0; there is no nudge on the last round.
 - All attempts of one DirectedProbe candidate are charged, then dispatched as one batch; the witness is the first in submission order (planning resolution 11).
 - The Rasch Newton iteration uses step halving.
+- Escalation: the pilot's "two or more classes at some step" trigger counts acted views only (author's ruling of 2026-10-12, made before any P1b result: the screen, smoke run and gate have not run); the new-correction-set trigger is unchanged.
 
 **Execution and reproduction.** A report made with N workers is byte-identical to the one-worker report over the same cached runs; fresh runs with `OLLAMA_NUM_PARALLEL` above 1 are not guaranteed to be bit-identical, because the model server batches inference. P1b runs with `--workers` no greater than the Ollama host's `OLLAMA_NUM_PARALLEL` (default 1), because a queued request that times out would be recorded as interpreter behaviour.
 

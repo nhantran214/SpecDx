@@ -193,7 +193,7 @@ Both signals are computed per observable item.
 
 - **Queue:** canon scenarios, then T-boundary scenarios, then the Thompson-sampling bandit, as in v1.
 - **Per iteration:** pilot, then escalation, then stage 1 and stage 2, then diagnosis (§3.4–§3.6).
-- **Unchanged:** budgets, escalation and the differential, including §11 item 13's ordering of base locations.
+- **Unchanged:** budgets and the differential, including §11 item 13's ordering of base locations. Escalation is unchanged except that its "two or more classes at some step" trigger counts acted views only (author's ruling, 2026-10-12): a non-acted view carries no reading, so a capability difference is not disagreement.
 - **Report additions:**
   - κₘ, θₘ and Oₛ per item;
   - the Unobservable list;

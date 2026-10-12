@@ -100,5 +100,6 @@ def should_escalate(
         return True
     classes: dict[str, set[str]] = defaultdict(set)
     for v in pilot_views:
-        classes[v.item].add(v.klass)
+        if v.acted:  # a view where the model did not act carries no reading (spec v2 §3.8)
+            classes[v.item].add(v.klass)
     return any(len(k) >= 2 for k in classes.values())
