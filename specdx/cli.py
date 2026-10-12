@@ -121,6 +121,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"| {model} | {c.declares_tools} | {c.calls_tool} | {c.usable} |")
         return 0
 
+    if args.command == "gate":
+        from specdx.eval.pilot import GateConfig as _GateConfig
+
+        # Refuse an empty or unscreened population before any pack is built.
+        _GateConfig.load(args.config).check_population()
+
     from specdx.mutate.operators import all_mutants, dev_split
     from specdx.workbench import Workbench
 

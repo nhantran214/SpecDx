@@ -32,7 +32,8 @@ from specdx.eval.matching import (
     literal_wins,
     match_findings,
 )
-from specdx.eval.observability import SCORABLE_K, scorable, touch_counts
+from specdx.eval.observability import scorable as scorable_ids
+from specdx.eval.observability import touch_counts
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.types import DEFECT_TYPES, Defect, InfrastructureError
 from specdx.variant import SpecVariant
@@ -160,7 +161,7 @@ class GateResult:
 
     @property
     def scorable(self) -> frozenset[str]:
-        return scorable(self.touches)
+        return scorable_ids(self.touches)
 
     def counts(self, only_scorable: bool) -> dict[str, int]:
         """Mutants per type, all of them or the scorable ones."""
@@ -225,6 +226,7 @@ def _mutant_line(
     report: Report | None,
     failure: str | None,
     touched: int = 0,
+    is_scorable: bool = False,
     base: Report | None = None,
 ) -> dict[str, Any]:
     matches = None
@@ -250,7 +252,7 @@ def _mutant_line(
         # before the differential, and the base noise it removed (spec §11 item 9)
         "ambiguity_keys": None if report is None else _keys(report.ambiguity_keys),
         "ambiguity_dropped": None if report is None else _keys(report.ambiguity_dropped),
-        "touches": touched, "scorable": touched >= SCORABLE_K,
+        "touches": touched, "scorable": is_scorable,
         "unobservable": None if report is None else _defects(report.unobservable),
         "delta_shift": None if report is None or base is None else delta_shift(base, report),
         "failure": failure,
@@ -275,6 +277,7 @@ def run_gate(
     # Scorability comes from the base runs alone, before any mutant runs (spec v2 §4.1).
     touched = touch_counts({m.id: m.truth.observed_at for m in mutants}, base.behaviours,
                            base_ctx.lens)
+    keep = scorable_ids(touched)
     canon_ids = set(base_ctx.canon)
     base_b2, base_b3 = _baselines(base.behaviours, base_ctx, base.theta, canon_ids)
     bases = {"specdx": base.defects, "b2": base_b2, "b3": base_b3}
@@ -306,11 +309,13 @@ def run_gate(
                 raise
             except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate
                 failed[m.id] = f"{type(exc).__name__}: {exc}"
-                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id], base))
+                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id],
+                                   m.id in keep, base))
                 continue
             if report.behaviours and all(b.status == "error" for b in report.behaviours):
                 failed[m.id] = report.behaviours[0].error
-                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id], base))
+                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id],
+                                   m.id in keep, base))
                 continue
             truths[m.id] = m.truth
             reports["specdx"][m.id] = report.defects
@@ -318,14 +323,13 @@ def run_gate(
                 report.behaviours, ctx, report.theta, canon_ids
             )
             found = {n: reports[n][m.id] for n in reports}
-            write(_mutant_line(m, found, bases, report, None, touched[m.id], base))
+            write(_mutant_line(m, found, bases, report, None, touched[m.id], m.id in keep, base))
     finally:
         if lines is not None:
             lines.close()
     scores = {n: evaluate_reports(reports[n], truths, bases[n]) for n in reports}
     untyped = {n: evaluate_reports(reports[n], truths, bases[n], typed=False) for n in reports}
-    keep = scorable(touched)
-
+    
     def primary_of(typed: bool) -> dict[str, dict[str, Prf]]:
         return {n: evaluate_reports({k: v for k, v in reports[n].items() if k in keep},
                                     truths, bases[n], typed=typed) for n in reports}

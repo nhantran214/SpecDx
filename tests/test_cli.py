@@ -86,3 +86,19 @@ def test_force_regenerates_and_saves_the_paraphrases(monkeypatch, capsys) -> Non
 def test_per_mutant_results_are_named_after_the_gate_output() -> None:
     assert mutants_path(Path("results/p1b-gate.json")) == Path("results/p1b-gate-mutants.jsonl")
     assert mutants_path(Path("results/p1-gate.json")) == Path("results/p1-gate-mutants.jsonl")
+
+
+def test_the_gate_refuses_an_empty_population_before_building_any_pack(
+    monkeypatch, tmp_path
+) -> None:
+    config = tmp_path / "gate.json"
+    config.write_text('{"models_by_family": {}, "variants": [0], "seeds": [1], "budget": 1, '
+                      '"dev_per_type": 1, "rng_seed": 1}', encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("a pack was built before the population was checked")
+
+    monkeypatch.setattr("specdx.workbench.Workbench.open", boom)
+    monkeypatch.setattr("specdx.mutate.operators.all_mutants", boom)
+    with pytest.raises(ValueError, match="empty"):
+        main(["gate", "--config", str(config), "--out", str(tmp_path / "g.json")])
