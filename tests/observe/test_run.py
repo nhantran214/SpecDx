@@ -7,6 +7,7 @@ from tonomyx.tools.catalog import build_registry
 
 from specdx.config import BASE_PACK
 from specdx.db import PackDatabase
+from specdx.infer.act import drafting_steps
 from specdx.interpreters.cache import RunCache
 from specdx.interpreters.executor import SpecInterpreterExecutor
 from specdx.interpreters.prompt import load_variants
@@ -197,3 +198,19 @@ def test_a_server_error_that_recovers_is_retried_and_cached(db, pack, variant, t
     runner = Runner(db, cache, factory, STEPS, model_digest=lambda m: "d")
     b = runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
     assert b.status == "ok" and len(cache) == 1 and sleeps == [2.0]
+
+
+def test_a_run_records_the_harness_counts_of_every_interpreter_step(
+    db, pack, variant, tmp_path
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Xong."}})
+
+    factory, _ = _ollama(handle)
+    runner = Runner(db, RunCache(tmp_path / "r.jsonl"), factory, STEPS, model_digest=lambda m: "d")
+    b = runner.run(variant, canon_scenarios(pack)["grn12"], InterpreterId("m", "f", 0, 1))
+    drafting = drafting_steps(pack, STEPS)
+    assert b.spec == "base"
+    assert set(b.harness) == {s.id for s in STEPS if s.kind != "env"}
+    assert all(b.harness[s]["nudges"] == (2 if s in drafting else 0) for s in b.harness)
+    assert RunCache(tmp_path / "r.jsonl").get(b.run_key) == b

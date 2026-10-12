@@ -35,7 +35,8 @@ def _context(work_dir) -> str:
     ("specdx.interpreters.executor.NUM_CTX", 8192),
     ("specdx.interpreters.executor.SEARCH_K", 3),
     ("specdx.interpreters.executor.SEARCH_REPLY_LIMIT", 6000),
-    ("specdx.observe.run.RUN_SCHEMA_VERSION", 3),
+    ("specdx.interpreters.harness.MAX_NUDGES", 1),
+    ("specdx.observe.run.RUN_SCHEMA_VERSION", 4),
 ])
 def test_any_interpreter_visible_setting_changes_the_context_digest(
     tmp_path, monkeypatch, setting, value

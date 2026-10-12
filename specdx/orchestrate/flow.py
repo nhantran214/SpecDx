@@ -23,9 +23,12 @@ from specdx.types import Scenario
 
 @dataclass
 class CaseRun:
+    """harness: per interpreter step, the counts the harness reported (spec v2 §2.1)."""
+
     statuses: dict[str, str] = field(default_factory=dict)
     claims: dict[str, str] = field(default_factory=dict)
     refused: list[tuple[str, str]] = field(default_factory=list)
+    harness: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _environment(runtime: DeRuntime, step: WorkStep, scenario: Scenario) -> tuple[str, str]:
@@ -83,6 +86,9 @@ def run_case(runtime: DeRuntime, scenario: Scenario, steps: Sequence[WorkStep]) 
                 for call in envelope.usage.get("tool_calls", [])
                 if call.get("outcome") != "ok"
             ]
+            counts = envelope.usage.get("harness")
+            if counts:
+                run.harness[step.id] = {k: int(v) for k, v in counts.items()}
         run.statuses[step.id] = status
         run.claims[step.id] = hint
     return run

@@ -11,6 +11,7 @@ from tonomyx.flow.case_0031 import open_case
 from tonomyx.tools.catalog import build_registry
 
 from specdx.interpreters.executor import SpecInterpreterExecutor
+from specdx.interpreters.harness import NUDGE
 from specdx.interpreters.prompt import load_variants
 from specdx.orchestrate.flow import run_case
 from specdx.orchestrate.work_orders import load_work_orders
@@ -365,3 +366,59 @@ def test_oversized_top_passage_is_trimmed_with_ellipsis(pack) -> None:
     assert len(result["content"]) <= SEARCH_REPLY_LIMIT
     # Verify the passage text ends with "…"
     assert reply_json["passages"][0]["text"].endswith("…")
+
+
+INVOICE = {"ma_inv": "INV-0031", "ma_so": "SO-0031", "ma_kh": "CUST-0007"}
+FLAG = {"case_id": "CASE-0031", "kind": "FLAGGED", "ref": "ITEM-0012", "actor": "AI",
+        "basis": "thiếu"}
+
+
+def test_a_drafting_step_that_wrote_nothing_is_nudged_at_most_twice(run_de) -> None:
+    transport, seen = _scripted(_say("Xong."), _say("xong"), _say("xong"))
+    envelope, _ = run_de(transport, de="DE-FN-01", intent="draft_sales_invoice", inputs=INVOICE)
+    assert len(seen) == 3
+    assert seen[1]["messages"][-1] == {"role": "user", "content": NUDGE}
+    assert [m["content"] for m in seen[2]["messages"] if m["role"] == "user"][-2:] == [NUDGE,
+                                                                                      NUDGE]
+    assert envelope.usage["harness"]["nudges"] == 2
+    assert envelope.status is ResultStatus.ERROR  # it never wrote: not done
+
+
+def test_a_step_that_drafts_nothing_is_never_nudged(run_de) -> None:
+    transport, seen = _scripted(_say("Xong."))
+    envelope, _ = run_de(transport)
+    assert len(seen) == 1 and envelope.usage["harness"]["nudges"] == 0
+
+
+def test_a_successful_write_ends_the_step_without_a_nudge(run_de) -> None:
+    transport, seen = _scripted(_call("log_event", FLAG), _say("Xong."))
+    envelope, _ = run_de(transport, de="DE-FN-01", intent="draft_sales_invoice", inputs=INVOICE)
+    assert len(seen) == 2 and envelope.usage["harness"]["nudges"] == 0
+    assert envelope.status is ResultStatus.DONE
+
+
+def test_a_tool_call_written_as_text_is_executed_and_marked(run_de) -> None:
+    text = "Tôi sẽ gắn cờ.\n" + json.dumps({"name": "log_event", "parameters": FLAG})
+    transport, seen = _scripted(_say(text), _say("Đã gắn cờ."))
+    envelope, rows = run_de(transport)
+    assert {"kind": "FLAGGED", "ref": "ITEM-0012"} in rows
+    assert envelope.usage["harness"] == {"nudges": 0, "parsed_from_text": 1, "tool_calls": 1,
+                                         "valid_calls": 1}
+    assert envelope.usage["tool_calls"][0]["parsed_from_text"] is True
+    assert envelope.status is ResultStatus.DONE
+
+
+def test_a_text_call_to_a_tool_the_step_lacks_is_not_executed(run_de) -> None:
+    text = json.dumps({"name": "write_draft", "arguments": {"table": "so", "payload": {},
+                                                            "idempotency_key": "k"}})
+    transport, seen = _scripted(_say(text))
+    envelope, rows = run_de(transport)
+    assert envelope.usage["harness"]["parsed_from_text"] == 0 and rows == []
+
+
+def test_native_calls_are_counted_valid_only_when_they_fit_the_schema(run_de) -> None:
+    transport, seen = _scripted(_call("read_records", {"table": "so", "colour": "red"}),
+                                _say("Xong."))
+    envelope, _ = run_de(transport)
+    assert envelope.usage["harness"]["tool_calls"] == 1
+    assert envelope.usage["harness"]["valid_calls"] == 0

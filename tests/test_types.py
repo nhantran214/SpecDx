@@ -40,3 +40,15 @@ def test_a_behaviour_cached_before_model_digests_still_loads() -> None:
 def test_a_defect_key_is_its_type_and_location() -> None:
     d = Defect("hidden", ("golden:so:SO-0031:trang_thai",), ("grn12",), ("k",), 0.9)
     assert d.key == ("hidden", ("golden:so:SO-0031:trang_thai",))
+
+
+def test_harness_counts_and_the_spec_round_trip_and_old_runs_load_without_them() -> None:
+    b = Behaviour("k", InterpreterId("m", "f", 0, 1), Scenario("s", 15, 12, 0), State({}),
+                  harness={"P2:decide_quote": {"nudges": 2, "parsed_from_text": 1,
+                                               "tool_calls": 3, "valid_calls": 3}},
+                  spec="base")
+    assert Behaviour.from_json(b.to_json()) == b
+    raw = json.loads(b.to_json())
+    del raw["harness"], raw["spec"]
+    old = Behaviour.from_json(json.dumps(raw))
+    assert old.harness == {} and old.spec == ""

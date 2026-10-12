@@ -105,6 +105,7 @@ class Workbench:
             variant=interp.variant, seed=interp.seed, suffix=suffix,
             temperature=float(self.settings["temperature"]),
             max_steps=int(self.settings["max_steps"]), timeout=float(self.settings["timeout"]),
+            max_nudges=int(self.settings["nudges"]),
         )
 
     def loop_context(self, variant: SpecVariant, config: SpecDxConfig) -> LoopContext:

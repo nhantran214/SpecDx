@@ -29,7 +29,7 @@ ExecutorFactory = Callable[[InterpreterId, TellCorpus, str], DeExecutor]
 RUN_CLOCK = datetime(2026, 9, 1, 2, 0, tzinfo=UTC)
 # Bump on any interpreter-visible change to prompts, flow or executor behaviour: runs
 # cached under an older version are then never reused.
-RUN_SCHEMA_VERSION = 2
+RUN_SCHEMA_VERSION = 3  # 3: the neutral harness (spec v2 §2.1)
 log = logging.getLogger(__name__)
 
 
@@ -98,6 +98,7 @@ class Runner:
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=state,
                 refused=tuple(case.refused), claims=dict(case.claims), model_digest=digest,
+                harness=dict(case.harness), spec=variant.name,
             )
         except (psycopg.OperationalError, psycopg.InterfaceError, InfrastructureError):
             raise
@@ -108,6 +109,7 @@ class Runner:
             behaviour = Behaviour(
                 run_key=key, interpreter=interp, scenario=scenario, state=State.empty(),
                 status="error", error=f"{type(exc).__name__}: {exc}", model_digest=digest,
+                spec=variant.name,
             )
         self.cache.put(behaviour)
         log.info("run %s %s %s %s %s %.1f s", variant.name, scenario.id, interp.key, kind,

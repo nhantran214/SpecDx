@@ -81,7 +81,9 @@ class InterpreterId:
 
 @dataclass(frozen=True)
 class Behaviour:
-    """What one interpreter did on one scenario."""
+    """What one interpreter did on one scenario. harness: per step, the harness's counts
+    (nudges, parsed_from_text, tool_calls, valid_calls); observations only, never part of a
+    class key. spec: the name of the specification the run was made for."""
 
     run_key: str
     interpreter: InterpreterId
@@ -92,6 +94,8 @@ class Behaviour:
     status: str = "ok"
     error: str = ""
     model_digest: str = ""  # the Ollama digest the run used (spec §4.2)
+    harness: dict[str, dict[str, int]] = field(default_factory=dict)
+    spec: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
@@ -109,6 +113,9 @@ class Behaviour:
             status=raw["status"],
             error=raw["error"],
             model_digest=str(raw.get("model_digest", "")),
+            harness={s: {k: int(v) for k, v in c.items()}
+                     for s, c in raw.get("harness", {}).items()},
+            spec=str(raw.get("spec", "")),
         )
 
 

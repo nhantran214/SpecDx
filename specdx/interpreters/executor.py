@@ -20,6 +20,7 @@ from tonomyx.tools.registry import ToolContext, ToolRegistry
 from tonomyx.tools.schema import tool_schemas
 
 from specdx.config import OLLAMA_URL
+from specdx.interpreters import harness
 from specdx.interpreters.prompt import TellVariants, system_prompt
 from specdx.spec.tell import TellCorpus
 
@@ -59,7 +60,8 @@ def interpreter_settings() -> dict[str, float | int]:
     """Every executor setting an interpreter's behaviour depends on, as now configured.
     The run key covers them (spec §6.5), so changing one never reuses a cached run."""
     return {"temperature": TEMPERATURE, "max_steps": MAX_STEPS, "timeout": TIMEOUT,
-            "num_ctx": NUM_CTX, "search_k": SEARCH_K, "search_reply_limit": SEARCH_REPLY_LIMIT}
+            "num_ctx": NUM_CTX, "search_k": SEARCH_K, "search_reply_limit": SEARCH_REPLY_LIMIT,
+            "nudges": harness.MAX_NUDGES}
 
 
 def _describe(exc: httpx.HTTPError) -> str:
@@ -88,10 +90,18 @@ def _ollama_failed(exc: httpx.HTTPError) -> bool:
     return False
 
 
+def _counted(envelope: ResultEnvelope, counts: dict[str, int]) -> ResultEnvelope:
+    """The harness's per-step counts ride in the envelope's usage, for the Behaviour."""
+    return envelope.model_copy(update={"usage": {**envelope.usage, "harness": dict(counts)}})
+
+
 class SpecInterpreterExecutor:
     """infra_failure is set when Ollama kept failing, or when every call so far ended in a
     read timeout (a wedged Ollama). DeRuntime swallows the error into a step result, so
-    the Runner reads this flag after the run to keep it out of the cache."""
+    the Runner reads this flag after the run to keep it out of the cache.
+
+    Every step runs through the neutral harness (spec v2 §2.1): tool calls written as text
+    are executed when valid, and a drafting step that wrote nothing is nudged."""
 
     def __init__(
         self,
@@ -109,6 +119,7 @@ class SpecInterpreterExecutor:
         transport: httpx.BaseTransport | None = None,
         suffix: str = "",
         sleep: Callable[[float], None] = time.sleep,
+        max_nudges: int | None = None,
     ) -> None:
         self.model, self.tools, self.corpus, self.variants = model, tools, corpus, variants
         self.variant, self.seed, self.temperature = variant, seed, temperature
@@ -117,6 +128,7 @@ class SpecInterpreterExecutor:
         self._outage: str | None = None
         self._calls = self._timeouts = 0
         self._gated = OllamaExecutor(model, tools)
+        self.max_nudges = harness.MAX_NUDGES if max_nudges is None else max_nudges
 
     @property
     def infra_failure(self) -> str | None:
@@ -151,25 +163,45 @@ class SpecInterpreterExecutor:
             {"role": "user", "content": f"Thực hiện nhiệm vụ {task.intent} cho {task.case_id}."},
         ]
         record = _Record()
+        tools = harness.tool_parameters(schemas)
+        drafts = bool(ctx.token.draft)
+        counts = {"nudges": 0, "parsed_from_text": 0, "tool_calls": 0, "valid_calls": 0}
         try:
             with httpx.Client(transport=self.transport, timeout=self.timeout) as client:
                 for step in range(1, self.max_steps + 1):
                     reply = self._chat(client, messages, schemas)
                     messages.append(reply)
                     calls = reply.get("tool_calls") or []
-                    if not calls:
-                        return record.finish(task, self.model, step, _plain(reply))
                     for call in calls:
+                        counts["tool_calls"] += 1
+                        counts["valid_calls"] += harness.valid_call(call, tools)
                         messages.append(self._execute(call, ctx, record))
+                    if calls:
+                        continue
+                    written = harness.parse_text_calls(_plain(reply), tools)
+                    for call in written:
+                        counts["tool_calls"] += 1
+                        counts["valid_calls"] += 1
+                        counts["parsed_from_text"] += 1
+                        messages.append(self._execute(call, ctx, record))
+                        record.calls[-1]["parsed_from_text"] = True
+                    if written:
+                        continue
+                    if (drafts and counts["nudges"] < self.max_nudges
+                            and not harness.wrote(record.calls)):
+                        counts["nudges"] += 1
+                        messages.append({"role": "user", "content": harness.NUDGE})
+                        continue
+                    return _counted(record.finish(task, self.model, step, _plain(reply)), counts)
         except httpx.HTTPError as exc:
-            return ResultEnvelope(
+            return _counted(ResultEnvelope(
                 task_id=task.task_id, case_id=task.case_id, status=ResultStatus.ERROR,
                 next_hint=f"ollama call failed: {_describe(exc)}",
-            )
-        return record.envelope(
+            ), counts)
+        return _counted(record.envelope(
             task, self.model, self.max_steps, ResultStatus.ERROR,
             f"{self.model} did not finish within {self.max_steps} steps",
-        )
+        ), counts)
 
     def _chat(
         self, client: httpx.Client, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]
