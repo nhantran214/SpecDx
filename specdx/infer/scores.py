@@ -7,10 +7,11 @@ observable item reads is Unobservable: it is reported, never typed and never sco
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations
 
+from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.infer.hitting import soft_hitting_sets
 from specdx.infer.items import ItemView, items_reading
 from specdx.infer.latent import ItemPosterior, Posterior
@@ -44,9 +45,14 @@ class ItemSignal:
 
 @dataclass
 class Diagnosis:
+    """spent: the locations of singleton candidates dropped below τ_H whose refutation was
+    never attempted or took a probe run (not symbolic repair). They cost the budget, so a
+    mutant's diagnosis refutes them last, like the locations of the base report (§11)."""
+
     defects: list[Defect]
     unobservable: list[Defect] = field(default_factory=list)
     signals: dict[str, ItemSignal] = field(default_factory=dict)
+    spent: frozenset[tuple[str, ...]] = frozenset()
 
 
 def run_weights(views: Iterable[ItemView], posterior: Posterior) -> dict[str, float]:
@@ -133,7 +139,11 @@ def _observable(
     return any(item in observable for item in items_reading(clause, scenario_id, relevant))
 
 
-def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[str, float] | None:
+def _weak(
+    ip: ItemPosterior, views: Sequence[ItemView], min_runs: int, exclude: Collection[str] = (),
+) -> tuple[str, float] | None:
+    """exclude: classes that are no weak deviant, the members of an ambiguity reported at
+    this item."""
     failing = {v.klass for v in views if v.violated}
     map_set = ip.map_set
     if failing & map_set:
@@ -141,7 +151,7 @@ def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[
     counts = Counter(v.klass for v in views)
     eligible = sorted(
         k for k in set(counts) - failing
-        if counts[k] >= min_runs and k not in map_set
+        if counts[k] >= min_runs and k not in map_set and k not in exclude
     )
     if not eligible:
         return None
@@ -157,6 +167,16 @@ def _weak(ip: ItemPosterior, views: Sequence[ItemView], min_runs: int) -> tuple[
         score = sum(p for s, p in ip.set_posterior.items() if any(k not in s for k in eligible))
     chosen = sorted(eligible, key=lambda k: (-outside(k), -counts[k], k))[0]
     return chosen, score
+
+
+def _competent_pair(
+    views: Iterable[ItemView], theta: Mapping[str, float], competent: float
+) -> tuple[str, ...]:
+    """The two most frequent classes among the acted readings of competent models, ties by
+    class key: the members of an ambiguity that S2 found and S1 did not. p_member is near 0
+    there for every class, so it cannot rank them."""
+    counts = Counter(v.klass for v in views if v.acted and theta.get(v.model, 0.0) >= competent)
+    return tuple(sorted(counts, key=lambda k: (-counts[k], k))[:2])
 
 
 def _reference(ip: ItemPosterior) -> str:
@@ -194,6 +214,7 @@ def diagnose(
     mutant's own candidates."""
     defects: list[Defect] = []
     unobservable: list[Defect] = []
+    spent: set[tuple[str, ...]] = set()
     weights = run_weights(views, posterior)
     by_item: dict[str, list[ItemView]] = defaultdict(list)
     for v in views:
@@ -231,11 +252,16 @@ def diagnose(
             # contradiction needs a failed refutation attempt (§11). Hidden(c) must reach
             # τ_H: a candidate no admissible class supports is no hidden requirement.
             clause = next(iter(hitting))
-            scenario_items = sorted(i for i in by_item if _scenario_of(i) == sid)
+            # Only observable items carry evidence.
+            scenario_items = sorted(
+                i for i in by_item if _scenario_of(i) == sid and i in observable
+            )
             score = _hidden_score(clause, scenario_items, posterior, by_item) or 0.0
             if score >= hidden_threshold:
                 note = f"refuted by {result.witness}" if result.refuted else UNATTEMPTED
                 defects.append(Defect("hidden", location, (sid,), witnesses, score, note))
+            elif not result.refuted or result.witness != SYMBOLIC_WITNESS:
+                spent.add(location)
         # A refuted set is dropped; so is an unattempted one, which is no contradiction.
     tested = paraphrase_sensitivity(
         views, posterior.theta, [i for i in posterior.items if i in observable],
@@ -252,17 +278,24 @@ def diagnose(
         mine = by_item.get(item, [])
         projection = {v.klass: v.projection for v in mine}
         ranked = sorted(ip.p_member, key=lambda k: -ip.p_member[k])
-        if (ip.p_ambiguous >= ambig_threshold or item in significant) and len(ranked) >= 2:
-            members = sorted(ip.map_set) if len(ip.map_set) >= 2 else ranked[:2]
+        members: tuple[str, ...] = ()
+        if ip.p_ambiguous >= ambig_threshold:
+            members = tuple(sorted(ip.map_set)) if len(ip.map_set) >= 2 else tuple(ranked[:2])
+        elif item in significant:
+            members = _competent_pair(mine, posterior.theta, competent)
+        reported: tuple[str, ...] = ()
+        if len(members) >= 2:
             fields = frozenset().union(
                 *(diff(projection[a], projection[b]) for a, b in combinations(members, 2))
             )
             if fields:
+                reported = members
                 witnesses = tuple(v.run_key for v in mine if v.klass in members)
                 score = max(ip.p_ambiguous, 1 - p if p is not None else 0.0)
                 defects.append(Defect("ambiguity", tuple(sorted(fields)), (_scenario_of(item),),
                                       witnesses, score, note=item))
-        weak = _weak(ip, mine, weak_min_runs)
+        # An item reporting an ambiguity reports no weak check: its readings are not deviant.
+        weak = _weak(ip, mine, weak_min_runs, exclude=reported)
         if weak is not None and weak[1] >= weak_threshold:
             klass, score = weak
             fields = diff(projection[klass], projection[_reference(ip)])
@@ -270,4 +303,5 @@ def diagnose(
                 witnesses = tuple(v.run_key for v in mine if v.klass == klass)
                 defects.append(Defect("weak", tuple(sorted(fields)), (_scenario_of(item),),
                                       witnesses, score, note=item))
-    return Diagnosis(merge_defects(defects, key=identity), merge_defects(unobservable), signals)
+    return Diagnosis(merge_defects(defects, key=identity), merge_defects(unobservable), signals,
+                     frozenset(spent))

@@ -1,5 +1,6 @@
 import pytest
 
+from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.infer.items import ItemView, observations
 from specdx.infer.latent import ItemPosterior, fit
 from specdx.infer.scores import (
@@ -78,9 +79,10 @@ def test_run_weights_are_membership_times_competence_over_acted_items() -> None:
 
 def test_a_shared_violation_that_repair_refutes_is_hidden() -> None:
     b, v, views, post = _world(_shared())
-    found = [d for d in _diagnose(b, v, views, post, _Refuter(True)).defects
-             if d.type == "hidden"]
+    diagnosis = _diagnose(b, v, views, post, _Refuter(True))
+    found = [d for d in diagnosis.defects if d.type == "hidden"]
     assert found and found[0].location == ("c",)
+    assert diagnosis.spent == frozenset()  # a reported hidden finding is not a dropped one
 
 
 def test_the_same_pattern_unrefuted_is_a_contradiction() -> None:
@@ -128,8 +130,30 @@ def test_a_singleton_no_admissible_class_violates_alone_is_not_hidden() -> None:
     outputs = {m: [("K", {"c", "x"})] * 3 for m in GOOD} | {
         m: [(f"E{i}", {"c", f"n{i}"}) for i in range(3)] for m in BAD}
     b, v, views, post = _world(outputs)
-    assert not [d for d in _diagnose(b, v, views, post, _Refuter(True)).defects
-                if d.type == "hidden"]
+    diagnosis = _diagnose(b, v, views, post, _Refuter(True))
+    assert not [d for d in diagnosis.defects if d.type == "hidden"]
+    # The dropped singletons spent a probe run (or would have): the mutants refute them last.
+    assert diagnosis.spent == {("c",), ("x",)}
+    assert _diagnose(b, v, views, post, _Unattempted()).spent == {("c",), ("x",)}
+    # Symbolic repair cost no probe run, so it spent nothing.
+    assert _diagnose(b, v, views, post, _Symbolic()).spent == frozenset()
+    # Hidden(c) takes its evidence from observable items only: a second step where the
+    # competent models violate c alone would make c hidden, but not when it is unobservable.
+    second = [ItemView("s1|step2", x.run_key, x.model, x.family,
+                       "K2" if x.model in GOOD else f"E{x.run_key}", frozenset({"c"}),
+                       _proj("K2" if x.model in GOOD else f"E{x.run_key}"))
+              for x in views if x.item == "s1|step"]
+    both, wide = views + second, {"step": CLAUSES, "step2": CLAUSES}
+    post2 = fit(observations(both))
+
+    def hidden_with(observable):
+        return [d for d in diagnose(b, v, both, post2, _Refuter(True), _diff,
+                                    observable=observable, relevant=wide,
+                                    permutations=200).defects if d.type == "hidden"]
+
+    items = frozenset(x.item for x in both)
+    assert [d.location for d in hidden_with(items)] == [("c",)]
+    assert hidden_with(items - {"s1|step2"}) == []
 
 
 class _MustNotRefute:
@@ -170,6 +194,17 @@ def test_paraphrase_sensitivity_reports_an_ambiguity_the_set_signal_misses() -> 
     found = [d for d in diagnosis.defects if d.type == "ambiguity"]
     assert found and found[0].location == ("x.v",)
     assert found[0].score == pytest.approx(1 - signal.p)
+    # The alternative reading is part of the ambiguity, not a weak check.
+    assert not [d for d in diagnosis.defects if d.type == "weak"]
+    assert set(found[0].witnesses) == {v.run_key for v in views
+                                       if v.item == "s1|step" and v.klass in ("X", "Y")}
+
+
+class _Symbolic:
+    """Repair refutes every candidate symbolically, without a probe run."""
+
+    def refute(self, targets, scenario, behaviours):
+        return RefuteResult(True, SYMBOLIC_WITNESS, 1)
 
 
 class _Unattempted:
@@ -244,6 +279,20 @@ def test_weak_tie_break_is_deterministic() -> None:
     )
     result = _weak(ip, views, 2)
     assert result == ("B", 1.0)
+    assert _weak(ip, views, 2, exclude={"B"}) == ("C", 1.0)
+    assert _weak(ip, views, 2, exclude={"B", "C"}) is None
+    # A class with one violating and one clean view fails a check: it is no clean admissible
+    # reference, whichever view comes last.
+    mixed = [
+        ItemView("item", "model|a0", "model", "m", "A", frozenset({"c"}), _proj("A")),
+        ItemView("item", "model|a1", "model", "m", "A", frozenset(), _proj("A")),
+    ] + [ItemView("item", f"model|b{i}", "model", "m", "B", frozenset(), _proj("B"))
+         for i in range(2)]
+    ip_a = ItemPosterior(
+        classes=("A", "B"), set_posterior={frozenset({"A"}): 1.0},
+        p_member={"A": 1.0, "B": 0.0}, p_ambiguous=0.0, responsibility={},
+    )
+    assert _weak(ip_a, mixed, 2) is None and _weak(ip_a, mixed[::-1], 2) is None
 
 
 def test_weak_union_score() -> None:

@@ -100,6 +100,8 @@ class Report:
     ddmin_runs: int = 0
     ambiguity_keys: frozenset[AmbiguityKey] = frozenset()
     ambiguity_dropped: frozenset[AmbiguityKey] = frozenset()  # base noise, removed
+    # Singleton locations that spent probes and were dropped below τ_H (Diagnosis.spent).
+    spent: frozenset[tuple[str, ...]] = frozenset()
 
     def to_json(self) -> str:
         return json.dumps(
@@ -157,6 +159,7 @@ def run_specdx(
     seen_sets: set[frozenset[str]] = set()
     posterior = Posterior({}, {}, {})
     defects: list[Defect] = []
+    spent: frozenset[tuple[str, ...]] = frozenset()
     previous: dict[str, float] = {}
     order: list[str] = []
     runs = 0
@@ -169,7 +172,7 @@ def run_specdx(
     known = (frozenset(d.location for d in base.defects
                        if d.type == "contradiction"
                        or (d.type == "hidden" and d.note != f"refuted by {SYMBOLIC_WITNESS}"))
-             if base is not None else frozenset())
+             | base.spent if base is not None else frozenset())
 
     while runs < config.budget:
         if queue:
@@ -218,12 +221,13 @@ def run_specdx(
             ranked_interpreters(config.models_by_family, posterior.theta, config.variants),
             budget,
         ), refutations)
-        defects = diagnose(
+        diagnosis = diagnose(
             behaviours, violated, views, posterior, refuter, ctx.lens.diff,
             observable=rasch.observable_items(), relevant=ctx.lens.relevant,
             tau=config.tau, ambig_threshold=config.ambig_threshold,
             weak_threshold=config.weak_threshold, rng_seed=config.rng_seed, known=known,
-        ).defects
+        )
+        defects, spent = diagnosis.defects, diagnosis.spent
         scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))
         previous = scores
@@ -253,4 +257,5 @@ def run_specdx(
 
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
                   dict(posterior.theta), behaviours, probe_runs=budget.probe,
-                  ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped)
+                  ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped,
+                  spent=spent)

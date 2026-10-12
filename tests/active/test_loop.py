@@ -139,6 +139,17 @@ def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) ->
     config = SpecDxConfig(MODELS, budget=100, synthesize=False)
     base = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config)
     assert ("c1",) in {d.location for d in base.defects}
+    assert isinstance(base.spent, frozenset) and ("c1",) not in base.spent
+    # A singleton no class violates alone is dropped below τ_H, and the report keeps it as
+    # spent: the probe it cost must not be paid again on every mutant.
+    def _shared_plan(scenario, interp):
+        if scenario.id == "grn12" and interp.model in GOOD:
+            return "K", {"c1", "n"}
+        return _hidden_plan(scenario, interp)
+
+    dropped = run_specdx(VARIANT, _ctx(FakeRunner(_shared_plan)), config)
+    assert not [d for d in dropped.defects if d.type == "hidden"]
+    assert dropped.spent == {("c1",), ("n",)}
     seen = []
     real = run_specdx.__globals__["diagnose"]
 
@@ -159,9 +170,9 @@ def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) ->
         Defect("hidden", ("d",), ("s",), (), 1.0, "refuted by grn12|q1|v0|s1"),
         Defect("ambiguity", ("e",), ("s",), (), 1.0),
         Defect("weak", ("f",), ("s",), (), 1.0),
-    ])
+    ], spent=frozenset({("g",)}))  # a singleton dropped below τ_H after it cost a probe
     run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=noted)
-    assert seen and all(known == {("a",), ("b",), ("d",)} for known in seen)
+    assert seen and all(known == {("a",), ("b",), ("d",), ("g",)} for known in seen)
 
 
 def test_a_base_noise_ambiguity_is_removed_before_localisation() -> None:
