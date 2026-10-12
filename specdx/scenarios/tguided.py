@@ -32,13 +32,15 @@ ENGLISH_KEYWORDS: tuple[str, ...] = (
 QUANTITY_WORDS: tuple[str, ...] = ("số lượng", "đơn vị", "units", "quantity")
 PERCENT_UNITS: frozenset[str] = frozenset({"%", "phần trăm"})
 _NUMBER = re.compile(
-    r"(?<![\w.,-])(\d+(?:[.,]\d+)?)(?![\w-])(\s*(?:%|phần trăm|đơn vị|cái|chiếc)(?!\w))?",
+    r"(?<![\w.,/\-:])(\d+(?:[.,]\d+)?)(?![\w/\-:])(\s*(?:%|phần trăm|đơn vị|cái|chiếc)(?!\w))?",
     re.IGNORECASE,
 )
 
 
 def _phrase(words: Iterable[str], suffix: str = "") -> re.Pattern[str]:
-    alternatives = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+    alternatives = "|".join(
+        re.escape(w).replace(r"\ ", r"\s+") for w in sorted(words, key=len, reverse=True)
+    )
     return re.compile(rf"(?<!\w)(?:{alternatives}){suffix}(?!\w)", re.IGNORECASE)
 
 

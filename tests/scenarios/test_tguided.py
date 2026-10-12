@@ -23,6 +23,12 @@ def _bound(*texts: str) -> list[tuple[str, int]]:
     ("Refunds of at most 10% are automatic.", [("discount_pct", 10)]),
     ("Orders that exceed 20 units need a manager.", [("received", 20)]),
     ("A quantity above 5 is split in two shipments.", [("received", 5)]),
+    ("Từ ngày 01/09/2026, số lượng đặt trên 100 đơn vị", [("received", 100)]),
+    ("Trước 10:30, số lượng tối thiểu 4 đơn vị", [("received", 4)]),
+    ("Tỷ lệ 3/5 của số lượng trên 100 đơn vị", [("received", 100)]),
+    ("Mức chiết khấu tối đa là 5%;", [("discount_pct", 5)]),
+    ("Refunds that exceeds 10% are automatic.", [("discount_pct", 10)]),
+    ("Orders that exceeded 20 units need a manager.", [("received", 20)]),
 ])
 def test_thresholds_in_vietnamese_and_english_are_extracted_and_bound(text, expected) -> None:
     assert _bound(text) == expected
