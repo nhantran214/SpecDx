@@ -1,5 +1,8 @@
 import random
 
+import pytest
+
+from specdx.infer.items import ItemView, observations
 from specdx.infer.latent import RARE, Observation, fit
 
 FAMILY = {"g1": "fa", "g2": "fb", "g3": "fc", "b1": "fa", "b2": "fb", "b3": "fc"}
@@ -92,3 +95,50 @@ def test_classes_beyond_k_max_are_pooled_and_never_admissible() -> None:
 def test_no_observations_give_an_empty_posterior() -> None:
     post = fit([])
     assert post.theta == {} and post.items == {}
+
+
+def test_theta_is_the_beta_map_of_the_expected_admissible_behaviours() -> None:
+    obs = _dataset()
+    post = fit(obs)
+    for model in FAMILY:
+        mine = [o for o in obs if o.model == model]
+        admissible = sum(post.items[o.item].responsibility[o.run_key] for o in mine)
+        assert post.theta[model] == pytest.approx((admissible + 6) / (len(mine) + 8), abs=1e-4)
+
+
+def test_a_listed_model_that_never_acted_keeps_the_prior_mode() -> None:
+    post = fit(_dataset(), models={"silent": "fz"})
+    assert post.theta["silent"] == pytest.approx(0.75)
+    assert fit([], models={"silent": "fz"}).theta == {"silent": pytest.approx(0.75)}
+
+
+def _p1_shaped(seed: int = 3) -> list[ItemView]:
+    """After the P1 measurements (72 items, 9 runs per model and item): two qwen models act
+    in about a quarter of their runs and then mostly agree; their failed steps scatter over
+    several failure modes. llama acts in none of its runs and always fails the same way."""
+    rng = random.Random(seed)
+    views = []
+    for j in range(72):
+        for model, family in (("qwen3", "qwen"), ("qwen2.5", "qwen"), ("llama", "llama")):
+            for r in range(9):
+                key = f"{model}|{j}|{r}"
+                acting = model != "llama" and rng.random() < 0.25
+                if acting:
+                    klass = f"A{j}" if rng.random() < 0.9 else f"noise-{rng.randrange(4)}"
+                elif model == "llama":
+                    klass = "stuck"
+                else:
+                    klass = f"fail-{rng.randrange(6)}"
+                views.append(ItemView(f"i{j}", key, model, family, klass, frozenset(), (),
+                                      acted=acting))
+    return views
+
+
+def test_a_model_that_never_acts_cannot_pull_the_acting_models_below_the_prior_mean() -> None:
+    views = _p1_shaped()
+    population = {"qwen3": "qwen", "qwen2.5": "qwen", "llama": "llama"}
+    unfiltered = fit([Observation(v.item, v.run_key, v.model, v.family, v.klass) for v in views])
+    assert unfiltered.theta["qwen3"] < 0.7 < unfiltered.theta["llama"]  # the P1 inversion
+    post = fit(observations(views), models=population)
+    assert post.theta["qwen3"] >= 0.7 and post.theta["qwen2.5"] >= 0.7
+    assert post.theta["qwen3"] >= post.theta["llama"]

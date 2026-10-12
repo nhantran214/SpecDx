@@ -34,7 +34,7 @@ class Deviant:
 
 CONFIG = GateConfig(
     models_by_family={"ref": ("reference",), "dev": ("deviant",)},
-    variants=(0,), seeds=(1,), budget=6, dev_per_type=1, rng_seed=1, probe_budget=6,
+    variants=(0,), seeds=(1, 2), budget=12, dev_per_type=1, rng_seed=1, probe_budget=6,
     localize_budget=6,
 )
 
@@ -58,9 +58,9 @@ def test_the_gate_runs_end_to_end_on_real_mutants(tmp_path) -> None:
     assert "## Verdict" in gate_markdown(result)
     lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
     assert [x.get("mutant") for x in lines] == [None, "C2-00", "W1-00"]
-    assert lines[0]["base"] is True and lines[0]["runs"]["population"] == 6
+    assert lines[0]["base"] is True and lines[0]["runs"]["population"] == 12
     for line in lines[1:]:
-        assert line["failure"] is None and line["runs"]["population"] == 6
+        assert line["failure"] is None and line["runs"]["population"] == 12
         assert line["runs"]["probe"] <= 6 and line["runs"]["ddmin"] <= 6
     # C2-00 forbids the approved PO the golden state requires: no run can reach it
     c2 = lines[1]
