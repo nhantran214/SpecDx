@@ -18,6 +18,7 @@ from tonomyx.flow.handlers import PO, SO, VINV
 
 from specdx.active.budget import RunBudget
 from specdx.db import PackDatabase
+from specdx.observe.run import RunRequest
 from specdx.observe.state import ERROR
 from specdx.spec.clauses import PAID, Clause, ClauseSet, describe
 from specdx.spec.lifting import instantiate
@@ -33,10 +34,7 @@ SYMBOLIC_WITNESS = "symbolic-repair"
 
 
 class RunnerLike(Protocol):
-    def run(
-        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
-        *, kind: str = "population",
-    ) -> Behaviour: ...
+    def run_batch(self, requests: Sequence[RunRequest]) -> list[Behaviour]: ...
 
 
 def _tables(state: State) -> dict[str, list[dict[str, str]]]:
@@ -255,25 +253,29 @@ class DirectedProbe:
     def search(
         self, targets: frozenset[str], scenario: Scenario, allowed: frozenset[str]
     ) -> tuple[Behaviour | None, int]:
-        """A witness behaviour or None, and how many probe runs were requested."""
+        """A witness behaviour or None, and how many probe runs were requested. Every
+        attempt for the candidate is charged, then dispatched as one batch (spec v2 §5.1);
+        the witness is the first in submission order."""
         items = "; ".join(describe(self.clauses[c], scenario) for c in sorted(targets))
         suffix = GOAL.format(items=items)
-        runs = 0
+        requests: list[RunRequest] = []
         for interp in self.interpreters[: self.width]:
             for attempt in range(self.attempts):
                 if self.budget is not None and not self.budget.take("probe"):
-                    return None, runs
-                runs += 1
-                b = self.runner.run(
-                    self.variant, scenario, dataclasses.replace(interp, seed=100 + attempt),
-                    suffix=suffix, kind="probe",
-                )
-                if b.status != "ok":
-                    continue
-                bad = self.clauses.violations(b.state, scenario)
-                if not (bad & targets) and bad <= allowed:
-                    return b, runs
-        return None, runs
+                    break
+                requests.append(RunRequest(self.variant, scenario,
+                                           dataclasses.replace(interp, seed=100 + attempt),
+                                           suffix, "probe"))
+            else:
+                continue
+            break
+        for b in self.runner.run_batch(requests):
+            if b.status != "ok":
+                continue
+            bad = self.clauses.violations(b.state, scenario)
+            if not (bad & targets) and bad <= allowed:
+                return b, len(requests)
+        return None, len(requests)
 
 
 class CombinedRefuter:

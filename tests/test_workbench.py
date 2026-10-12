@@ -101,6 +101,10 @@ def _split_oracle(tmp_path, monkeypatch, interps):
         def run(self, probe, scenario, interp, suffix="", *, kind="population"):
             return interp.model
 
+        def run_batch(self, requests):
+            return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind)
+                    for r in requests]
+
     class Lens:
         def __init__(self, *args, **kwargs) -> None: ...
 

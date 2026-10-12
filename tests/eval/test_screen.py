@@ -38,6 +38,9 @@ class _Runner:
         return Behaviour(f"{interp.key}", interp, scenario, State({}, {"acted": str(acted)}),
                          harness={"step": counts})
 
+    def run_batch(self, requests):
+        return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind) for r in requests]
+
 
 class _Lens:
     def acts(self, b):

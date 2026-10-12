@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,6 +46,18 @@ def context_digest(
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class RunRequest:
+    """One run a caller wants: what run_batch takes. kind (population, probe, ddmin or
+    screen) only labels the log line; it is not in the run key."""
+
+    variant: SpecVariant
+    scenario: Scenario
+    interp: InterpreterId
+    suffix: str = ""
+    kind: str = "population"
+
+
 class Runner:
     def __init__(
         self,
@@ -62,23 +75,41 @@ class Runner:
         self._steps_digest = hashlib.sha256(repr(self.steps).encode()).hexdigest()
         self.executed = 0
 
+    def key(
+        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = ""
+    ) -> str:
+        return run_key(
+            variant.digest(), self._steps_digest, self.context_digest,
+            json.dumps(scenario.params(), sort_keys=True), interp.key,
+            suffix, self.model_digest(interp.model),
+        )
+
     def run(
         self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
         *, kind: str = "population",
     ) -> Behaviour:
-        """kind (population, probe or ddmin) only labels the log line; it is not in the key."""
-        digest = self.model_digest(interp.model)
-        key = run_key(
-            variant.digest(), self._steps_digest, self.context_digest,
-            json.dumps(scenario.params(), sort_keys=True), interp.key,
-            suffix, digest,
-        )
+        key = self.key(variant, scenario, interp, suffix)
         cached = self.cache.get(key)
         if cached is not None:
             # The key holds the parameters, not the scenario's name or the family: the
             # caller's own scenario and interpreter are the ones that ran here.
             return dataclasses.replace(cached, scenario=scenario, interpreter=interp)
         self.executed += 1
+        behaviour = self.execute(RunRequest(variant, scenario, interp, suffix, kind), key)
+        self.cache.put(behaviour)
+        return behaviour
+
+    def run_batch(self, requests: Sequence[RunRequest]) -> list[Behaviour]:
+        """One after another, in order: the sequential form of ParallelRunner.run_batch."""
+        return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind)
+                for r in requests]
+
+    def execute(self, request: RunRequest, key: str) -> Behaviour:
+        """Make one run on this Runner's database, outside the cache: the caller stores it.
+        Infrastructure failures are raised, never returned as behaviour."""
+        variant, scenario, interp, suffix = (request.variant, request.scenario, request.interp,
+                                             request.suffix)
+        digest = self.model_digest(interp.model)
         started = time.monotonic()
         executor: DeExecutor | None = None
         try:
@@ -111,7 +142,6 @@ class Runner:
                 status="error", error=f"{type(exc).__name__}: {exc}", model_digest=digest,
                 spec=variant.name,
             )
-        self.cache.put(behaviour)
-        log.info("run %s %s %s %s %s %.1f s", variant.name, scenario.id, interp.key, kind,
-                 behaviour.status, time.monotonic() - started)
+        log.info("run %s %s %s %s %s %.1f s", variant.name, scenario.id, interp.key,
+                 request.kind, behaviour.status, time.monotonic() - started)
         return behaviour

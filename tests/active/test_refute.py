@@ -92,6 +92,9 @@ class _FakeRunner:
         assert "Yêu cầu bổ sung" in suffix and kind == "probe"
         return Behaviour(f"probe{self.calls}", interp, scenario, self.state)
 
+    def run_batch(self, requests):
+        return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind) for r in requests]
+
 
 def test_the_probe_budget_caps_directed_probe_runs(clauses, variant) -> None:
     runner = _FakeRunner(State.empty())  # every probe fails: nothing satisfies the targets
@@ -118,8 +121,9 @@ def test_the_probe_refutes_and_results_are_memoised(clauses, variant, golden) ->
     target = frozenset({"golden:so:SO-0031:trang_thai"})
     first = refuter.refute(target, GRN12, [start])
     again = refuter.refute(target, dataclasses.replace(GRN12, id="other"), [start])
+    # all three attempts are dispatched together; the first in order is the witness
     assert first.refuted and first.witness == "probe1"
-    assert again == first and runner.calls == 1
+    assert again == first and runner.calls == 3
 
 
 def test_repair_cannot_rewrite_scenario_facts(db, clauses, variant, golden) -> None:

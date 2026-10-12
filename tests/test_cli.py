@@ -116,7 +116,7 @@ def test_screen_writes_both_files_and_exits_3_on_the_stop_rule(monkeypatch, tmp_
                                    "candidates": {"a": ["good"], "b": ["idle"]}}))
     bench = SimpleNamespace(base=BASE, runner=_Runner(),
                             loop_context=lambda v, c: SimpleNamespace(lens=_Lens(), canon=CANON))
-    monkeypatch.setattr("specdx.workbench.Workbench.open", lambda: bench)
+    monkeypatch.setattr("specdx.workbench.Workbench.open", lambda workers: bench)
     out = tmp_path / "results" / "screen"
     assert main(["screen", "--profile", str(profile), "--out", str(out)]) == 3
     assert json.loads((tmp_path / "results" / "screen.json").read_text())["stop"] is True

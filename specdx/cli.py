@@ -11,6 +11,9 @@ from pathlib import Path
 
 from specdx.config import PDF_DIR, WORK_DIR
 
+WORKERS_HELP = ("parallel workers, one database each (spec v2 §5.1); set OLLAMA_NUM_PARALLEL "
+                "to at least this on the Ollama host")
+
 
 def mutants_path(out: Path) -> Path:
     """Per-mutant gate results, next to --out: results/p1b-gate.json gives
@@ -64,6 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     scr = sub.add_parser("screen", help="run the capability screen and choose the population")
     scr.add_argument("--profile", required=True,
                      help="a hardware profile: a name under experiments/profiles, or a path")
+    scr.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
     scr.add_argument("--out", type=Path, required=True,
                      help="writes OUT.md and OUT.json (exit status 3 when the stop rule holds)")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
@@ -71,9 +75,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--variant", default="base")
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--out", type=Path, required=True)
+    run.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
     gate = sub.add_parser("gate", help="run the P1 go/no-go gate on the development mutants")
     gate.add_argument("--config", type=Path, required=True)
     gate.add_argument("--out", type=Path, required=True)
+    gate.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
     args = parser.parse_args(argv)
 
     if args.command == "build-tell":
@@ -135,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from specdx.mutate.operators import all_mutants, dev_split
     from specdx.workbench import Workbench
 
-    bench = Workbench.open()
+    bench = Workbench.open(workers=getattr(args, "workers", 1))
     if args.command == "screen":
         from specdx.active.loop import SpecDxConfig
         from specdx.eval.screen import SCREEN_VARIANTS, load_profile, run_screen, screen_markdown

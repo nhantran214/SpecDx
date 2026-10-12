@@ -7,6 +7,7 @@ from itertools import combinations
 from pathlib import Path
 
 import httpx
+from psycopg.conninfo import conninfo_to_dict
 from tonomyx.canon.pack import CanonPack
 from tonomyx.de.executor import DeExecutor
 from tonomyx.tools.catalog import build_registry
@@ -22,8 +23,9 @@ from specdx.infer.items import SpecLens
 from specdx.interpreters.cache import RunCache
 from specdx.interpreters.executor import SpecInterpreterExecutor, interpreter_settings
 from specdx.interpreters.prompt import TellVariants, load_variants
-from specdx.observe.run import ExecutorFactory, Runner, context_digest
+from specdx.observe.run import ExecutorFactory, Runner, RunRequest, context_digest
 from specdx.orchestrate.work_orders import WorkStep, load_work_orders
+from specdx.parallel import ParallelRunner, ensure_database, worker_url
 from specdx.scenarios.space import (
     boundary_domain,
     canon_scenarios,
@@ -32,7 +34,7 @@ from specdx.scenarios.space import (
 )
 from specdx.scenarios.tguided import extract_literals, tboundary_scenarios
 from specdx.spec.clauses import ClauseSet
-from specdx.spec.columns import ColumnModel, Projection
+from specdx.spec.columns import ColumnModel
 from specdx.spec.tell import Chunk, TellCorpus, pdf_chunks
 from specdx.types import Defect, InterpreterId, Scenario
 from specdx.variant import SpecVariant
@@ -80,7 +82,7 @@ class Workbench:
         self.db, self.cache, self.steps, self.variants = db, cache, steps, variants
         self.pdf, self.base, self.work_dir = pdf, base, work_dir
         self.settings = interpreter_settings()
-        self.runner: Runner
+        self.runner: Runner | ParallelRunner
 
     @classmethod
     def open(
@@ -89,16 +91,31 @@ class Workbench:
         *,
         factory: ExecutorFactory | None = None,
         model_digest: Callable[[str], str] | None = None,
+        workers: int = 1,
     ) -> Workbench:
+        """workers: with 2 or more, runs go to that many worker databases at once (spec v2
+        §5.1); symbolic repair keeps the main database."""
         pdf = pdf_chunks(PDF_DIR, work_dir / "tell")
         base = SpecVariant("base", BASE_PACK, TellCorpus.build(CanonPack(BASE_PACK), pdf))
         variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
                     variants, pdf, base, work_dir)
-        bench.runner = Runner(bench.db, bench.cache, factory or bench.llm_factory, bench.steps,
-                              model_digest=model_digest or ollama_digests(),
-                              context_digest=context_digest(tell_payload(variants),
-                                                            bench.settings))
+        digests = model_digest or ollama_digests()
+        context = context_digest(tell_payload(variants), bench.settings)
+
+        def runner(db: PackDatabase) -> Runner:
+            return Runner(db, bench.cache, factory or bench.llm_factory, bench.steps,
+                          model_digest=digests, context_digest=context)
+
+        if workers <= 1:
+            bench.runner = runner(bench.db)
+            return bench
+        pool = []
+        for index in range(workers):
+            url = worker_url(bench.db.url, index)
+            ensure_database(bench.db.url, str(conninfo_to_dict(url)["dbname"]))
+            pool.append(runner(PackDatabase(url)))
+        bench.runner = ParallelRunner(pool, bench.cache)
         return bench
 
     def llm_factory(self, interp: InterpreterId, corpus: TellCorpus, suffix: str) -> DeExecutor:
@@ -148,15 +165,16 @@ class Workbench:
 
             def split_persists(corpus: TellCorpus) -> bool:
                 """Spec v2 §3.6: the re-run (one behaviour per competent model and variant,
-                seed 1) still yields two classes that differ on the ambiguity's fields."""
+                seed 1) still yields two classes that differ on the ambiguity's fields. The
+                test's runs are charged, then dispatched as one batch."""
                 probe = SpecVariant(f"{v.name}+ddmin", v.pack, corpus)
-                seen: list[Projection] = []
-                for interp in interps:
+                for _ in interps:
                     if not budget.take("ddmin"):
                         raise OutOfBudget
-                    b = self.runner.run(probe, scenario, interp, kind="ddmin")
-                    seen += [view.projection for view in lens.views(b, lens.violations(b))
-                             if view.item == defect.note and view.acted]
+                runs = self.runner.run_batch(
+                    [RunRequest(probe, scenario, i, kind="ddmin") for i in interps])
+                seen = [view.projection for b in runs for view in lens.views(b, lens.violations(b))
+                        if view.item == defect.note and view.acted]
                 return any(lens.diff(a, b) & fields for a, b in combinations(seen, 2))
 
             found = localize_ambiguity(v.corpus, pool, split_persists,

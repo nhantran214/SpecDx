@@ -24,6 +24,7 @@ from specdx.infer.scores import (
 )
 from specdx.infer.sensitivity import COMPETENT
 from specdx.interpreters.population import committee, pilot
+from specdx.observe.run import RunRequest
 from specdx.scenarios.tguided import TLiteral
 from specdx.spec.columns import Projection
 from specdx.types import Behaviour, Defect, InterpreterId, Refuter, RefuteResult, Scenario
@@ -37,6 +38,8 @@ class RunnerLike(Protocol):
         self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
         *, kind: str = "population",
     ) -> Behaviour: ...
+
+    def run_batch(self, requests: Sequence[RunRequest]) -> list[Behaviour]: ...
 
 
 class LensLike(Protocol):
@@ -247,24 +250,18 @@ def run_specdx(
         visited.add(scenario.signature())
         order.append(scenario.id)
 
+        # Each batch is charged to the budget before it is dispatched (spec v2 §5.1).
         pilot_ids = pilot(config.models_by_family, posterior.theta or None)
-        fresh: list[Behaviour] = []
-        for interp in pilot_ids:
-            if runs >= config.budget:
-                break
-            fresh.append(ctx.runner.run(variant, scenario, interp))
-            runs += 1
+        batch = pilot_ids[:config.budget - runs]
+        runs += len(batch)
+        fresh = ctx.runner.run_batch([RunRequest(variant, scenario, i) for i in batch])
         seen = {b.run_key: ctx.lens.views(b, ctx.lens.violations(b)) for b in fresh}
         pilot_views = [v for b in fresh for v in seen[b.run_key]]
         ok_sets = [acted_violations(seen[b.run_key]) for b in fresh if b.status == "ok"]
         if should_escalate(pilot_views, ok_sets, seen_sets):
-            for interp in members:
-                if interp in pilot_ids:
-                    continue
-                if runs >= config.budget:
-                    break
-                fresh.append(ctx.runner.run(variant, scenario, interp))
-                runs += 1
+            batch = [i for i in members if i not in pilot_ids][:config.budget - runs]
+            runs += len(batch)
+            fresh += ctx.runner.run_batch([RunRequest(variant, scenario, i) for i in batch])
 
         for b in fresh:
             mine = ctx.lens.views(b, ctx.lens.violations(b))

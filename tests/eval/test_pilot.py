@@ -79,6 +79,9 @@ class _Runner:
         bad = "c1" if variant.name.startswith("H1-") else ""
         return Behaviour(key, interp, scenario, State({}, {"v": bad}, {}))
 
+    def run_batch(self, requests):
+        return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind) for r in requests]
+
 
 STEP = WorkStep("s", "de", "A", "i", ("x",))
 

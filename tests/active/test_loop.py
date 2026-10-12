@@ -29,6 +29,9 @@ class FakeRunner:
         return Behaviour(f"{scenario.id}|{interp.key}", interp, scenario,
                          State({}, {"k": klass, "v": ",".join(sorted(bad))}, {}))
 
+    def run_batch(self, requests):
+        return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind) for r in requests]
+
 
 CLAUSES = frozenset({"c1", "n", "noise", "n1", "n2", "n3"})
 

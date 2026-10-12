@@ -19,6 +19,7 @@ from typing import Protocol
 
 from specdx.config import REPO_ROOT
 from specdx.infer.act import Act
+from specdx.observe.run import RunRequest
 from specdx.types import Behaviour, InterpreterId, Scenario
 from specdx.variant import SpecVariant
 
@@ -36,10 +37,7 @@ PROFILES = REPO_ROOT / "experiments" / "profiles"
 class ScreenRunner(Protocol):
     def model_digest(self, model: str) -> str: ...
 
-    def run(
-        self, variant: SpecVariant, scenario: Scenario, interp: InterpreterId, suffix: str = "",
-        *, kind: str = "population",
-    ) -> Behaviour: ...
+    def run_batch(self, requests: Sequence[RunRequest]) -> list[Behaviour]: ...
 
 
 class ActLens(Protocol):
@@ -112,8 +110,9 @@ def screen_model(
         runner.model_digest(model)
     except KeyError:
         return ScreenResult(model, family, 0, 0.0, 0.0, "not installed")
-    behaviours = [runner.run(variant, scenario, InterpreterId(model, family, v, s), kind="screen")
-                  for v in SCREEN_VARIANTS for s in SCREEN_SEEDS]
+    behaviours = runner.run_batch([
+        RunRequest(variant, scenario, InterpreterId(model, family, v, s), kind="screen")
+        for v in SCREEN_VARIANTS for s in SCREEN_SEEDS])
     acts = [a for b in behaviours for a in lens.acts(b)]
     counts = [c for b in behaviours for c in b.harness.values()]
     calls = sum(c.get("tool_calls", 0) for c in counts)
