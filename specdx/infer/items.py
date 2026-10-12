@@ -109,6 +109,12 @@ class SpecLens:
         return is_act(behaviour.state.steps.get(step.id, ""), step.id in self.drafting,
                       slice_rows(projection), self._before[step.id])
 
+    def acted_steps(self, behaviour: Behaviour) -> list[WorkStep]:
+        """The interpreter steps at which this behaviour acted."""
+        return [step for step in self.steps
+                if self._acted(behaviour, step,
+                               self.columns.project(behaviour.state.tables, step.slice))]
+
     def acts(self, behaviour: Behaviour) -> list[Act]:
         """Stage-1 data: one act indicator per interpreter step. A run that failed as a
         whole acted nowhere."""

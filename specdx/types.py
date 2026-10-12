@@ -120,6 +120,17 @@ class Behaviour:
 
 
 @dataclass(frozen=True)
+class Target:
+    """What a mutant's truth needs the population to reach (spec v2 §4.1): a row
+    ("row", table, key), an event ("event", kind, reference; an empty kind matches any)
+    or a step ("step", step id). Benchmark metadata only: no method ever reads it."""
+
+    kind: str
+    name: str
+    key: str = ""
+
+
+@dataclass(frozen=True)
 class Defect:
     """One typed finding about the specification."""
 

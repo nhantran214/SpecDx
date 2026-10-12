@@ -117,3 +117,28 @@ def test_a_drifted_site_is_refused(tmp_path_factory, monkeypatch) -> None:
 def test_the_base_pack_is_never_touched(mutants) -> None:
     text = (BASE_PACK / "kb" / "KB-0003.md").read_text(encoding="utf-8")
     assert "**mức tối đa 5%**" in text
+
+
+def _stamps(root) -> dict[str, tuple[int, int]]:
+    return {str(p.relative_to(root)): (p.stat().st_ino, p.stat().st_mtime_ns)
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_a_second_build_leaves_every_existing_pack_untouched(pack, tmp_path) -> None:
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(pack, []))
+    first = all_mutants(base, [], tmp_path)
+    before = _stamps(tmp_path / "mutants")
+    again = all_mutants(base, [], tmp_path)
+    assert _stamps(tmp_path / "mutants") == before  # nothing rewritten, nothing deleted
+    assert [m.variant.digest() for m in again] == [m.variant.digest() for m in first]
+    assert all(m.variant.pack.is_relative_to(tmp_path / "mutants") for m in again)
+
+
+def test_a_pack_that_differs_from_what_the_code_builds_is_refused(pack, tmp_path) -> None:
+    base = SpecVariant("base", BASE_PACK, TellCorpus.build(pack, []))
+    all_mutants(base, [], tmp_path)
+    edited = tmp_path / "mutants" / "C1-00" / BASE_PACK.name / "invariants.json"
+    edited.write_text(edited.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    with pytest.raises(ValueError, match="differs"):
+        all_mutants(base, [], tmp_path)
+    assert edited.read_text(encoding="utf-8").endswith(" ")  # left as it was

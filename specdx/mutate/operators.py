@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import random
+import shutil
+import tempfile
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ from pathlib import Path
 
 from tonomyx.canon.pack import CanonPack
 
+from specdx.db import golden_tables, is_background, pack_digest
 from specdx.mutate.pack_copy import (
     append_text,
     copy_pack,
@@ -23,8 +26,9 @@ from specdx.mutate.pack_copy import (
     regenerate_sql,
     replace_text,
 )
+from specdx.spec.columns import ColumnModel
 from specdx.spec.tell import Chunk, TellCorpus
-from specdx.types import State
+from specdx.types import State, Target
 from specdx.variant import SpecVariant
 
 OPERATOR_TYPES: dict[str, str] = {
@@ -59,6 +63,22 @@ A2_SITES = (
     ("CASE-0031 có ĐÚNG 3 cổng: APR-0102/P2, APR-0155/P6 (maker-checker), "
      "APR-0210/P5 (đối soát lệch).", "CASE-0031 có một số cổng phê duyệt phù hợp."),
 )
+# The steps each edited rule governs (spec v2 §4.1), one tuple per site above. The
+# discount rules govern quoting and its approval; the GRN-exception rule governs the
+# receipt, the reconciliation and the payment that could open an approval; the gate
+# count governs every step that opens or decides one of the three gates.
+QUOTE_STEPS = ("DE-SM-02:draft_quote", "P2:decide_quote")
+A1_STEPS: tuple[tuple[str, ...], ...] = (
+    QUOTE_STEPS,
+    QUOTE_STEPS,
+    ("DE-OP-02:record_goods_receipt", "DE-FN-02:reconcile", "DE-FN-03:draft_payment"),
+)
+A2_STEPS: tuple[tuple[str, ...], ...] = (
+    ("DE-SM-02:draft_quote",),
+    QUOTE_STEPS,
+    (*QUOTE_STEPS, "DE-FN-04:draft_purchase_order", "P6:decide_po", "DE-FN-03:draft_payment"),
+)
+A3_STEPS: tuple[str, ...] = QUOTE_STEPS
 A3_ARTICLE = (
     "---\nkb_id: KB-0009\nversion: 1\neffective_date: 2026-09-01\ndomain: sales\n"
     "title: Chính sách giá & chiết khấu (cập nhật)\n---\n"
@@ -90,10 +110,14 @@ CREATE TRIGGER trg_specdx_c2 BEFORE INSERT OR UPDATE ON {table}
 
 @dataclass(frozen=True)
 class GroundTruth:
+    """observed_at: what the truth needs the population to reach (spec v2 §4.1). It is
+    benchmark metadata for scorability, never an input to any method."""
+
     mutant_id: str
     type: str
     location: frozenset[str]
     location_kind: str
+    observed_at: tuple[Target, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,17 +147,50 @@ def _corpus(pack: Path, pdf: Sequence[Chunk]) -> TellCorpus:
     return TellCorpus.build(CanonPack(pack), pdf)
 
 
-def _mutant(mid: str, op: str, site: str, pack: Path, corpus: TellCorpus,
-            location: frozenset[str], kind: str) -> Mutant:
-    return Mutant(mid, op, site, SpecVariant(mid, pack, corpus),
-                  GroundTruth(mid, OPERATOR_TYPES[op], location, kind))
+def _steps(ids: Sequence[str]) -> tuple[Target, ...]:
+    return tuple(Target("step", s) for s in ids)
+
+
+def _rows(pack: CanonPack, table: str) -> tuple[Target, ...]:
+    """The golden case rows of a table (background rows belong to no case)."""
+    keys = ColumnModel.of(pack).keys[table]
+    return tuple(Target("row", table, ":".join(r[k] for k in keys))
+                 for r in golden_tables(pack)[table] if not is_background(table, r))
+
+
+def _settle(staged: Path, final: Path) -> Path:
+    """A mutant pack is written once. A later build must reproduce it byte for byte, and is
+    then left alone, so runs cached against it stay valid; a differing build is an error,
+    never an overwrite."""
+    if final.exists():
+        if pack_digest(final) != pack_digest(staged):
+            raise ValueError(f"{final} differs from the pack this code builds; it was made by "
+                             "other code or edited by hand. Move it aside to rebuild it.")
+        return final
+    final.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(staged, final)
+    return final
 
 
 def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list[Mutant]:
+    """Every mutant, its pack under work_dir/mutants/<id>. Packs are built in a staging
+    directory and settled there once (_settle)."""
+    with tempfile.TemporaryDirectory() as staging:
+        return _build(base, pdf, work_dir, Path(staging))
+
+
+def _build(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path, staging: Path) -> list[Mutant]:
     out: list[Mutant] = []
+    base_pack = CanonPack(base.pack)
 
     def fresh(mid: str) -> Path:
-        return copy_pack(base.pack, work_dir / "mutants" / mid / base.pack.name)
+        return copy_pack(base.pack, staging / mid / base.pack.name)
+
+    def _mutant(mid: str, op: str, site: str, pack: Path, corpus: TellCorpus,
+                location: frozenset[str], kind: str, observed_at: tuple[Target, ...]) -> Mutant:
+        final = _settle(pack, work_dir / "mutants" / mid / base.pack.name)
+        return Mutant(mid, op, site, SpecVariant(mid, final, corpus),
+                      GroundTruth(mid, OPERATOR_TYPES[op], location, kind, observed_at))
 
     for i, site in enumerate(C1_SITES):
         mid, pack = f"C1-{i:02d}", fresh(f"C1-{i:02d}")
@@ -145,15 +202,17 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
                  "assert": {"col": inv["assert"]["col"], "eq": alt}}
         edit_json(pack, "invariants.json",
                   lambda d, a=added: {**d, "invariants": [*d["invariants"], a]})
+        # Both invariants read the row the site's invariant selects.
+        row = Target("row", inv["table"], ":".join(str(v) for v in inv["where"].values()))
         out.append(_mutant(mid, "C1", site, pack, _corpus(pack, pdf),
-                           frozenset({f"inv:{site}", f"inv:mut-c1-{site}"}), "conflict"))
+                           frozenset({f"inv:{site}", f"inv:mut-c1-{site}"}), "conflict", (row,)))
 
     for i, (table, key, value, status, location) in enumerate(C2_SITES):
         mid, pack = f"C2-{i:02d}", fresh(f"C2-{i:02d}")
         append_text(pack, "targets/postgres/guardrails.sql",
                     _TRIGGER.format(key=key, value=value, status=status, table=table))
         out.append(_mutant(mid, "C2", value, pack, _corpus(pack, pdf),
-                           frozenset(location), "conflict"))
+                           frozenset(location), "conflict", (Target("row", table, value),)))
 
     for i, (table, key, ident, column, value) in enumerate(H1_SITES):
         mid, pack = f"H1-{i:02d}", fresh(f"H1-{i:02d}")
@@ -167,7 +226,8 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
         edit_csv_rows(pack, table, change)
         regenerate_sql(pack)
         out.append(_mutant(mid, "H1", f"{table}.{column}", pack, _corpus(pack, pdf),
-                           frozenset({f"golden:{table}:{ident}:{column}"}), "clause"))
+                           frozenset({f"golden:{table}:{ident}:{column}"}), "clause",
+                           (Target("row", table, ident),)))
 
     for i, (kind, ref) in enumerate(H2_SITES):
         mid, pack = f"H2-{i:02d}", fresh(f"H2-{i:02d}")
@@ -175,8 +235,11 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
                  "table": "evt", "where": {"kind": kind, "ref": ref}, "assert": {"count": 1}}
         edit_json(pack, "invariants.json",
                   lambda d, a=added: {**d, "invariants": [*d["invariants"], a]})
+        # The demanded event is one T never motivates, so no admissible run writes it: the
+        # truth is reached where events about its reference are written (any kind).
         out.append(_mutant(mid, "H2", f"{kind}:{ref}", pack, _corpus(pack, pdf),
-                           frozenset({f"inv:mut-h2-{kind}-{ref}"}), "clause"))
+                           frozenset({f"inv:mut-h2-{kind}-{ref}"}), "clause",
+                           (Target("event", "", ref),)))
 
     for i, text in enumerate(A1_SITES):
         mid, pack = f"A1-{i:02d}", fresh(f"A1-{i:02d}")
@@ -190,7 +253,7 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
         chunks = frozenset(TellCorpus.chunk_of(s) for s in base.corpus.find(text))
         if not chunks:
             raise ValueError(f"{mid} has an empty ground truth")
-        out.append(_mutant(mid, "A1", text, pack, corpus, chunks, "chunk"))
+        out.append(_mutant(mid, "A1", text, pack, corpus, chunks, "chunk", _steps(A1_STEPS[i])))
 
     for i, (old, new) in enumerate(A2_SITES):
         mid, pack = f"A2-{i:02d}", fresh(f"A2-{i:02d}")
@@ -211,7 +274,7 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
         truth = frozenset(corpus.find(new))
         if not matched or not truth:
             raise ValueError(f"A2 site matches nothing: {old!r}")
-        out.append(_mutant(mid, "A2", old, pack, corpus, truth, "sentence"))
+        out.append(_mutant(mid, "A2", old, pack, corpus, truth, "sentence", _steps(A2_STEPS[i])))
 
     mid, pack = "A3-00", fresh("A3-00")
     (pack / "kb" / "KB-0009.md").write_text(A3_ARTICLE, encoding="utf-8")
@@ -219,7 +282,7 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
     truth = frozenset(corpus.sentence_ids(["KB:KB-0009"]))
     if not truth:
         raise ValueError(f"{mid} has an empty ground truth")
-    out.append(_mutant(mid, "A3", "KB-0009", pack, corpus, truth, "sentence"))
+    out.append(_mutant(mid, "A3", "KB-0009", pack, corpus, truth, "sentence", _steps(A3_STEPS)))
 
     for i, (table, column, inv_id) in enumerate(W1_SITES):
         mid, pack = f"W1-{i:02d}", fresh(f"W1-{i:02d}")
@@ -233,7 +296,7 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
 
         edit_json(pack, "canon.meta.json", unblank)
         out.append(_mutant(mid, "W1", f"{table}.{column}", pack, _corpus(pack, pdf),
-                           frozenset({f"{table}.{column}"}), "field"))
+                           frozenset({f"{table}.{column}"}), "field", _rows(base_pack, table)))
 
     for i, (kind, ref) in enumerate(W2_SITES):
         mid, pack = f"W2-{i:02d}", fresh(f"W2-{i:02d}")
@@ -241,7 +304,8 @@ def all_mutants(base: SpecVariant, pdf: Sequence[Chunk], work_dir: Path) -> list
             x for x in rows if not (x["kind"] == k and x["ref"] == r)])
         regenerate_sql(pack)
         out.append(_mutant(mid, "W2", f"{kind}:{ref}", pack, _corpus(pack, pdf),
-                           frozenset({f"evt:{kind}:{ref}"}), "field"))
+                           frozenset({f"evt:{kind}:{ref}"}), "field",
+                           (Target("event", kind, ref),)))
     return out
 
 
