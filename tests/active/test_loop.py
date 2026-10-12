@@ -331,8 +331,11 @@ def test_a_queued_scenario_whose_signature_was_visited_is_skipped() -> None:
     runner = FakeRunner(_hidden_plan)
     twin = Scenario("twin", 15, 12, 0)  # grn12's parameters under another id
     ctx = dataclasses.replace(_ctx(runner), tboundary=[twin])
-    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=100, synthesize=False))
+    config = SpecDxConfig(MODELS, budget=100, synthesize=False)
+    report = run_specdx(VARIANT, ctx, config)
     assert report.scenarios == ["discount8", "grn12", "happy"] and "twin" not in runner.calls
+    plain = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config)
+    assert report.runs == plain.runs  # the skipped twin spent no population budget
 
 
 def test_the_report_carries_stage_one_the_signals_and_the_literals() -> None:
@@ -340,6 +343,7 @@ def test_the_report_carries_stage_one_the_signals_and_the_literals() -> None:
     ctx = dataclasses.replace(_ctx(FakeRunner(_hidden_plan)), literals=[literal])
     report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=100, synthesize=False))
     assert set(report.kappa) == {"q1", "q2", "l1"}
+    assert report.items
     item = report.items["grn12|step"]
     assert item["observable"] and {"delta", "observability", "acted", "s1"} <= set(item)
     out = json.loads(report.to_json())
@@ -355,11 +359,26 @@ class IdleLens(FakeLens):
         return [dataclasses.replace(v, acted=not v.item.endswith("|step")) for v in out]
 
 
-def test_a_clause_no_observable_item_reads_is_reported_unobservable_not_typed() -> None:
+def test_an_item_nobody_acts_at_is_unobservable_and_types_nothing() -> None:
     report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), lens=IdleLens()),
                         SpecDxConfig(MODELS, budget=100, synthesize=False))
     assert not [d for d in report.defects if "c1" in d.location]
     assert report.items["grn12|step"]["observable"] is False
+
+
+def test_the_diagnosis_unobservable_list_reaches_the_report_and_its_json(monkeypatch) -> None:
+    real = run_specdx.__globals__["diagnose"]
+    entry = Defect("unobservable", ("c1",), ("grn12",), (), 1.0, "no observable item reads it")
+
+    def wrapped(*args, **kwargs):
+        return dataclasses.replace(real(*args, **kwargs), unobservable=[entry])
+
+    monkeypatch.setitem(run_specdx.__globals__, "diagnose", wrapped)
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)),
+                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+    assert report.unobservable == [entry]
+    [row] = json.loads(report.to_json())["unobservable"]
+    assert (row["type"], row["location"], row["scenarios"]) == ("unobservable", ["c1"], ["grn12"])
 
 
 def test_the_ddmin_oracle_reruns_each_competent_model_under_each_variant() -> None:
@@ -380,9 +399,17 @@ def test_the_ddmin_oracle_reruns_each_competent_model_under_each_variant() -> No
 
 def test_oracle_interpreters_are_the_competent_models_at_seed_one() -> None:
     interps = oracle_interpreters({"a": ("m1", "m2"), "b": ("m3",)},
-                                  {"m1": 0.6, "m2": 0.4, "m3": 0.9}, (0, 2))
+                                  {"m1": 0.6, "m2": 0.4, "m3": 0.9}, (0, 2),
+                                  acted={"m1", "m2", "m3"})
     assert [(i.model, i.family, i.variant, i.seed) for i in interps] == [
         ("m3", "b", 0, 1), ("m3", "b", 2, 1), ("m1", "a", 0, 1), ("m1", "a", 2, 1)]
+
+
+def test_a_model_that_never_acted_is_not_competent_at_its_prior_mode() -> None:
+    interps = oracle_interpreters({"a": ("idle", "acting", "weak")},
+                                  {"idle": 0.75, "acting": 0.6, "weak": 0.4}, (0,),
+                                  acted={"acting", "weak"})
+    assert [i.model for i in interps] == ["acting"]  # θ = 0.75 alone is no evidence
 
 
 class SilentLens(FakeLens):

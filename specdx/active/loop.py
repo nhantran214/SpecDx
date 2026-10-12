@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
-from collections.abc import Callable, Hashable, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
@@ -173,7 +173,7 @@ def ranked_interpreters(
     theta: dict[str, float],
     variants: tuple[int, ...],
 ) -> list[InterpreterId]:
-    """Every model once, most competent first: who refutes and who localises."""
+    """Every model once, most competent first: the order the refuter tries them in."""
     models = [(m, f) for f, ms in models_by_family.items() for m in ms]
     models.sort(key=lambda mf: -theta.get(mf[0], 0.0))
     return [InterpreterId(m, f, variants[0], 1) for m, f in models]
@@ -183,12 +183,14 @@ def oracle_interpreters(
     models_by_family: dict[str, tuple[str, ...]],
     theta: dict[str, float],
     variants: tuple[int, ...],
+    acted: Collection[str],
     competent: float = COMPETENT,
 ) -> list[InterpreterId]:
     """The ddmin oracle's re-runs (spec v2 §3.6): one per competent model and Tell variant,
-    at seed 1, most competent model first."""
+    at seed 1, most competent first. Competent is θ ≥ 0.5 with an acted behaviour: a
+    prior-only θ (no acted behaviour) is not evidence of competence."""
     models = [(m, f) for f, ms in models_by_family.items() for m in ms
-              if theta.get(m, 0.0) >= competent]
+              if m in acted and theta.get(m, 0.0) >= competent]
     models.sort(key=lambda mf: -theta.get(mf[0], 0.0))
     return [InterpreterId(m, f, v, 1) for m, f in models for v in variants]
 
@@ -294,7 +296,8 @@ def run_specdx(
     dropped = found & base.ambiguity_keys if base is not None else frozenset()
     defects = [d for d in defects if d.type != "ambiguity" or ambiguity_key(d) not in dropped]
     if config.localize and ctx.localizer is not None:
-        interps = oracle_interpreters(config.models_by_family, posterior.theta, config.variants)
+        interps = oracle_interpreters(config.models_by_family, posterior.theta, config.variants,
+                                      {v.model for v in views if v.acted})
         # Best supported first, until the localisation budget runs out; from then on every
         # ambiguity is unlocalised: an empty location, which matches no ground truth.
         located: dict[int, tuple[str, ...]] = {}

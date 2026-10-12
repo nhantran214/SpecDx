@@ -78,4 +78,5 @@ def test_a_split_that_no_tell_sentence_causes_stays_unlocalised(tmp_path) -> Non
     report = run_specdx(bench.base, bench.loop_context(bench.base, config), config)
     [split] = [d for d in report.defects if d.type == "ambiguity"]
     assert split.note == "grn12|DE-OP-02:record_goods_receipt" and split.location == ()
-    assert report.ddmin_runs == 2  # fails([]): one run per family, and the split persists
+    assert report.ddmin_runs == 2  # fails([]): one run per competent acting model x variant
+    # (2 models x 1 variant), and the split persists

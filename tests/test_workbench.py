@@ -83,3 +83,77 @@ def test_the_context_carries_the_t_literals_and_t_boundary_scenarios(tmp_path) -
     assert [s.id for s in ctx.tboundary] == [f"o15-r12-d{d}-g1" for d in (4, 5, 6, 7, 8, 9)]
     signatures = {s.signature() for s in ctx.candidates}
     assert all(s.signature() in signatures for s in ctx.tboundary)
+
+
+def _split_oracle(tmp_path, monkeypatch, interps):
+    """The workbench's ddmin oracle (split_persists) on a fake runner and lens: each model
+    answers with the views scripted in `scripted`. Returns (persists, budget, scripted)."""
+    from specdx.active.budget import RunBudget
+    from specdx.infer.items import ItemView
+    from specdx.types import Defect
+
+    scripted: dict[str, list[ItemView]] = {}
+    note = "grn12|DE-OP-02:record_goods_receipt"
+
+    class Runner:
+        executed = 0
+
+        def run(self, probe, scenario, interp, suffix="", *, kind="population"):
+            return interp.model
+
+    class Lens:
+        def __init__(self, *args, **kwargs) -> None: ...
+
+        def violations(self, b):
+            return frozenset()
+
+        def views(self, b, violated):
+            return scripted[b]
+
+        def diff(self, a, b):
+            return frozenset(f for f in dict(a) if dict(a)[f] != dict(b).get(f))
+
+    captured = []
+    monkeypatch.setattr("specdx.workbench.SpecLens", Lens)
+    monkeypatch.setattr("specdx.workbench.localize_ambiguity",
+                        lambda corpus, pool, test, max_tests=None: captured.append(test))
+    bench = Workbench.open(tmp_path, factory=lambda i, c, s: reference_executor(),
+                           model_digest=lambda m: m)
+    bench.runner = Runner()
+    ctx = bench.loop_context(bench.base, SpecDxConfig({"ref": ("reference",)}))
+    budget = RunBudget(4, 10)
+    defect = Defect("ambiguity", ("x.k",), ("grn12",), (), 1.0, note)
+    assert ctx.localizer(bench.base, defect, interps, budget) is None
+    [test] = captured
+
+    def view(model, klass, field="x.k", acted=True, item=note):
+        return ItemView(item, model, model, "f", klass, frozenset(),
+                        ((field, klass),), acted=acted)
+
+    return (lambda corpus: test(corpus)), budget, scripted, view
+
+
+def test_the_ddmin_oracle_counts_only_acted_splits_on_the_ambiguitys_fields(
+    tmp_path, monkeypatch
+) -> None:
+    interps = [InterpreterId("m1", "f", 0, 1), InterpreterId("m2", "f", 0, 1)]
+    persists, budget, scripted, view = _split_oracle(tmp_path, monkeypatch, interps)
+    corpus = None
+    scripted["m1"], scripted["m2"] = [view("m1", "A")], [view("m2", "B")]
+    assert persists(corpus) is True and budget.ddmin == 2
+    # a difference on another field is not this ambiguity's split
+    scripted["m1"], scripted["m2"] = [view("m1", "A", field="y.z")], [view("m2", "B", field="y.z")]
+    assert persists(corpus) is False
+    # a behaviour that did not act yields no class
+    scripted["m1"], scripted["m2"] = [view("m1", "A")], [view("m2", "B", acted=False)]
+    assert persists(corpus) is False
+    # another item's views are not this ambiguity's either
+    scripted["m1"], scripted["m2"] = [view("m1", "A")], [view("m2", "B", item="other|step")]
+    assert persists(corpus) is False
+
+
+def test_an_empty_oracle_leaves_the_ambiguity_unlocalised_and_spends_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    persists, budget, _, _ = _split_oracle(tmp_path, monkeypatch, [])
+    assert persists(None) is False and budget.ddmin == 0
