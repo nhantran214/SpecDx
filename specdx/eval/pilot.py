@@ -1,4 +1,10 @@
-"""The capability pilot (spec §4.2) and the go/no-go gate (spec §4.8)."""
+"""The capability pilot (spec §4.2) and the go/no-go gate (spec §4.8; v2 §4.1–§4.2).
+
+Gate v2 runs on the population the capability screen froze. Before any mutant runs, it
+computes from the base runs which mutants the population can score (eval.observability).
+The primary table scores those only and decides the verdict; a type with fewer than three
+scorable mutants is a loss. The secondary table scores all mutants, as P1 did.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from specdx.baselines.b3_irt import b3_report
 from specdx.config import OLLAMA_URL
 from specdx.eval.matching import (
     ABSOLUTE_BAR,
+    MIN_SCORABLE,
     Prf,
     evaluate_reports,
     gate_rule,
@@ -25,6 +32,7 @@ from specdx.eval.matching import (
     literal_wins,
     match_findings,
 )
+from specdx.eval.observability import SCORABLE_K, scorable, touch_counts
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.types import DEFECT_TYPES, Defect, InfrastructureError
 from specdx.variant import SpecVariant
@@ -76,8 +84,20 @@ def check_model(
                                        for c in calls))
 
 
+def load_population(path: Path) -> dict[str, tuple[str, ...]]:
+    """The population a capability screen froze (its "population"), refusing a screen that
+    ended in the stop rule."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("stop"):
+        raise ValueError(f"{path}: the screen admitted fewer than 2 families; P1b stops")
+    return {f: tuple(ms) for f, ms in raw["population"].items()}
+
+
 @dataclass(frozen=True)
 class GateConfig:
+    """screen: the capability screen's JSON; when set, the population must be the one it
+    froze (spec v2 §2.2)."""
+
     models_by_family: dict[str, tuple[str, ...]]
     variants: tuple[int, ...]
     seeds: tuple[int, ...]
@@ -86,6 +106,7 @@ class GateConfig:
     rng_seed: int
     probe_budget: int = SpecDxConfig.probe_budget
     localize_budget: int = SpecDxConfig.localize_budget
+    screen: Path | None = None
 
     @classmethod
     def load(cls, path: Path) -> GateConfig:
@@ -96,7 +117,17 @@ class GateConfig:
             dev_per_type=int(raw["dev_per_type"]), rng_seed=int(raw["rng_seed"]),
             probe_budget=int(raw.get("probe_budget", SpecDxConfig.probe_budget)),
             localize_budget=int(raw.get("localize_budget", SpecDxConfig.localize_budget)),
+            screen=Path(raw["screen"]) if raw.get("screen") else None,
         )
+
+    def check_population(self) -> None:
+        """The gate runs only on a non-empty population, the screen's when one is named."""
+        if not self.models_by_family or not any(self.models_by_family.values()):
+            raise ValueError("models_by_family is empty: run `specdx screen` and freeze its "
+                             "population into the gate configuration first")
+        if self.screen is not None and load_population(self.screen) != self.models_by_family:
+            raise ValueError(f"models_by_family differs from the population {self.screen} "
+                             "froze; the gate runs on the screened population only")
 
     def specdx(self) -> SpecDxConfig:
         return SpecDxConfig(self.models_by_family, variants=self.variants, seeds=self.seeds,
@@ -112,12 +143,32 @@ class BenchLike(Protocol):
 
 @dataclass
 class GateResult:
+    """scores and untyped: the secondary tables, over every mutant that ran. primary and
+    primary_untyped: the same over the scorable mutants only, which decide the verdict.
+    touches: per mutant, the base behaviours that touch its observed_at targets."""
+
     scores: dict[str, dict[str, Prf]]
     untyped: dict[str, dict[str, Prf]]
     passed: bool
     wins: dict[str, bool]
     failed: dict[str, str] = field(default_factory=dict)
     literal_wins: dict[str, bool] = field(default_factory=dict)
+    primary: dict[str, dict[str, Prf]] = field(default_factory=dict)
+    primary_untyped: dict[str, dict[str, Prf]] = field(default_factory=dict)
+    touches: dict[str, int] = field(default_factory=dict)
+    types: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def scorable(self) -> frozenset[str]:
+        return scorable(self.touches)
+
+    def counts(self, only_scorable: bool) -> dict[str, int]:
+        """Mutants per type, all of them or the scorable ones."""
+        out = {t: 0 for t in DEFECT_TYPES}
+        for mid, t in self.types.items():
+            if not only_scorable or mid in self.scorable:
+                out[t] += 1
+        return out
 
     @property
     def headline(self) -> str:
@@ -131,7 +182,12 @@ class GateResult:
             return {m: {t: p.as_dict() for t, p in by.items()} for m, by in s.items()}
         return json.dumps({"headline": self.headline, "passed": self.passed, "wins": self.wins,
                            "literal_wins": self.literal_wins, "failed": self.failed,
-                           "typed": table(self.scores), "untyped": table(self.untyped)},
+                           "primary": {"typed": table(self.primary),
+                                       "untyped": table(self.primary_untyped)},
+                           "typed": table(self.scores), "untyped": table(self.untyped),
+                           "touches": self.touches, "scorable": sorted(self.scorable),
+                           "scorable_per_type": self.counts(True),
+                           "mutants_per_type": self.counts(False)},
                           ensure_ascii=False, indent=2)
 
 
@@ -155,12 +211,21 @@ def _keys(keys: frozenset[tuple[str, str, tuple[str, ...]]]) -> list[list[Any]]:
     return [[t, step, list(fields)] for t, step, fields in sorted(keys)]
 
 
+def delta_shift(base: Report, report: Report) -> dict[str, float]:
+    """Each item's difficulty δ on the mutant minus on the base (spec v2 §3.9): a shift
+    shows where the mutant changed who acts, which abstention assumes it does not."""
+    return {item: row["delta"] - base.items[item]["delta"]
+            for item, row in sorted(report.items.items()) if item in base.items}
+
+
 def _mutant_line(
     m: Mutant,
     found: dict[str, list[Defect]] | None,
     bases: dict[str, list[Defect]],
     report: Report | None,
     failure: str | None,
+    touched: int = 0,
+    base: Report | None = None,
 ) -> dict[str, Any]:
     matches = None
     if found is not None:
@@ -185,6 +250,9 @@ def _mutant_line(
         # before the differential, and the base noise it removed (spec §11 item 9)
         "ambiguity_keys": None if report is None else _keys(report.ambiguity_keys),
         "ambiguity_dropped": None if report is None else _keys(report.ambiguity_dropped),
+        "touches": touched, "scorable": touched >= SCORABLE_K,
+        "unobservable": None if report is None else _defects(report.unobservable),
+        "delta_shift": None if report is None or base is None else delta_shift(base, report),
         "failure": failure,
     }
 
@@ -198,11 +266,15 @@ def run_gate(
 ) -> GateResult:
     """mutants_out, if given, receives one JSON line for the base and one per mutant,
     written as each finishes."""
+    config.check_population()
     cfg = config.specdx()
     base_ctx = bench.loop_context(bench.base, cfg)
     # The base report is the differential's reference: its ambiguities are compared on
     # step and fields, before localisation, so localising them would be wasted runs.
     base = run_specdx(bench.base, base_ctx, dataclasses.replace(cfg, localize=False))
+    # Scorability comes from the base runs alone, before any mutant runs (spec v2 §4.1).
+    touched = touch_counts({m.id: m.truth.observed_at for m in mutants}, base.behaviours,
+                           base_ctx.lens)
     canon_ids = set(base_ctx.canon)
     base_b2, base_b3 = _baselines(base.behaviours, base_ctx, base.theta, canon_ids)
     bases = {"specdx": base.defects, "b2": base_b2, "b3": base_b3}
@@ -222,7 +294,9 @@ def run_gate(
     try:
         write({"base": True, "variant": base.variant,
                "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base),
-               "ambiguity_keys": _keys(base.ambiguity_keys)})
+               "ambiguity_keys": _keys(base.ambiguity_keys),
+               "unobservable": _defects(base.unobservable), "theta": base.theta,
+               "kappa": base.kappa, "items": base.items, "touches": touched})
         for m in mutants:
             report: Report | None = None
             try:
@@ -232,11 +306,11 @@ def run_gate(
                 raise
             except Exception as exc:  # noqa: BLE001 - one broken mutant must not stop the gate
                 failed[m.id] = f"{type(exc).__name__}: {exc}"
-                write(_mutant_line(m, None, bases, report, failed[m.id]))
+                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id], base))
                 continue
             if report.behaviours and all(b.status == "error" for b in report.behaviours):
                 failed[m.id] = report.behaviours[0].error
-                write(_mutant_line(m, None, bases, report, failed[m.id]))
+                write(_mutant_line(m, None, bases, report, failed[m.id], touched[m.id], base))
                 continue
             truths[m.id] = m.truth
             reports["specdx"][m.id] = report.defects
@@ -244,15 +318,24 @@ def run_gate(
                 report.behaviours, ctx, report.theta, canon_ids
             )
             found = {n: reports[n][m.id] for n in reports}
-            write(_mutant_line(m, found, bases, report, None))
+            write(_mutant_line(m, found, bases, report, None, touched[m.id], base))
     finally:
         if lines is not None:
             lines.close()
     scores = {n: evaluate_reports(reports[n], truths, bases[n]) for n in reports}
     untyped = {n: evaluate_reports(reports[n], truths, bases[n], typed=False) for n in reports}
-    passed, wins = gate_verdict(scores, untyped)
-    return GateResult(scores, untyped, passed and not failed, wins, failed,
-                      literal_wins(scores))
+    keep = scorable(touched)
+
+    def primary_of(typed: bool) -> dict[str, dict[str, Prf]]:
+        return {n: evaluate_reports({k: v for k, v in reports[n].items() if k in keep},
+                                    truths, bases[n], typed=typed) for n in reports}
+
+    result = GateResult(scores, untyped, False, {}, failed, literal_wins(scores),
+                        primary_of(True), primary_of(False), touched,
+                        {m.id: m.truth.type for m in mutants})
+    passed, wins = gate_verdict(result.primary, result.primary_untyped,
+                                scorable=result.counts(True), min_scorable=MIN_SCORABLE)
+    return dataclasses.replace(result, passed=passed and not failed, wins=wins)
 
 
 def gate_markdown(result: GateResult) -> str:
@@ -262,29 +345,48 @@ def gate_markdown(result: GateResult) -> str:
     def win(w: dict[str, bool], t: str) -> str:
         return "yes" if w.get(t) else "no"
 
-    lines = [f"# P1 gate: {result.headline}", ""]
+    lines = [f"# P1b gate v2: {result.headline}", ""]
     if result.failed:
         lines += [f"{len(result.failed)} mutant(s) could not run, so no verdict is given.", ""]
+    scorable_n, all_n = result.counts(True), result.counts(False)
     lines += [
-        "## Verdict",
+        "## Verdict (primary table: scorable mutants)",
         "",
-        "The gate needs 3 wins of 4 (spec §4.8, §11 item 12). Contradiction and hidden: "
-        "SpecDx's typed F1 must exceed both baselines' untyped F1, since the baselines "
-        "cannot assign a type. Ambiguity and weak: the baselines report clauses, which can "
-        f"never locate those truths, so SpecDx's typed F1 must reach {ABSOLUTE_BAR:.2f}.",
+        "The gate needs 3 wins of 4 (spec §4.8, §11 item 12, v2 §4.2). Contradiction and "
+        "hidden: SpecDx's typed F1 must exceed both baselines' untyped F1, since the "
+        "baselines cannot assign a type. Ambiguity and weak: the baselines report clauses, "
+        "which can never locate those truths, so SpecDx's typed F1 must reach "
+        f"{ABSOLUTE_BAR:.2f}. A type with fewer than {MIN_SCORABLE} scorable mutants is a "
+        "loss.",
         "",
-        "| type | rule | SpecDx typed | B2 untyped | B3 untyped | SpecDx untyped | SpecDx wins |",
-        "|---|---|---:|---:|---:|---:|---|",
+        "| type | scorable | rule | SpecDx typed | B2 untyped | B3 untyped | SpecDx untyped | "
+        "SpecDx wins |",
+        "|---|---:|---|---:|---:|---:|---:|---|",
     ]
     for t in DEFECT_TYPES:
         lines.append(
-            f"| {t} | {gate_rule(t)} | {f1(result.scores, 'specdx', t)} | "
-            f"{f1(result.untyped, 'b2', t)} | {f1(result.untyped, 'b3', t)} | "
-            f"{f1(result.untyped, 'specdx', t)} | {win(result.wins, t)} |"
+            f"| {t} | {scorable_n[t]} of {all_n[t]} | {gate_rule(t)} | "
+            f"{f1(result.primary, 'specdx', t)} | {f1(result.primary_untyped, 'b2', t)} | "
+            f"{f1(result.primary_untyped, 'b3', t)} | "
+            f"{f1(result.primary_untyped, 'specdx', t)} | {win(result.wins, t)} |"
         )
     lines += [
         "",
-        "## Literal comparison (typed against typed), for transparency only",
+        "## Secondary table: every mutant",
+        "",
+        "| type | excluded (not scorable) | SpecDx typed | B2 untyped | B3 untyped | "
+        "SpecDx untyped |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for t in DEFECT_TYPES:
+        lines.append(
+            f"| {t} | {all_n[t] - scorable_n[t]} | {f1(result.scores, 'specdx', t)} | "
+            f"{f1(result.untyped, 'b2', t)} | {f1(result.untyped, 'b3', t)} | "
+            f"{f1(result.untyped, 'specdx', t)} |"
+        )
+    lines += [
+        "",
+        "## Literal comparison (typed against typed, every mutant), for transparency only",
         "",
         "| type | SpecDx typed | B2 typed | B3 typed | SpecDx wins |",
         "|---|---:|---:|---:|---|",
@@ -294,6 +396,11 @@ def gate_markdown(result: GateResult) -> str:
             f"| {t} | {f1(result.scores, 'specdx', t)} | {f1(result.scores, 'b2', t)} | "
             f"{f1(result.scores, 'b3', t)} | {win(result.literal_wins, t)} |"
         )
+    lines += ["", "## Scorability (base runs touching each mutant's truth targets)", "",
+              "| mutant | type | base behaviours touching | scorable |", "|---|---|---:|---|"]
+    lines += [f"| {mid} | {result.types[mid]} | {n} | "
+              f"{'yes' if mid in result.scorable else 'no'} |"
+              for mid, n in sorted(result.touches.items())]
     if result.failed:
         lines += ["", "## Mutants that could not run", ""]
         lines += [f"- `{k}`: {v}" for k, v in sorted(result.failed.items())]

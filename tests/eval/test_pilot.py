@@ -6,12 +6,14 @@ import psycopg
 import pytest
 
 from specdx.active.loop import LoopContext
-from specdx.eval.pilot import GateConfig, check_model, gate_markdown, run_gate
+from specdx.eval.matching import Prf, gate_verdict
+from specdx.eval.pilot import GateConfig, check_model, gate_markdown, load_population, run_gate
 from specdx.infer.act import Act
 from specdx.infer.items import ItemView
 from specdx.mutate.operators import GroundTruth, Mutant
+from specdx.orchestrate.work_orders import WorkStep
 from specdx.spec.tell import TellCorpus
-from specdx.types import Behaviour, InfrastructureError, RefuteResult, Scenario, State
+from specdx.types import Behaviour, InfrastructureError, RefuteResult, Scenario, State, Target
 from specdx.variant import SpecVariant
 
 
@@ -67,12 +69,21 @@ class _Runner:
             raise InfrastructureError("Ollama failed 5 times: ConnectError")
         if self.broken:
             return Behaviour(key, interp, scenario, State.empty(), status="error", error="bad SQL")
-        bad = "c1" if variant.name == "H1-00" else ""
+        bad = "c1" if variant.name.startswith("H1-") else ""
         return Behaviour(key, interp, scenario, State({}, {"v": bad}, {}))
 
 
+STEP = WorkStep("s", "de", "A", "i", ("x",))
+
+
 class _Lens:
+    """Every behaviour acts at the one step "s" and touches its targets."""
+
     relevant = {"s": frozenset({"c1"})}
+    columns = None
+
+    def acted_steps(self, b):
+        return [STEP] if b.status == "ok" else []
 
     def violations(self, b):
         return frozenset(x for x in b.state.derived.get("v", "").split(",") if x)
@@ -103,9 +114,9 @@ class _Bench:
                            list(CANON.values()), 5, lambda i, b: _Refute())
 
 
-def _mutant(mid, kind, location):
+def _mutant(mid, kind, location, step="s"):
     return Mutant(mid, mid[:2], "s", SpecVariant(mid, Path("."), TellCorpus([])),
-                  GroundTruth(mid, kind, frozenset(location), "clause"))
+                  GroundTruth(mid, kind, frozenset(location), "clause", (Target("step", step),)))
 
 
 def _config(tmp_path) -> GateConfig:
@@ -134,8 +145,8 @@ def test_gate_records_a_broken_mutant_and_continues(tmp_path) -> None:
 def test_the_report_shows_the_verdict_and_the_literal_comparison(tmp_path) -> None:
     result = run_gate(_config(tmp_path), _Bench(), [_mutant("H1-00", "hidden", {"c1"})])
     report = gate_markdown(result)
-    assert "| contradiction | > baselines' untyped F1 |" in report
-    assert "| ambiguity | ≥ 0.40 (baselines cannot locate it) |" in report
+    assert "| > baselines' untyped F1 |" in report
+    assert "| ≥ 0.40 (baselines cannot locate it) |" in report
     assert "typed against typed" in report
     assert set(json.loads(result.to_json())["literal_wins"]) == set(result.wins)
 
@@ -164,7 +175,7 @@ def test_a_failed_mutant_makes_the_gate_incomplete(tmp_path) -> None:
     result = run_gate(_config(tmp_path), _Bench(), mutants)
     assert not result.passed and result.headline == "INCOMPLETE"
     report = gate_markdown(result)
-    assert report.startswith("# P1 gate: INCOMPLETE")
+    assert report.startswith("# P1b gate v2: INCOMPLETE")
     assert "PASSED" not in report and "- `broken`: bad SQL" in report
     assert json.loads(result.to_json())["headline"] == "INCOMPLETE"
 
@@ -189,3 +200,58 @@ def test_database_and_transport_failures_stop_the_gate(tmp_path, error) -> None:
 
     with pytest.raises(type(error)):
         run_gate(_config(tmp_path), _Down(), [_mutant("down", "weak", {"x.y"})])
+
+
+def test_scorability_comes_from_the_base_runs_and_only_scorable_mutants_count(tmp_path) -> None:
+    reached = _mutant("H1-00", "hidden", {"c1"})
+    unreached = _mutant("H1-01", "hidden", {"c1"}, step="elsewhere")
+    out = tmp_path / "lines.jsonl"
+    result = run_gate(_config(tmp_path), _Bench(), [reached, unreached], mutants_out=out)
+    assert result.touches == {"H1-00": 4, "H1-01": 0}  # 2 models x 2 seeds on grn12
+    assert result.scorable == {"H1-00"}
+    assert result.primary["specdx"]["hidden"].tp == 1
+    assert result.primary["specdx"]["hidden"].fn == 0  # H1-01 is excluded, not missed
+    assert result.scores["specdx"]["hidden"].tp == 2  # the secondary table keeps both
+    assert not result.wins["hidden"]  # one scorable hidden mutant: fewer than 3 is a loss
+    base, *mutants = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert base["touches"] == {"H1-00": 4, "H1-01": 0}
+    assert [(x["mutant"], x["scorable"]) for x in mutants] == [("H1-00", True), ("H1-01", False)]
+    assert all(x["unobservable"] == [] and x["delta_shift"] == {"grn12|s": 0.0} for x in mutants)
+    report = gate_markdown(result)
+    assert "| hidden | 1 of 2 |" in report and "| H1-01 | hidden | 0 | no |" in report
+
+
+def test_a_type_with_fewer_than_three_scorable_mutants_is_a_loss() -> None:
+    perfect = {t: Prf(tp=3) for t in ("contradiction", "hidden", "ambiguity", "weak")}
+    none = {t: Prf(fn=3) for t in perfect}
+    typed = {"specdx": perfect, "b2": none, "b3": none}
+    passed, wins = gate_verdict(typed, typed)
+    assert passed and all(wins.values())
+    counts = {"contradiction": 3, "hidden": 2, "ambiguity": 3, "weak": 0}
+    passed, wins = gate_verdict(typed, typed, scorable=counts)
+    assert not passed and wins == {"contradiction": True, "hidden": False, "ambiguity": True,
+                                   "weak": False}
+
+
+def _gate_file(tmp_path, population, screen=None) -> GateConfig:
+    raw = {"models_by_family": population, "variants": [0], "seeds": [1, 2], "budget": 10,
+           "dev_per_type": 1, "rng_seed": 1}
+    if screen is not None:
+        raw["screen"] = str(screen)
+    path = tmp_path / "gate.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return GateConfig.load(path)
+
+
+def test_the_gate_runs_only_on_the_screened_population(tmp_path) -> None:
+    screen = tmp_path / "screen.json"
+    screen.write_text(json.dumps({"population": {"q": ["m1"], "l": ["m2"]}, "stop": False}),
+                      encoding="utf-8")
+    run_gate(_gate_file(tmp_path, {"q": ["m1"], "l": ["m2"]}, screen), _Bench(), [])
+    with pytest.raises(ValueError, match="differs from the population"):
+        run_gate(_gate_file(tmp_path, {"q": ["m1"]}, screen), _Bench(), [])
+    with pytest.raises(ValueError, match="empty"):
+        run_gate(_gate_file(tmp_path, {}), _Bench(), [])
+    screen.write_text(json.dumps({"population": {"q": ["m1"]}, "stop": True}), encoding="utf-8")
+    with pytest.raises(ValueError, match="fewer than 2 families"):
+        load_population(screen)

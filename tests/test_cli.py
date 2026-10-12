@@ -1,8 +1,9 @@
 import logging
+from pathlib import Path
 
 import pytest
 
-from specdx.cli import main
+from specdx.cli import main, mutants_path
 from specdx.interpreters.prompt import TellVariants
 
 
@@ -80,3 +81,8 @@ def test_force_regenerates_and_saves_the_paraphrases(monkeypatch, capsys) -> Non
                         lambda variants, *, model, count: _frozen())
     assert main(["make-variants", "--force"]) == 0
     assert saved == [_frozen()] and "variants: 3" in capsys.readouterr().out
+
+
+def test_per_mutant_results_are_named_after_the_gate_output() -> None:
+    assert mutants_path(Path("results/p1b-gate.json")) == Path("results/p1b-gate-mutants.jsonl")
+    assert mutants_path(Path("results/p1-gate.json")) == Path("results/p1-gate-mutants.jsonl")

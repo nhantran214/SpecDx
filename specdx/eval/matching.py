@@ -130,6 +130,10 @@ def gate_rule(defect_type: str) -> str:
     return "> baselines' untyped F1"
 
 
+# A type with fewer scorable mutants than this is a loss (spec v2 §4.2).
+MIN_SCORABLE = 3
+
+
 def gate_verdict(
     typed: Mapping[str, Mapping[str, Prf]],
     untyped: Mapping[str, Mapping[str, Prf]],
@@ -137,14 +141,20 @@ def gate_verdict(
     method: str = "specdx",
     baselines: Sequence[str] = ("b2", "b3"),
     required: int = 3,
+    scorable: Mapping[str, int] | None = None,
+    min_scorable: int = MIN_SCORABLE,
 ) -> tuple[bool, dict[str, bool]]:
     """Spec §4.8 as clarified in §11 item 12. Contradiction and hidden: SpecDx's typed F1
     must exceed every baseline's untyped F1 (the baselines report hidden only, so their
     typed F1 is no bar). Ambiguity and weak: the baselines cannot locate those truths at
-    all, so SpecDx's typed F1 must reach ABSOLUTE_BAR. The gate needs `required` wins."""
+    all, so SpecDx's typed F1 must reach ABSOLUTE_BAR. The gate needs `required` wins.
+    scorable: scorable mutants per type (spec v2 §4.2); a type with fewer than
+    min_scorable of them is a loss whatever its scores."""
     compared = _wins(typed[method], [untyped[b] for b in baselines])
     wins = {t: reaches_bar(typed[method][t]) if t in BASELINE_BLIND else compared[t]
             for t in DEFECT_TYPES}
+    if scorable is not None:
+        wins = {t: won and scorable.get(t, 0) >= min_scorable for t, won in wins.items()}
     return sum(wins.values()) >= required, wins
 
 
