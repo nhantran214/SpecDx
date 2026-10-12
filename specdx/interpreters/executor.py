@@ -56,12 +56,12 @@ SEARCH_SCHEMA: dict[str, Any] = {
 }
 
 
-def interpreter_settings() -> dict[str, float | int]:
+def interpreter_settings() -> dict[str, float | int | str]:
     """Every executor setting an interpreter's behaviour depends on, as now configured.
     The run key covers them (spec §6.5), so changing one never reuses a cached run."""
     return {"temperature": TEMPERATURE, "max_steps": MAX_STEPS, "timeout": TIMEOUT,
             "num_ctx": NUM_CTX, "search_k": SEARCH_K, "search_reply_limit": SEARCH_REPLY_LIMIT,
-            "nudges": harness.MAX_NUDGES}
+            "nudges": harness.MAX_NUDGES, "nudge_text": harness.NUDGE}
 
 
 def _describe(exc: httpx.HTTPError) -> str:
@@ -179,6 +179,8 @@ class SpecInterpreterExecutor:
                     if calls:
                         continue
                     written = harness.parse_text_calls(_plain(reply), tools)
+                    if written:  # the history shows them as the native calls they stand for
+                        reply["tool_calls"] = written
                     for call in written:
                         counts["tool_calls"] += 1
                         counts["valid_calls"] += 1
@@ -188,7 +190,7 @@ class SpecInterpreterExecutor:
                     if written:
                         continue
                     if (drafts and counts["nudges"] < self.max_nudges
-                            and not harness.wrote(record.calls)):
+                            and step < self.max_steps and not harness.wrote(record.calls)):
                         counts["nudges"] += 1
                         messages.append({"role": "user", "content": harness.NUDGE})
                         continue

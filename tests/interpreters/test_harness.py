@@ -1,9 +1,13 @@
 import json
 
 import pytest
+from tonomyx.tools.catalog import build_registry
 
+from specdx.interpreters.executor import SEARCH_SPEC
 from specdx.interpreters.harness import (
     NUDGE,
+    READ_ONLY_TOOLS,
+    WRITE_TOOLS,
     parse_text_calls,
     tool_parameters,
     valid_call,
@@ -85,7 +89,13 @@ def test_a_native_call_is_valid_only_with_a_known_tool_and_valid_arguments() -> 
 def test_only_a_successful_state_changing_call_counts_as_a_write() -> None:
     assert not wrote([{"name": "search_spec", "outcome": "ok"},
                       {"name": "write_draft", "outcome": "denied"}])
+    assert not wrote([{"name": "match_three_way", "outcome": "ok"}])  # it reads only
     assert wrote([{"name": "log_event", "outcome": "ok"}])
+
+
+def test_every_tool_is_classified_as_reading_or_writing() -> None:
+    assert not READ_ONLY_TOOLS & WRITE_TOOLS
+    assert build_registry().names() | {SEARCH_SPEC} == READ_ONLY_TOOLS | WRITE_TOOLS
 
 
 def test_the_nudge_restates_the_standing_rule_and_allows_confirming_done() -> None:

@@ -23,8 +23,16 @@ NUDGE = (
     "nếu thật sự đã xong, hãy trả lời lại 'xong'."
 )
 MAX_NUDGES = 2  # spec v2 §3.10
-# Tools that change nothing: a step that only called these has not acted.
-READ_ONLY_TOOLS: frozenset[str] = frozenset({"read_records", "search_kb", "search_spec"})
+# Every tool is classified, by reading its implementation under vendor/tonomyx/tonomyx/tools/impl.
+# A step that only called read-only tools has not acted; only a WRITE_TOOLS call counts as
+# acting. A tool added later fails tests/interpreters/test_harness.py until it is classified.
+READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {"read_records", "search_kb", "search_spec", "match_three_way"}
+)
+WRITE_TOOLS: frozenset[str] = frozenset({
+    "write_draft", "update_status", "log_event", "create_approval", "decide_approval",
+    "send_email",
+})
 _NAME_KEYS = ("name", "function")
 _ARGUMENT_KEYS = ("arguments", "parameters")
 _JSON_TYPES: dict[str, tuple[type, ...]] = {
@@ -116,4 +124,4 @@ def parse_text_calls(content: str, tools: Mapping[str, Parameters]) -> list[dict
 
 def wrote(calls: Sequence[Mapping[str, Any]]) -> bool:
     """Whether any call of the step succeeded at changing something."""
-    return any(c.get("outcome") == "ok" and c.get("name") not in READ_ONLY_TOOLS for c in calls)
+    return any(c.get("outcome") == "ok" and c.get("name") in WRITE_TOOLS for c in calls)

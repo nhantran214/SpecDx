@@ -49,13 +49,17 @@ def corpus(pack) -> TellCorpus:
 
 @pytest.fixture
 def run_de(db, corpus):
-    def run(transport, de="DE-OP-01", intent="check_availability", inputs=None):
+    def run(transport, de="DE-OP-01", intent="check_availability", inputs=None, rows=(),
+            **options):
         executor = SpecInterpreterExecutor(
-            "scripted", build_registry(), corpus, load_variants(), transport=transport, seed=7
+            "scripted", build_registry(), corpus, load_variants(), transport=transport, seed=7,
+            **options,
         )
         with db.isolated() as conn:
             runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
             open_case(runtime.repo)
+            for table, row in rows:  # what the earlier steps of the case would have written
+                runtime.repo.insert(table, row)
             envelope = runtime.run(de, intent, "CASE-0031", inputs or {"ma_so": "SO-0031"})
             rows = conn.execute("SELECT kind, ref FROM evt").fetchall()
         return envelope, rows
@@ -406,6 +410,10 @@ def test_a_tool_call_written_as_text_is_executed_and_marked(run_de) -> None:
                                          "valid_calls": 1}
     assert envelope.usage["tool_calls"][0]["parsed_from_text"] is True
     assert envelope.status is ResultStatus.DONE
+    # the history shows the parsed call as a native one, answered by its tool message
+    asked, answered = seen[1]["messages"][-2:]
+    assert asked["tool_calls"] == [{"function": {"name": "log_event", "arguments": FLAG}}]
+    assert answered["role"] == "tool" and answered["tool_name"] == "log_event"
 
 
 def test_a_text_call_to_a_tool_the_step_lacks_is_not_executed(run_de) -> None:
@@ -422,3 +430,47 @@ def test_native_calls_are_counted_valid_only_when_they_fit_the_schema(run_de) ->
     envelope, _ = run_de(transport)
     assert envelope.usage["harness"]["tool_calls"] == 1
     assert envelope.usage["harness"]["valid_calls"] == 0
+
+
+def test_a_drafting_step_that_only_read_is_nudged(run_de) -> None:
+    transport, seen = _scripted(_call("match_three_way", {"po": "PO-0015"}), _say("Xong."),
+                                _say("xong"), _say("xong"))
+    po = {"ma_po": "PO-0015", "ma_ncc": "VEND-0003", "case_id": "CASE-0031", "sl_dat": 15,
+          "trang_thai": "Đã duyệt"}
+    envelope, _ = run_de(transport, de="DE-FN-02", intent="reconcile",
+                         inputs={"ma_po": "PO-0015", "ma_vinv": "VINV-0015"}, rows=[("po", po)])
+    assert envelope.usage["tool_calls"][0] == {"name": "match_three_way",
+                                               "args": {"po": "PO-0015"}, "outcome": "ok"}
+    assert len(seen) == 4 and seen[2]["messages"][-1] == {"role": "user", "content": NUDGE}
+    assert envelope.usage["harness"]["nudges"] == 2  # a reconciliation read is no write
+
+
+def test_the_last_round_of_a_step_is_never_spent_on_a_nudge(run_de) -> None:
+    transport, seen = _scripted(_say("Xong."), _say("xong"), _say("xong"))
+    envelope, _ = run_de(transport, de="DE-FN-01", intent="draft_sales_invoice", inputs=INVOICE,
+                         max_steps=2)
+    assert len(seen) == 2 and envelope.usage["harness"]["nudges"] == 1
+
+
+def test_an_outage_during_a_nudge_round_trip_is_flagged_and_keeps_the_counts(db, corpus) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(200, json={"message": _say("Xong.")})
+        raise httpx.ConnectError("connection refused", request=request)
+
+    executor = SpecInterpreterExecutor(
+        "scripted", build_registry(), corpus, load_variants(),
+        transport=httpx.MockTransport(handle), sleep=lambda s: None,
+    )
+    with db.isolated() as conn:
+        runtime = build_runtime(conn, db.settings, executor=executor, clock=CLOCK)
+        open_case(runtime.repo)
+        envelope = runtime.run("DE-FN-01", "draft_sales_invoice", "CASE-0031", INVOICE)
+    assert len(calls) == 6  # the answer, then the nudge's five attempts
+    assert executor.infra_failure is not None and "ConnectError" in executor.infra_failure
+    assert envelope.status is ResultStatus.ERROR
+    assert envelope.usage["harness"] == {"nudges": 1, "parsed_from_text": 0, "tool_calls": 0,
+                                         "valid_calls": 0}
