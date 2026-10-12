@@ -12,8 +12,8 @@ def test_help_lists_every_subcommand(capsys) -> None:
         main(["--help"])
     assert exit_info.value.code == 0
     out = capsys.readouterr().out
-    for command in ("build-tell", "make-variants", "capability", "screen", "mutants", "run",
-                    "gate"):
+    for command in ("build-tell", "make-variants", "capability", "screen", "doctor",
+                    "cache-info", "mutants", "run", "gate"):
         assert command in out
 
 
@@ -121,3 +121,15 @@ def test_screen_writes_both_files_and_exits_3_on_the_stop_rule(monkeypatch, tmp_
     assert main(["screen", "--profile", str(profile), "--out", str(out)]) == 3
     assert json.loads((tmp_path / "results" / "screen.json").read_text())["stop"] is True
     assert "STOP" in (tmp_path / "results" / "screen.md").read_text()
+
+
+def test_cache_info_prints_the_cached_runs(monkeypatch, tmp_path, capsys) -> None:
+    from specdx.interpreters.cache import RunCache
+    from specdx.types import Behaviour, InterpreterId, Scenario, State
+
+    RunCache(tmp_path / "runs.jsonl").put(Behaviour(
+        "k", InterpreterId("qwen3:14b", "qwen", 0, 1), Scenario("s", 15, 12, 0), State({}),
+        model_digest="abc", spec="base"))
+    monkeypatch.setattr("specdx.cli.WORK_DIR", tmp_path)
+    assert main(["cache-info"]) == 0
+    assert "| qwen3:14b | abc | ok | 1 |" in capsys.readouterr().out

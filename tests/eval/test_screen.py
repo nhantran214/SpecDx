@@ -97,3 +97,14 @@ def test_a_profile_loads_by_path(tmp_path) -> None:
                                 "candidates": {"qwen": ["qwen3:14b"]}}), encoding="utf-8")
     profile = load_profile(str(path))
     assert (profile.name, profile.workers, profile.candidates) == ("p", 2, {"qwen": ("qwen3:14b",)})
+
+
+def test_the_shipped_profiles_widen_each_other() -> None:
+    profiles = [load_profile(name) for name in ("gpu16", "gpu24", "gpu48", "gpu80")]
+
+    def models(p):
+        return {(f, m) for f, ms in p.candidates.items() for m in ms}
+
+    assert all(models(a) < models(b) for a, b in zip(profiles, profiles[1:], strict=False))
+    assert set(profiles[0].candidates) == {"qwen", "openai", "mistral", "ibm", "meta"}
+    assert all(p.workers <= p.ollama_num_parallel for p in profiles)

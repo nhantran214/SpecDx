@@ -1,4 +1,4 @@
-from specdx.interpreters.cache import RunCache, run_key
+from specdx.interpreters.cache import RunCache, cache_summary, run_key
 from specdx.types import Behaviour, InterpreterId, Scenario, State
 
 
@@ -68,3 +68,13 @@ def test_after_loading_truncated_file_put_then_reload_returns_record(tmp_path) -
     reloaded.put(_b("k4"))
     final = RunCache(path)
     assert final.get("k4") == _b("k4") and len(final) == 3
+
+
+def test_the_summary_counts_runs_per_model_digest_and_specification(tmp_path) -> None:
+    cache = RunCache(tmp_path / "runs.jsonl")
+    for key, model, spec in (("a", "m", "base"), ("b", "m", "base"), ("c", "n", "")):
+        cache.put(Behaviour(key, InterpreterId(model, "f", 0, 1), Scenario("s", 15, 12, 0),
+                            State({}), model_digest=f"d-{model}", spec=spec))
+    text = cache_summary(cache)
+    assert "(3 runs)" in text and "| m | d-m | ok | 2 |" in text and "| n | d-n | ok | 1 |" in text
+    assert "| base | 2 |" in text and "| (not recorded: a P1 run) | 1 |" in text

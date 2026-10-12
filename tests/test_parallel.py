@@ -107,3 +107,12 @@ def test_three_workers_give_a_byte_identical_report(db, tmp_path) -> None:
     with psycopg.connect(db.url) as conn:
         names = {r[0] for r in conn.execute("SELECT datname FROM pg_database").fetchall()}
     assert {"tonomyx_w0", "tonomyx_w1", "tonomyx_w2"} <= names
+
+
+@pytest.mark.db
+def test_workers_take_the_ollama_hosts_round_robin(db, tmp_path) -> None:
+    bench = Workbench.open(tmp_path, workers=3, hosts=["http://h0:11434", "http://h1:11434"],
+                           model_digest=lambda m: m)
+    interp = InterpreterId("m", "f", 0, 1)
+    urls = [w.factory(interp, bench.base.corpus, "").base_url for w in bench.runner.workers]
+    assert urls == ["http://h0:11434", "http://h1:11434", "http://h0:11434"]

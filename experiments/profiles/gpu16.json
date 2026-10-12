@@ -1,0 +1,13 @@
+{
+  "profile": "gpu16",
+  "_note": "Candidate models by family (spec v2 §2.3). A profile only widens the candidate list; the capability screen decides admission. workers is the suggested --workers; set OLLAMA_NUM_PARALLEL to at least it on every Ollama host.",
+  "workers": 2,
+  "ollama_num_parallel": 2,
+  "candidates": {
+    "qwen": ["qwen3:14b", "qwen2.5:14b", "qwen3:30b-a3b"],
+    "openai": ["gpt-oss:20b"],
+    "mistral": ["mistral-small3.2:24b"],
+    "ibm": ["granite3.3:8b"],
+    "meta": ["llama3.1:8b"]
+  }
+}

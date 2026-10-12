@@ -70,6 +70,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     scr.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
     scr.add_argument("--out", type=Path, required=True,
                      help="writes OUT.md and OUT.json (exit status 3 when the stop rule holds)")
+    doc = sub.add_parser("doctor", help="check that this machine is ready to run P1b")
+    doc.add_argument("--profile", help="the profile whose candidate models to check "
+                                       "(default: the one local VRAM suggests, else gpu16)")
+    sub.add_parser("cache-info", help="cached runs per model and digest, and per specification")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
     run = sub.add_parser("run", help="run SpecDx on the base specification or one mutant")
     run.add_argument("--variant", default="base")
@@ -121,6 +125,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         made = paraphrases.make_variants(current, model=args.model, count=args.count)
         save_variants(made)
         print(f"variants: {made.count}")
+        return 0
+
+    if args.command == "doctor":
+        from specdx.config import DATABASE_URL, OLLAMA_URLS
+        from specdx.doctor import run_doctor
+
+        report, healthy = run_doctor(args.profile, database_url=DATABASE_URL, hosts=OLLAMA_URLS,
+                                     work_dir=WORK_DIR)
+        print(report)
+        return 0 if healthy else 1
+
+    if args.command == "cache-info":
+        from specdx.interpreters.cache import RunCache, cache_summary
+
+        print(cache_summary(RunCache(WORK_DIR / "runs.jsonl")))
         return 0
 
     if args.command == "capability":

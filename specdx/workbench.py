@@ -16,7 +16,7 @@ from specdx.active.budget import RunBudget
 from specdx.active.ddmin import OutOfBudget, localize_ambiguity
 from specdx.active.loop import LoopContext, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
-from specdx.config import BASE_PACK, OLLAMA_URL, PDF_DIR, WORK_DIR
+from specdx.config import BASE_PACK, OLLAMA_URL, OLLAMA_URLS, PDF_DIR, WORK_DIR
 from specdx.db import PackDatabase, golden_tables, split_background
 from specdx.infer.act import drafting_steps
 from specdx.infer.items import SpecLens
@@ -41,23 +41,33 @@ from specdx.variant import SpecVariant
 
 
 def ollama_digests(
-    base_url: str = OLLAMA_URL, transport: httpx.BaseTransport | None = None
+    base_urls: str | Sequence[str] = OLLAMA_URLS, transport: httpx.BaseTransport | None = None
 ) -> Callable[[str], str]:
-    """Model name → Ollama digest, fetched on first use, so the run cache never mixes two
-    builds of one model. An unknown model or an unreachable Ollama is an error."""
-    digests: dict[str, str] = {}
+    """Model name → Ollama digest, fetched from every host on first use, so the run cache
+    never mixes two builds of one model. An unknown model, an unreachable host, or hosts
+    that disagree on a digest are errors."""
+    hosts = [base_urls] if isinstance(base_urls, str) else list(base_urls)
+    listed: dict[str, dict[str, str]] = {}
 
     def lookup(model: str) -> str:
-        if not digests:
+        if not listed:
             with httpx.Client(transport=transport, timeout=10.0) as client:
-                response = client.get(f"{base_url}/api/tags")
-                response.raise_for_status()
-                for m in response.json().get("models", []):
-                    digests[str(m["name"])] = str(m["digest"])
+                for host in hosts:
+                    response = client.get(f"{host}/api/tags")
+                    response.raise_for_status()
+                    listed[host] = {str(m["name"]): str(m["digest"])
+                                    for m in response.json().get("models", [])}
         name = model if ":" in model else f"{model}:latest"
-        if name not in digests:
-            raise KeyError(f"Ollama does not list model {model!r}")
-        return digests[name]
+        found = {host: listed[host].get(name) for host in hosts}
+        absent = [host for host, digest in found.items() if digest is None]
+        if len(absent) == len(hosts):
+            raise KeyError(f"Ollama does not list model {model!r} on {', '.join(absent)}")
+        if absent:  # listed elsewhere: the hosts disagree, as with different digests
+            raise ValueError(f"model {model!r} is missing on {', '.join(absent)} "
+                             "but listed on the other hosts")
+        if len(set(found.values())) > 1:
+            raise ValueError(f"model {model!r} has different digests across hosts: {found}")
+        return str(found[hosts[0]])
 
     return lookup
 
@@ -92,36 +102,43 @@ class Workbench:
         factory: ExecutorFactory | None = None,
         model_digest: Callable[[str], str] | None = None,
         workers: int = 1,
+        hosts: Sequence[str] = OLLAMA_URLS,
     ) -> Workbench:
         """workers: with 2 or more, runs go to that many worker databases at once (spec v2
-        §5.1); symbolic repair keeps the main database."""
+        §5.1), worker i on Ollama host i modulo the hosts; symbolic repair keeps the main
+        database."""
         pdf = pdf_chunks(PDF_DIR, work_dir / "tell")
         base = SpecVariant("base", BASE_PACK, TellCorpus.build(CanonPack(BASE_PACK), pdf))
         variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
                     variants, pdf, base, work_dir)
-        digests = model_digest or ollama_digests()
+        digests = model_digest or ollama_digests(hosts)
         context = context_digest(tell_payload(variants), bench.settings)
 
-        def runner(db: PackDatabase) -> Runner:
-            return Runner(db, bench.cache, factory or bench.llm_factory, bench.steps,
+        def runner(db: PackDatabase, host: str) -> Runner:
+            def on_host(i: InterpreterId, c: TellCorpus, s: str) -> DeExecutor:
+                return bench.llm_factory(i, c, s, base_url=host)
+
+            return Runner(db, bench.cache, factory or on_host, bench.steps,
                           model_digest=digests, context_digest=context)
 
         if workers <= 1:
-            bench.runner = runner(bench.db)
+            bench.runner = runner(bench.db, hosts[0])
             return bench
         pool = []
         for index in range(workers):
             url = worker_url(bench.db.url, index)
             ensure_database(bench.db.url, str(conninfo_to_dict(url)["dbname"]))
-            pool.append(runner(PackDatabase(url)))
+            pool.append(runner(PackDatabase(url), hosts[index % len(hosts)]))
         bench.runner = ParallelRunner(pool, bench.cache)
         return bench
 
-    def llm_factory(self, interp: InterpreterId, corpus: TellCorpus, suffix: str) -> DeExecutor:
+    def llm_factory(
+        self, interp: InterpreterId, corpus: TellCorpus, suffix: str, base_url: str = OLLAMA_URL
+    ) -> DeExecutor:
         return SpecInterpreterExecutor(
             interp.model, build_registry(), corpus, self.variants,
-            variant=interp.variant, seed=interp.seed, suffix=suffix,
+            variant=interp.variant, seed=interp.seed, suffix=suffix, base_url=base_url,
             temperature=float(self.settings["temperature"]),
             max_steps=int(self.settings["max_steps"]), timeout=float(self.settings["timeout"]),
             max_nudges=int(self.settings["nudges"]),

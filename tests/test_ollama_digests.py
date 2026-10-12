@@ -41,3 +41,27 @@ def test_an_unreachable_ollama_is_an_error() -> None:
 
     with pytest.raises(httpx.ConnectError):
         ollama_digests("http://x", httpx.MockTransport(down))("qwen3:14b")
+
+
+def _hosts(tables: dict[str, dict[str, str]]) -> httpx.MockTransport:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"models": [
+            {"name": n, "digest": d} for n, d in tables[request.url.host].items()]})
+
+    return httpx.MockTransport(handle)
+
+
+def test_several_hosts_must_list_a_model_with_the_same_digest() -> None:
+    agree = ollama_digests(["http://a", "http://b"],
+                           _hosts({"a": {"m:1": "d"}, "b": {"m:1": "d"}}))
+    assert agree("m:1") == "d"
+    differ = ollama_digests(["http://a", "http://b"],
+                            _hosts({"a": {"m:1": "d"}, "b": {"m:1": "e"}}))
+    with pytest.raises(ValueError, match="different digests"):
+        differ("m:1")
+    partial = ollama_digests(["http://a", "http://b"], _hosts({"a": {"m:1": "d"}, "b": {}}))
+    with pytest.raises(ValueError, match="missing on http://b"):
+        partial("m:1")
+    nowhere = ollama_digests(["http://a", "http://b"], _hosts({"a": {}, "b": {}}))
+    with pytest.raises(KeyError, match="does not list"):
+        nowhere("m:1")

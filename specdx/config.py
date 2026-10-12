@@ -15,7 +15,13 @@ WORK_DIR = Path(os.environ.get("SPECDX_WORK", str(REPO_ROOT / "work")))
 DATABASE_URL = os.environ.get(
     "SPECDX_DATABASE_URL", "postgresql://tonomyx:tonomyx@localhost:55434/tonomyx"
 )
-OLLAMA_URL = os.environ.get("SPECDX_OLLAMA_URL", "http://localhost:11434")
+# One Ollama host or several, comma-separated (spec v2 §5.1): workers use them round robin.
+OLLAMA_URLS: tuple[str, ...] = tuple(
+    u.strip().rstrip("/")
+    for u in os.environ.get("SPECDX_OLLAMA_URL", "http://localhost:11434").split(",")
+    if u.strip()
+)
+OLLAMA_URL = OLLAMA_URLS[0]
 
 
 def settings_for(pack: Path, url: str = DATABASE_URL) -> Settings:
