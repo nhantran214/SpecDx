@@ -7,6 +7,7 @@ import pytest
 
 from specdx.active.loop import LoopContext
 from specdx.eval.pilot import GateConfig, check_model, gate_markdown, run_gate
+from specdx.infer.act import Act
 from specdx.infer.items import ItemView
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.spec.tell import TellCorpus
@@ -71,6 +72,8 @@ class _Runner:
 
 
 class _Lens:
+    relevant = {"s": frozenset({"c1"})}
+
     def violations(self, b):
         return frozenset(x for x in b.state.derived.get("v", "").split(",") if x)
 
@@ -79,6 +82,9 @@ class _Lens:
             return []
         return [ItemView(f"{b.scenario.id}|s", b.run_key, b.interpreter.model,
                          b.interpreter.family, "K", violated, ())]
+
+    def acts(self, b):
+        return [Act(v.item, v.run_key, v.model, True) for v in self.views(b, frozenset())]
 
     def diff(self, a, b):
         return frozenset()
@@ -105,7 +111,7 @@ def _mutant(mid, kind, location):
 def _config(tmp_path) -> GateConfig:
     path = tmp_path / "gate.json"
     path.write_text(json.dumps({"models_by_family": {"q": ["m1"], "l": ["m2"]},
-                                "variants": [0], "seeds": [1], "budget": 10,
+                                "variants": [0], "seeds": [1, 2], "budget": 10,
                                 "dev_per_type": 1, "rng_seed": 1}), encoding="utf-8")
     return GateConfig.load(path)
 

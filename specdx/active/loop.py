@@ -5,15 +5,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from specdx.active.budget import RunBudget
 from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.active.search import CellBandit, information_gain, should_escalate
-from specdx.infer.items import ItemView
-from specdx.infer.latent import Observation, Posterior, fit
+from specdx.infer.act import Act, fit_rasch
+from specdx.infer.items import ItemView, acted_violations, observations
+from specdx.infer.latent import Posterior, fit
 from specdx.infer.scores import ambiguity_key, diagnose, identity, merge_defects
 from specdx.interpreters.population import committee, pilot
 from specdx.spec.columns import Projection
@@ -31,9 +32,13 @@ class RunnerLike(Protocol):
 
 
 class LensLike(Protocol):
+    relevant: Mapping[str, frozenset[str]]
+
     def violations(self, behaviour: Behaviour) -> frozenset[str]: ...
 
     def views(self, behaviour: Behaviour, violated: frozenset[str]) -> list[ItemView]: ...
+
+    def acts(self, behaviour: Behaviour) -> list[Act]: ...
 
     def diff(self, a: Projection, b: Projection) -> frozenset[str]: ...
 
@@ -148,6 +153,7 @@ def run_specdx(
     behaviours: list[Behaviour] = []
     violated: dict[str, frozenset[str]] = {}
     views: list[ItemView] = []
+    acts: list[Act] = []
     seen_sets: set[frozenset[str]] = set()
     posterior = Posterior({}, {}, {})
     defects: list[Defect] = []
@@ -156,6 +162,7 @@ def run_specdx(
     runs = 0
     executed_before = ctx.runner.executed
     members = committee(config.models_by_family, config.variants, config.seeds)
+    population = {m: f for f, ms in config.models_by_family.items() for m in ms}
     # Base locations whose candidates spent probes, or would: contradictions, and hidden
     # findings refuted by a probe run or never attempted. A base finding that symbolic
     # repair refuted cost no probe; if it needs one on a mutant, the mutant changed it.
@@ -184,9 +191,9 @@ def run_specdx(
                 break
             fresh.append(ctx.runner.run(variant, scenario, interp))
             runs += 1
-        sets = [ctx.lens.violations(b) for b in fresh]
-        pilot_views = [v for b, s in zip(fresh, sets, strict=True) for v in ctx.lens.views(b, s)]
-        ok_sets = [s for b, s in zip(fresh, sets, strict=True) if b.status == "ok"]
+        seen = {b.run_key: ctx.lens.views(b, ctx.lens.violations(b)) for b in fresh}
+        pilot_views = [v for b in fresh for v in seen[b.run_key]]
+        ok_sets = [acted_violations(seen[b.run_key]) for b in fresh if b.status == "ok"]
         if should_escalate(pilot_views, ok_sets, seen_sets):
             for interp in members:
                 if interp in pilot_ids:
@@ -197,25 +204,26 @@ def run_specdx(
                 runs += 1
 
         for b in fresh:
-            v = ctx.lens.violations(b)
-            violated[b.run_key] = v
+            mine = ctx.lens.views(b, ctx.lens.violations(b))
+            violated[b.run_key] = acted_violations(mine)
             if b.status == "ok":
-                seen_sets.add(v)
+                seen_sets.add(violated[b.run_key])
             behaviours.append(b)
-            views.extend(ctx.lens.views(b, v))
-        posterior = fit(
-            [Observation(v.item, v.run_key, v.model, v.family, v.klass) for v in views],
-            k_max=config.k_max, p_single=config.p_single,
-        )
+            views.extend(mine)
+            acts.extend(ctx.lens.acts(b))
+        rasch = fit_rasch(acts)
+        posterior = fit(observations(views), models=population, k_max=config.k_max,
+                        p_single=config.p_single)
         refuter = _Memoised(ctx.refuter_factory(
             ranked_interpreters(config.models_by_family, posterior.theta, config.variants),
             budget,
         ), refutations)
         defects = diagnose(
             behaviours, violated, views, posterior, refuter, ctx.lens.diff,
+            observable=rasch.observable_items(), relevant=ctx.lens.relevant,
             tau=config.tau, ambig_threshold=config.ambig_threshold,
-            weak_threshold=config.weak_threshold, known=known,
-        )
+            weak_threshold=config.weak_threshold, rng_seed=config.rng_seed, known=known,
+        ).defects
         scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))
         previous = scores

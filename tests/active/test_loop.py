@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
+from specdx.infer.act import Act
 from specdx.infer.items import ItemView
 from specdx.infer.scores import UNATTEMPTED
 from specdx.spec.tell import TellCorpus
@@ -28,9 +29,15 @@ class FakeRunner:
                          State({}, {"k": klass, "v": ",".join(sorted(bad))}, {}))
 
 
+CLAUSES = frozenset({"c1", "n", "noise", "n1", "n2", "n3"})
+
+
 class FakeLens:
     """One item under test plus five calibration items, as a real run has eleven steps:
-    competence is learnt from the steps where competent models agree."""
+    competence is learnt from the steps where competent models agree. Every behaviour acts
+    at every item, and every clause is read at the steps under test."""
+
+    relevant = {"step": CLAUSES, "step2": CLAUSES} | {f"cal{j}": frozenset() for j in range(5)}
 
     def violations(self, b):
         return frozenset(x for x in b.state.derived["v"].split(",") if x)
@@ -45,6 +52,9 @@ class FakeLens:
             out.append(ItemView(f"{b.scenario.id}|cal{j}", b.run_key, model, family, cal,
                                 frozenset(), (("x", ((cal, ()),)),)))
         return out
+
+    def acts(self, b):
+        return [Act(v.item, v.run_key, v.model, v.acted) for v in self.views(b, frozenset())]
 
     def diff(self, a, b):
         return frozenset({"x.k"}) if a != b else frozenset()
