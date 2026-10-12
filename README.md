@@ -2,6 +2,8 @@
 
 Phase P1 (core on the TonomyX canon). The design is in `docs/superpowers/specs/2026-10-06-specdx-design.md` and the plan in `docs/superpowers/plans/2026-10-06-specdx-p1-core.md`.
 
+Phase P1b (act→read diagnosis with observability) follows `docs/superpowers/specs/2026-10-11-specdx-v2-design.md` and `docs/superpowers/plans/2026-10-11-specdx-p1b.md`. **To run it on any machine, follow `docs/RUNNING.md`.**
+
 ```bash
 python3 -m venv .venv && .venv/bin/python -m pip install -e vendor/tonomyx -e ".[dev]"
 docker compose up -d                       # PostgreSQL on port 55434
