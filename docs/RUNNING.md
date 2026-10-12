@@ -61,7 +61,7 @@ On every Ollama host:
 OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve
 ```
 
-- `OLLAMA_NUM_PARALLEL` must be at least the number of workers sent to that host; otherwise the workers queue behind each other.
+- `--workers` must not exceed the `OLLAMA_NUM_PARALLEL` of the host it is sent to, and two workers serving different models need both models to fit on the GPU together. A request that waits in Ollama's queue (or for a model swap) counts against the 180 s per-call timeout, and a timed-out call is recorded as interpreter behaviour in the run cache, permanently. When in doubt, or when `OLLAMA_NUM_PARALLEL` is unset (it defaults to 1), use `--workers 1`.
 - A report made with N workers is byte-identical to the one-worker report over the same cached runs. Fresh runs with `OLLAMA_NUM_PARALLEL` above 1 are not guaranteed to be bit-identical, because the model server batches inference.
 - Several hosts: list them all, as in `export SPECDX_OLLAMA_URL=http://gpu1:11434,http://gpu2:11434`. Worker *i* uses host *i* modulo the number of hosts.
 - Every host must hold the same build of each model. Pull the same tags everywhere; `doctor` fails when two hosts report different digests, and so does every run.
@@ -120,7 +120,7 @@ It runs the base specification, computes which mutants are scorable from the bas
 
 - Pause: `kill -STOP $(cat work/p1b-gate.pid)`. Resume: `kill -CONT $(cat work/p1b-gate.pid)`.
 - Never start a second SpecDx process on the same database. The advisory lock refuses it with "another process holds the SpecDx lock"; stop the first one, or wait for it.
-- After a crash, a reboot or an Ollama outage, run the same command again. Every finished run is in the cache, so the gate resumes where it stopped and spends its budgets exactly as before.
+- After a crash, a reboot or an Ollama outage, run the same command again. Every finished run is in the cache, so the gate resumes where it stopped. Its budgets are spent as before up to the crash point; runs that were in flight at the crash are executed again and are fresh samples, so they can differ from the lost ones.
 
 ## 8. Moving the run cache
 
@@ -167,7 +167,7 @@ The headline is PASSED, NOT PASSED or INCOMPLETE (a mutant could not run). After
    .venv/bin/python -m pytest
    ```
 3. Kiểm tra máy và chọn cấu hình: `.venv/bin/specdx doctor`. Lệnh này gợi ý một profile (gpu16, gpu24, gpu48, gpu80) và in các lệnh `ollama pull` còn thiếu.
-4. Nếu Ollama chạy ở máy GPU khác: trên máy đó chạy `OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve`; trên máy này đặt `export SPECDX_OLLAMA_URL=http://may-gpu:11434` (nhiều máy thì cách nhau bằng dấu phẩy).
+4. Nếu Ollama chạy ở máy GPU khác: trên máy đó chạy `OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve`; trên máy này đặt `export SPECDX_OLLAMA_URL=http://may-gpu:11434` (nhiều máy thì cách nhau bằng dấu phẩy). Lưu ý: `--workers` không được vượt quá `OLLAMA_NUM_PARALLEL` của máy Ollama (mặc định 1), vì yêu cầu phải xếp hàng có thể hết thời gian chờ và bị ghi vĩnh viễn vào cache như hành vi của mô hình; nếu không chắc, dùng `--workers 1`.
 5. Sàng lọc năng lực: `.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 2`. Mã thoát 3 nghĩa là STOP: ít hơn 2 họ mô hình đạt, P1b dừng.
 6. Ghi quần thể vào cấu hình gate (lệnh `jq` ở mục 5), rồi chạy gate nền: `setsid nohup .venv/bin/specdx gate --config experiments/p1b-gate.json --out results/p1b-gate.json --workers 2 > work/p1b-gate.log 2>&1 < /dev/null &`.
 7. Tạm dừng: `kill -STOP <pid>`; chạy tiếp: `kill -CONT <pid>`. Không bao giờ chạy hai tiến trình trên cùng một cơ sở dữ liệu. Nếu bị ngắt, chạy lại đúng lệnh cũ: các lần chạy đã xong được lấy từ bộ nhớ đệm.

@@ -1,5 +1,10 @@
 """P1 development-split diagnostics: the evidence spec §4.8 asks for before §3.2–§3.4 change.
 
+Pinned to commit 547abbd: its results (results/p1-dev-diagnostics.md) are reproduced only
+there. Task 6 of P1b changed _hidden_score and _weak and the item definitions (env steps
+are gone, classes no longer include status), so re-running this script at a later commit
+does not reproduce them.
+
 Read-only. It never calls Ollama, never executes a run, never opens the database and never
 writes to work/ or results/. It reads the run cache (work/runs.jsonl), the gate's
 per-mutant lines (results/p1-gate-mutants.jsonl) and the mutant packs (work/mutants/), and

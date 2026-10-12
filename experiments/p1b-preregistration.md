@@ -72,7 +72,7 @@ The mechanism-check criterion below was committed in the plan (commits e66bfa5 a
 - All attempts of one DirectedProbe candidate are charged, then dispatched as one batch; the witness is the first in submission order (planning resolution 11).
 - The Rasch Newton iteration uses step halving.
 
-**Execution and reproduction.** A report made with N workers is byte-identical to the one-worker report over the same cached runs; fresh runs with `OLLAMA_NUM_PARALLEL` above 1 are not guaranteed to be bit-identical, because the model server batches inference.
+**Execution and reproduction.** A report made with N workers is byte-identical to the one-worker report over the same cached runs; fresh runs with `OLLAMA_NUM_PARALLEL` above 1 are not guaranteed to be bit-identical, because the model server batches inference. P1b runs with `--workers` no greater than the Ollama host's `OLLAMA_NUM_PARALLEL` (default 1), because a queued request that times out would be recorded as interpreter behaviour.
 
 ## 4. Evaluation
 
