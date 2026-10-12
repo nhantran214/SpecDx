@@ -1,7 +1,13 @@
 """P1b offline replay (spec v2 §6): the v2 inference on the P1 run cache, before any new run.
 
-Read-only. It never calls Ollama, never executes a run, never opens the database and never
-writes under SPECDX_WORK. It reads the run cache (runs.jsonl), the mutant packs (mutants/)
+Read-only by construction. It never calls Ollama and never connects to the database. The
+bench's executor factory raises ReplayWriteError (a BaseException, which the runner's
+`except Exception` cannot turn into a cached error run), and the bench's run cache is a
+ReadOnlyRunCache whose put raises it too, so no run can be executed or appended to
+runs.jsonl. The one write left is Workbench.open's: on a corpus-cache miss it creates the
+work directory and work/tell/*.json (extracted PDF chunks). On the P1 cache those files
+already exist, so nothing under SPECDX_WORK changes (Step 6 of the plan checks it with an
+md5 of the file listing). It reads the run cache (runs.jsonl), the mutant packs (mutants/)
 and the P1 gate's per-mutant lines (results/p1-gate-mutants.jsonl), and prints Markdown on
 stdout (or writes it to --out). Only the base and the 20 development mutants are used: the
 old population (qwen3:14b, qwen2.5:7b-instruct-q4_K_M, llama3.1:8b) and its 200
@@ -12,7 +18,7 @@ by recomputing Runner.run's key, run_key(variant digest, steps digest, context d
 scenario parameters, interpreter key, suffix "", model digest). The context digest is
 pinned to what P1 used (RUN_SCHEMA_VERSION 2 and P1's executor settings), so later P1b
 changes cannot break the mapping. A specification with other than 200 mapped runs stops
-the script.
+the script with exit status 2, distinct from NO-GO's 1 (0 is GO).
 
 No refutation is attempted (no run may execute), so a singleton candidate types hidden
 when Hidden(c) ≥ τ_H (spec §11 item 13) and a larger set is dropped. Observability, θ, κ
@@ -37,7 +43,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from tonomyx.canon.pack import CanonPack
 
@@ -47,7 +53,7 @@ from specdx.infer.act import Act, Rasch, act_rate, fit_rasch
 from specdx.infer.items import ItemView, SpecLens, acted_violations, items_reading, observations
 from specdx.infer.latent import Posterior, fit
 from specdx.infer.scores import Diagnosis, diagnose
-from specdx.interpreters.cache import run_key
+from specdx.interpreters.cache import RunCache, run_key
 from specdx.interpreters.population import committee
 from specdx.mutate.operators import A1_SITES, A2_SITES
 from specdx.observe.run import context_digest
@@ -71,8 +77,26 @@ THETA_FLOOR = 0.5  # (b): P1 collapsed qwen3:14b to θ 0.003
 UNOBSERVABLE_SHARE = 0.5  # (c)
 
 
+class ReplayWriteError(BaseException):
+    """The replay tried to execute a run or to write the run cache. A BaseException, so
+    Runner.run's `except Exception` cannot swallow it into a cached error run."""
+
+
 def _never(*_: Any, **__: Any) -> Any:
-    raise RuntimeError("the replay never executes a run")
+    raise ReplayWriteError("the replay never executes a run")
+
+
+class ReadOnlyRunCache(RunCache):
+    """The P1 run cache, readable and never appended to."""
+
+    def put(self, behaviour: Behaviour) -> None:
+        raise ReplayWriteError(f"the replay never writes the run cache ({behaviour.run_key})")
+
+
+def _stop(message: str) -> NoReturn:
+    """A stop that is no verdict: exit status 2, so it cannot be read as NO-GO (1)."""
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
 
 
 class NoRefutation:
@@ -111,7 +135,7 @@ def model_digests(cache: dict[str, Behaviour]) -> dict[str, str]:
     for b in cache.values():
         seen.setdefault(b.interpreter.model, set()).add(b.model_digest)
     if any(len(v) != 1 for v in seen.values()):
-        raise SystemExit(f"a model has several digests in the cache: {seen}")
+        _stop(f"a model has several digests in the cache: {seen}")
     return {m: next(iter(v)) for m, v in seen.items()}
 
 
@@ -152,8 +176,8 @@ def population_runs(
             if b is not None:
                 out.append(dataclasses.replace(b, scenario=scenario, interpreter=interp))
     if len(out) != POPULATION_RUNS:
-        raise SystemExit(f"{variant.name}: {len(out)} population runs mapped, "
-                         f"expected {POPULATION_RUNS}; the mapping is broken")
+        _stop(f"{variant.name}: {len(out)} population runs mapped, "
+              f"expected {POPULATION_RUNS}; the mapping is broken")
     return out
 
 
@@ -179,20 +203,28 @@ def replay(bench: Workbench, sid: str, config: GateConfig, cache: dict[str, Beha
                     p_single=cfg.p_single)
     diagnosis = diagnose(behaviours, violated, views, posterior, NoRefutation(), lens.diff,
                          observable=rasch.observable_items(), relevant=lens.relevant,
-                         tau=cfg.tau, rng_seed=cfg.rng_seed)
+                         tau=cfg.tau, ambig_threshold=cfg.ambig_threshold,
+                         weak_threshold=cfg.weak_threshold, rng_seed=cfg.rng_seed)
     return Replay(sid, lens, behaviours, views, acts, rasch, posterior, diagnosis)
 
 
 def go(r: Replay) -> tuple[bool, str]:
     """Criteria (a) and (b) on one specification: stage 1 puts the model that never writes
-    lowest in κ, and no model with acted evidence collapses below THETA_FLOOR."""
+    lowest in κ, and no model with acted evidence collapses below THETA_FLOOR. θ covers the
+    whole population (fit(models=)), so every other model of it must have a κ: a κ missing
+    models would pass (a) vacuously."""
     theta, kappa = r.posterior.theta, r.rasch.kappa
-    first = LLAMA in kappa and all(kappa[LLAMA] < kappa[m] for m in kappa if m != LLAMA)
+    others = [m for m in theta if m != LLAMA]
+    missing = [m for m in others if m not in kappa]
+    first = (LLAMA in kappa and bool(others) and not missing
+             and all(kappa[LLAMA] < kappa[m] for m in others))
     acted = sorted({a.model for a in r.acts if a.acted})
     low = [m for m in acted if theta.get(m, 0.0) < THETA_FLOOR]
     second = bool(acted) and not low
     why = (f"κ: {', '.join(f'{m} {kappa[m]:.3f}' for m in sorted(kappa))}; "
            f"acting models below θ {THETA_FLOOR}: {', '.join(low) or 'none'}")
+    if missing:
+        why += f"; no κ for: {', '.join(missing)}"
     return first and second, why
 
 
@@ -292,11 +324,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     cache = load_cache()
     digests = model_digests(cache)
     bench = Workbench.open(factory=_never, model_digest=digests.__getitem__)
+    bench.cache = bench.runner.cache = ReadOnlyRunCache(bench.cache.path)
     context = context_digest(tell_payload(bench.variants), P1_SETTINGS, schema=P1_SCHEMA)
     config = GateConfig.load(GATE_CONFIG)
     lines = [json.loads(x) for x in GATE_LINES.read_text(encoding="utf-8").splitlines()]
+    if not lines[0].get("base") or sum(bool(ln.get("base")) for ln in lines) != 1:
+        _stop(f"{GATE_LINES.name}: the first line must be the only base line")
     ids = ["base"] + [ln["mutant"] for ln in lines if not ln.get("base")]
     replays = [replay(bench, sid, config, cache, digests, context) for sid in ids]
+    if len(replays) != 21 or replays[0].spec != "base":
+        _stop(f"expected the base and 20 development mutants, built {len(replays)} replays")
     text = render(replays, lines[0])
     if args.out:
         args.out.write_text(text, encoding="utf-8")
