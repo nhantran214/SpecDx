@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from itertools import combinations
 from pathlib import Path
 
 import httpx
@@ -31,7 +32,7 @@ from specdx.scenarios.space import (
 )
 from specdx.scenarios.tguided import extract_literals, tboundary_scenarios
 from specdx.spec.clauses import ClauseSet
-from specdx.spec.columns import ColumnModel
+from specdx.spec.columns import ColumnModel, Projection
 from specdx.spec.tell import Chunk, TellCorpus, pdf_chunks
 from specdx.types import Defect, InterpreterId, Scenario
 from specdx.variant import SpecVariant
@@ -143,21 +144,20 @@ class Workbench:
             # Top 5 chunks, not §3.7's 20: bounds the ddmin cost in P1 (§11).
             chunks = v.corpus.search(query, k=5)
             pool = v.corpus.sentence_ids([c.id for c in chunks])
-            one_per_family: dict[str, InterpreterId] = {}
-            for interp in interps:
-                one_per_family.setdefault(interp.family, interp)
+            fields = frozenset(defect.location)
 
             def split_persists(corpus: TellCorpus) -> bool:
+                """Spec v2 §3.6: the re-run (one behaviour per competent model and variant,
+                seed 1) still yields two classes that differ on the ambiguity's fields."""
                 probe = SpecVariant(f"{v.name}+ddmin", v.pack, corpus)
-                classes = set()
-                for interp in one_per_family.values():
+                seen: list[Projection] = []
+                for interp in interps:
                     if not budget.take("ddmin"):
                         raise OutOfBudget
                     b = self.runner.run(probe, scenario, interp, kind="ddmin")
-                    for view in lens.views(b, lens.violations(b)):
-                        if view.item == defect.note:
-                            classes.add(view.klass)
-                return len(classes) >= 2
+                    seen += [view.projection for view in lens.views(b, lens.violations(b))
+                             if view.item == defect.note and view.acted]
+                return any(lens.diff(a, b) & fields for a, b in combinations(seen, 2))
 
             found = localize_ambiguity(v.corpus, pool, split_persists,
                                        max_tests=config.localize_tests)

@@ -7,15 +7,22 @@ import json
 import random
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from specdx.active.budget import RunBudget
 from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.active.search import CellBandit, information_gain, should_escalate
-from specdx.infer.act import Act, fit_rasch
+from specdx.infer.act import Act, Rasch, fit_rasch
 from specdx.infer.items import ItemView, acted_violations, observations
 from specdx.infer.latent import Posterior, fit
-from specdx.infer.scores import ambiguity_key, diagnose, identity, merge_defects
+from specdx.infer.scores import (
+    Diagnosis,
+    ambiguity_key,
+    diagnose,
+    identity,
+    merge_defects,
+)
+from specdx.infer.sensitivity import COMPETENT
 from specdx.interpreters.population import committee, pilot
 from specdx.scenarios.tguided import TLiteral
 from specdx.spec.columns import Projection
@@ -93,7 +100,9 @@ class LoopContext:
 class Report:
     """runs counts population runs; probe_runs and ddmin_runs the requested runs charged to
     the probe and localisation budgets. ambiguity_keys are the ambiguities found, before
-    the differential and localisation; ambiguity_dropped those the differential removed."""
+    the differential and localisation; ambiguity_dropped those the differential removed.
+    The v2 additions (spec v2 §3.8): κ per model; per item δ, O_s, whether it is
+    observable, and its ambiguity signals S1, S2, p; the Unobservable list; the T literals."""
 
     variant: str
     defects: list[Defect]
@@ -108,14 +117,38 @@ class Report:
     ambiguity_dropped: frozenset[AmbiguityKey] = frozenset()  # base noise, removed
     # Singleton locations that spent probes and were dropped below τ_H (Diagnosis.spent).
     spent: frozenset[tuple[str, ...]] = frozenset()
+    kappa: dict[str, float] = field(default_factory=dict)
+    items: dict[str, dict[str, Any]] = field(default_factory=dict)
+    unobservable: list[Defect] = field(default_factory=list)
+    literals: list[TLiteral] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps(
             {"variant": self.variant, "defects": [asdict(d) for d in self.defects],
+             "unobservable": [asdict(d) for d in self.unobservable],
              "runs": self.runs, "probe_runs": self.probe_runs, "ddmin_runs": self.ddmin_runs,
-             "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta},
+             "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta,
+             "kappa": self.kappa, "items": self.items,
+             "literals": [x.as_dict() for x in self.literals],
+             "spent": [list(loc) for loc in sorted(self.spent)]},
             ensure_ascii=False, indent=2,
         )
+
+
+def item_table(rasch: Rasch, diagnosis: Diagnosis) -> dict[str, dict[str, Any]]:
+    """Per item: stage 1 (δ, O_s, acted behaviours, observable) and, when observable, the
+    ambiguity signals (S1, S2 and its p-value, BH significance)."""
+    out: dict[str, dict[str, Any]] = {}
+    for item in sorted(rasch.delta):
+        row: dict[str, Any] = {"delta": rasch.delta[item],
+                               "observability": rasch.observability[item],
+                               "acted": rasch.acted[item], "observable": rasch.observable(item)}
+        signal = diagnosis.signals.get(item)
+        if signal is not None:
+            row |= {"s1": signal.s1, "s2": signal.s2, "p": signal.p,
+                    "significant": signal.significant}
+        out[item] = row
+    return out
 
 
 class _Memoised:
@@ -146,6 +179,20 @@ def ranked_interpreters(
     return [InterpreterId(m, f, variants[0], 1) for m, f in models]
 
 
+def oracle_interpreters(
+    models_by_family: dict[str, tuple[str, ...]],
+    theta: dict[str, float],
+    variants: tuple[int, ...],
+    competent: float = COMPETENT,
+) -> list[InterpreterId]:
+    """The ddmin oracle's re-runs (spec v2 §3.6): one per competent model and Tell variant,
+    at seed 1, most competent model first."""
+    models = [(m, f) for f, ms in models_by_family.items() for m in ms
+              if theta.get(m, 0.0) >= competent]
+    models.sort(key=lambda mf: -theta.get(mf[0], 0.0))
+    return [InterpreterId(m, f, v, 1) for m, f in models for v in variants]
+
+
 def run_specdx(
     variant: SpecVariant, ctx: LoopContext, config: SpecDxConfig, *, base: Report | None = None
 ) -> Report:
@@ -156,7 +203,8 @@ def run_specdx(
     budget = RunBudget(config.probe_budget, config.localize_budget)
     refutations: dict = {}
     bandit = CellBandit(ctx.cap_pct)
-    queue = [ctx.canon[name] for name in sorted(ctx.canon)]
+    # Canon scenarios, then T-boundary scenarios, then the bandit (spec v2 §3.8).
+    queue = [ctx.canon[name] for name in sorted(ctx.canon)] + list(ctx.tboundary)
     visited: set[tuple[int, ...]] = set()
     behaviours: list[Behaviour] = []
     violated: dict[str, frozenset[str]] = {}
@@ -164,6 +212,8 @@ def run_specdx(
     acts: list[Act] = []
     seen_sets: set[frozenset[str]] = set()
     posterior = Posterior({}, {}, {})
+    rasch = fit_rasch([])
+    diagnosis = Diagnosis([])
     defects: list[Defect] = []
     spent: frozenset[tuple[str, ...]] = frozenset()
     previous: dict[str, float] = {}
@@ -183,6 +233,8 @@ def run_specdx(
     while runs < config.budget:
         if queue:
             scenario = queue.pop(0)
+            if scenario.signature() in visited:
+                continue
         elif config.synthesize and not bandit.exhausted(ctx.candidates, visited, config.eps):
             chosen = bandit.choose(ctx.candidates, visited, rng)
             if chosen is None:
@@ -242,7 +294,7 @@ def run_specdx(
     dropped = found & base.ambiguity_keys if base is not None else frozenset()
     defects = [d for d in defects if d.type != "ambiguity" or ambiguity_key(d) not in dropped]
     if config.localize and ctx.localizer is not None:
-        interps = ranked_interpreters(config.models_by_family, posterior.theta, config.variants)
+        interps = oracle_interpreters(config.models_by_family, posterior.theta, config.variants)
         # Best supported first, until the localisation budget runs out; from then on every
         # ambiguity is unlocalised: an empty location, which matches no ground truth.
         located: dict[int, tuple[str, ...]] = {}
@@ -264,4 +316,5 @@ def run_specdx(
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
                   dict(posterior.theta), behaviours, probe_runs=budget.probe,
                   ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped,
-                  spent=spent)
+                  spent=spent, kappa=dict(rasch.kappa), items=item_table(rasch, diagnosis),
+                  unobservable=diagnosis.unobservable, literals=list(ctx.literals))

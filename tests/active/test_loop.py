@@ -2,10 +2,11 @@ import dataclasses
 import json
 from pathlib import Path
 
-from specdx.active.loop import LoopContext, SpecDxConfig, run_specdx
+from specdx.active.loop import LoopContext, SpecDxConfig, oracle_interpreters, run_specdx
 from specdx.infer.act import Act
 from specdx.infer.items import ItemView
 from specdx.infer.scores import UNATTEMPTED
+from specdx.scenarios.tguided import TLiteral
 from specdx.spec.tell import TellCorpus
 from specdx.types import Behaviour, Defect, RefuteResult, Scenario, State
 from specdx.variant import SpecVariant
@@ -150,6 +151,7 @@ def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) ->
     dropped = run_specdx(VARIANT, _ctx(FakeRunner(_shared_plan)), config)
     assert not [d for d in dropped.defects if d.type == "hidden"]
     assert dropped.spent == {("c1",), ("n",)}
+    assert json.loads(dropped.to_json())["spent"] == [["c1"], ["n"]]  # a reloaded base keeps it
     seen = []
     real = run_specdx.__globals__["diagnose"]
 
@@ -313,3 +315,87 @@ def test_the_localisation_budget_caps_ddmin_in_descending_score_order() -> None:
     assert spent.ddmin_runs == 3 and len(calls) == 1 and found == [(), ("A:01",)]
     score = {d.location: d.score for d in spent.defects if d.type == "ambiguity"}
     assert score[("A:01",)] >= score[()]  # the better supported one went first
+
+
+def test_t_boundary_scenarios_run_after_the_canon_ones_and_before_the_bandit() -> None:
+    runner = FakeRunner(_hidden_plan)
+    t1, t2 = Scenario("o15-r12-d7-g1", 15, 12, 7), Scenario("o15-r12-d9-g1", 15, 12, 9)
+    extra = Scenario("o16-r14-d4-g2", 16, 14, 4, 2)  # a cell no queued scenario tried
+    ctx = dataclasses.replace(_ctx(runner), candidates=[*CANON.values(), t1, extra],
+                              tboundary=[t1, t2])
+    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=200))
+    assert report.scenarios[:6] == ["discount8", "grn12", "happy", t1.id, t2.id, extra.id]
+
+
+def test_a_queued_scenario_whose_signature_was_visited_is_skipped() -> None:
+    runner = FakeRunner(_hidden_plan)
+    twin = Scenario("twin", 15, 12, 0)  # grn12's parameters under another id
+    ctx = dataclasses.replace(_ctx(runner), tboundary=[twin])
+    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=100, synthesize=False))
+    assert report.scenarios == ["discount8", "grn12", "happy"] and "twin" not in runner.calls
+
+
+def test_the_report_carries_stage_one_the_signals_and_the_literals() -> None:
+    literal = TLiteral("discount_pct", 5, "%", "tối đa", "KB", "KB:KB-0003", "KB:KB-0003:03", 9)
+    ctx = dataclasses.replace(_ctx(FakeRunner(_hidden_plan)), literals=[literal])
+    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=100, synthesize=False))
+    assert set(report.kappa) == {"q1", "q2", "l1"}
+    item = report.items["grn12|step"]
+    assert item["observable"] and {"delta", "observability", "acted", "s1"} <= set(item)
+    out = json.loads(report.to_json())
+    assert out["literals"] == [literal.as_dict()] and out["unobservable"] == []
+    assert set(out["items"]) == set(report.items) and out["kappa"] == report.kappa
+
+
+class IdleLens(FakeLens):
+    """No one acts at the step under test: it is never observable."""
+
+    def views(self, b, violated):
+        out = super().views(b, violated)
+        return [dataclasses.replace(v, acted=not v.item.endswith("|step")) for v in out]
+
+
+def test_a_clause_no_observable_item_reads_is_reported_unobservable_not_typed() -> None:
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), lens=IdleLens()),
+                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+    assert not [d for d in report.defects if "c1" in d.location]
+    assert report.items["grn12|step"]["observable"] is False
+
+
+def test_the_ddmin_oracle_reruns_each_competent_model_under_each_variant() -> None:
+    seen = []
+
+    def localiser(v, d, interps, budget):
+        seen.append(list(interps))
+        return ("A:01",)
+
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser),
+                        SpecDxConfig(MODELS, variants=(0, 1), budget=400, synthesize=False))
+    assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
+    competent = [m for m in ("q1", "q2", "l1") if report.theta[m] >= 0.5]
+    assert sorted(competent) == ["l1", "q1"]
+    assert {(i.model, i.variant, i.seed) for i in seen[0]} == {
+        (m, v, 1) for m in competent for v in (0, 1)}
+
+
+def test_oracle_interpreters_are_the_competent_models_at_seed_one() -> None:
+    interps = oracle_interpreters({"a": ("m1", "m2"), "b": ("m3",)},
+                                  {"m1": 0.6, "m2": 0.4, "m3": 0.9}, (0, 2))
+    assert [(i.model, i.family, i.variant, i.seed) for i in interps] == [
+        ("m3", "b", 0, 1), ("m3", "b", 2, 1), ("m1", "a", 0, 1), ("m1", "a", 2, 1)]
+
+
+class SilentLens(FakeLens):
+    """A population that acts nowhere: every step fails or writes nothing."""
+
+    def views(self, b, violated):
+        return [dataclasses.replace(v, acted=False) for v in super().views(b, violated)]
+
+
+def test_a_population_that_never_acts_types_nothing_and_still_reports() -> None:
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), lens=SilentLens()),
+                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+    assert report.defects == [] and report.runs > 0
+    assert report.theta == {"q1": 0.75, "q2": 0.75, "l1": 0.75}  # the prior's mode, n_m = 0
+    assert not any(row["observable"] for row in report.items.values())
+    assert json.loads(report.to_json())["defects"] == []
