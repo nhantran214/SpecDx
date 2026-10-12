@@ -58,6 +58,12 @@ def ollama_digests(
     return lookup
 
 
+def tell_payload(variants: TellVariants) -> dict[str, object]:
+    """The Tell variants as the context digest covers them: texts only, no provenance."""
+    return {"standing": list(variants.standing),
+            "statements": {k: list(v) for k, v in variants.statements.items()}}
+
+
 class Workbench:
     def __init__(
         self,
@@ -87,11 +93,10 @@ class Workbench:
         variants = load_variants()
         bench = cls(PackDatabase(), RunCache(work_dir / "runs.jsonl"), load_work_orders(),
                     variants, pdf, base, work_dir)
-        tell = {"standing": list(variants.standing),
-                "statements": {k: list(v) for k, v in variants.statements.items()}}
         bench.runner = Runner(bench.db, bench.cache, factory or bench.llm_factory, bench.steps,
                               model_digest=model_digest or ollama_digests(),
-                              context_digest=context_digest(tell, bench.settings))
+                              context_digest=context_digest(tell_payload(variants),
+                                                            bench.settings))
         return bench
 
     def llm_factory(self, interp: InterpreterId, corpus: TellCorpus, suffix: str) -> DeExecutor:

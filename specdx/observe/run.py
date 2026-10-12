@@ -33,10 +33,14 @@ RUN_SCHEMA_VERSION = 2
 log = logging.getLogger(__name__)
 
 
-def context_digest(tell: Mapping[str, Any], settings: Mapping[str, Any]) -> str:
+def context_digest(
+    tell: Mapping[str, Any], settings: Mapping[str, Any], *, schema: int | None = None
+) -> str:
     """The part of every run key that covers what interpreters are told (the Tell
-    variants), how they are run (executor settings) and the code (RUN_SCHEMA_VERSION)."""
-    payload = {"schema": RUN_SCHEMA_VERSION, "tell": tell, "executor": settings}
+    variants), how they are run (executor settings) and the code (RUN_SCHEMA_VERSION).
+    schema: an older RUN_SCHEMA_VERSION, to find the runs an older version cached."""
+    version = RUN_SCHEMA_VERSION if schema is None else schema
+    payload = {"schema": version, "tell": tell, "executor": settings}
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()
 
