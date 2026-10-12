@@ -69,6 +69,8 @@ def permutation_test(
     item: str = "",
 ) -> tuple[float, float]:
     """(I(K; V | M), p) with p = (1 + #{I_perm ≥ I_obs}) / (R + 1)."""
+    # Sort readings canonically so p-value does not depend on arrival order.
+    readings = sorted(readings, key=lambda r: (r.model, r.variant, r.klass))
     rng = np.random.default_rng(_seed(seed, item))
     strata: dict[str, list[Reading]] = defaultdict(list)
     for r in readings:
@@ -93,7 +95,7 @@ def benjamini_hochberg(pvalues: Mapping[str, float], q: float = BH_Q) -> frozens
     ranked = sorted(pvalues.items(), key=lambda kv: (kv[1], kv[0]))
     cut = 0
     for rank, (_, p) in enumerate(ranked, start=1):
-        if p <= rank * q / len(ranked):
+        if p * len(ranked) <= rank * q + 1e-12:
             cut = rank
     return frozenset(item for item, _ in ranked[:cut])
 
