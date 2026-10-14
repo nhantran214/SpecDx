@@ -1,9 +1,17 @@
-# SpecDx v3: anchored cell-level diagnosis (design delta)
+# SpecDx v3.1: anchored cell-level diagnosis (design delta)
 
 - **Status:** approved in brainstorming on 2026-10-14, section by section.
   - This is a **delta** on `2026-10-11-specdx-v2-design.md` (v2), which is itself a delta on `2026-10-06-specdx-design.md` (v1).
   - Everything in v1 (with its §11 clarifications) and in v2 stays binding unless this document replaces it.
   - "v1 §x" and "v2 §x" refer to those documents.
+- **Revision v3.1 (2026-10-14).** Amended after two simulation spikes, before any implementation (§13 items 8–14; evidence in `results/p2-spikes.md`):
+  - flat-pooled errors with κ = 10;
+  - difficulty grouped by value column and by clause;
+  - multi-start EM;
+  - no Spearman rule;
+  - Theorem T2′;
+  - revised G0 criteria;
+  - a four-model population requirement.
 - **Phase:** P2, after P1b stopped before gate v2 (`results/p1b-outcome.md`).
 - **Evidence this design answers:**
   - `results/p1b-theta-diagnosis.md`, with its scripts in `experiments/p1b_theta_diagnosis/`;
@@ -32,8 +40,9 @@ P1b's smoke run showed two failures, and v3 answers each.
   - a set without d_c: a hidden requirement;
   - a two-value set: an ambiguity (reported with a hidden requirement when C picks one of the readings, as v1 §2.4 requires);
   - ∅: T is silent.
-- **Readings (§3).** A reading falls in A_c with probability equal to the model's **accuracy** p_{m,c} = σ(α_m − β_c). Otherwise it is drawn from an error distribution restricted to values **outside** A_c.
+- **Readings (§3).** A reading falls in A_c with probability equal to the model's **accuracy** p_{m,c} = σ(α_m − β_{g(c)}), where the difficulty β is shared by a group g(c): the column of a value cell, or the clause of a constraint cell. Otherwise the reading is drawn from an error distribution restricted to values **outside** A_c, and that distribution is pulled towards a flat pool.
   - Because θ is defined as accuracy, error mass can never sit on the truth.
+  - Because errors are pulled towards a flat pool, silence (∅) predicts flat readings. A sharp split then identifies a pair, and a sharp mode identifies a value, from a single model (T2′).
   - Under the stated assumptions, the model is identifiable (§4).
 - **Typing signatures (§4).** Each defect type has a distinct **accuracy-gradient signature**: how the reading distribution at a cell changes with model accuracy.
   - The mass on a value in A_c rises with accuracy.
@@ -66,7 +75,7 @@ Development is offline.
 | Hardware | Design and develop on the local RTX 5070 Ti (16 GB); the official runs use a 48 GB GPU; small and medium models are preferred, so runs stay short | User (option b) |
 | Success criteria | A theorem on identifiability, a simulation study, and the benchmark as empirical evidence | User (option c) |
 | Evidence model | The specification as a fallible rater at cell level (anchored cell model) | User (approach A of A/B/C) |
-| Source of accuracy contrast | Relax the capability screen to admit more small and medium models; a controlled "weakened reader" is the written fallback | User (option a of a/b/c) |
+| Source of accuracy contrast | Relax the capability screen to admit more small and medium models (the v3 weakened-reader fallback was dropped in v3.1) | User (option a of a/b/c) |
 
 The constraints of v1 §1.2 and v2 §1 stand, with v2 §2.3's larger-GPU profiles used for the official runs. The test split is not touched in P2.
 
@@ -171,13 +180,13 @@ The prior then assigns:
 Behaviour b of model m reads cell c as follows.
 
 - **When A_c ≠ ∅:**
-  - with probability p_{m,c} = σ(α_m − β_c), the reading is uniform on A_c (faithful);
+  - with probability p_{m,c} = σ(α_m − β_{g(c)}), the reading is uniform on A_c (faithful);
   - otherwise it is drawn from ε_c(· | V_c ∖ A_c), the error distribution conditioned on values outside A_c.
 - **When A_c = ∅:** the reading is drawn from ε_c, and no reading is faithful.
 
 The parameters are:
 - α_m: model ability;
-- β_c: cell difficulty;
+- β_g: the difficulty of the cell's group g(c). For a value cell the group is its column, pooled over rows and scenarios; for a constraint cell it is its clause. At the planning-time check, the spread of difficulty within a value column was at sampling-noise level, while within a clause kind it was about 1.6, so difficulty is never shared by a whole clause kind;
 - ε_c: a full distribution over V_c, used only through its restriction to V_c ∖ A_c.
 
 The resulting marginal for model m at c is:
@@ -189,17 +198,20 @@ Readings are conditionally independent given A_c and the parameters. A behaviour
 ### 3.3 Priors
 
 - α_m ~ N(μ_α, σ_α²).
-- β_c ~ N(0, τ²). A cell may be hard, but an extreme difficulty is penalised. This prior separates "a hard cell" from "a hidden requirement whose anchor is chosen only at noise level".
-- ε_c ~ Dirichlet(κ · ε̄_col(c)), where ε̄_col(c) is the pooled empirical distribution of readings in cell c's column (or clause kind) over all cells. Each cell has only a few readings, and this pooling keeps ε_c from overfitting them.
-- μ_α, σ_α, τ and κ are chosen at G0 (§9).
+- β_g ~ N(0, τ²). A group may be hard, but an extreme difficulty is penalised.
+- ε_c ~ Dirichlet(κ · u_c), where u_c is the **flat** distribution over V_c, and κ = 10 (fixed).
+  - Value labels mean nothing across columns, so a flat profile is the only pool beyond the column.
+  - The strong pull stops ∅ from fitting an arbitrary sharp split or mode. Spike 1 showed that a free per-cell ε_c makes silence absorb almost every pair (§13 item 8).
+  - The flat pool is a regularisation, not a claim that errors are flat: real errors concentrate, and the simulation's A3 arm measures the effect.
+- μ_α, σ_α and τ are chosen at G0 (§9). τ's grid includes 1 and 2.
 
 ### 3.4 Fitting
 
 MAP by EM, deterministic.
 
-- **Initialisation.**
-  - α_m is initialised by the median estimator of Theorem T3 over the anchored cells, with β_c = 0.
-  - ε_c starts at ε̄_col(c).
+- **Initialisation (multi-start).**
+  - EM runs from T3's median start and from a common α ∈ {0, 1, 2, 3}, with every β_g = 0 and ε_c = u_c. It keeps the fit with the highest log posterior.
+  - Why: on the base data, more than half of the anchored cells are read off their anchor by every model (case `apr` rows that nobody writes, golden event actors that nobody writes). That is past T3's breakdown point. From the median start alone, EM reached a θ-collapsed fixed point about 200 nats below the best one.
 - **E-step.**
   - For each cell, compute the posterior over all candidate sets: 1 + 6 + 15 = 22 when |V_c ∖ OTHER| = 6, including ∅.
   - The posterior is proportional to prior(A) · Π_b P_{m(b)}(y_{b,c} | A).
@@ -224,8 +236,8 @@ MAP by EM, deterministic.
 
 - **(A1) Independence.** Given A and the parameters, the readings of a model's behaviours are independent. Across Tell variants they are not identically distributed: P_m is then the average distribution over variants.
 - **(A2) Accuracy parametrisation.** When A ≠ ∅, P_m(A) = p_m, and faithful readings are uniform on A, with |A| ≤ 2.
-- **(A3) Shared errors.** The error distribution ε (restricted to V ∖ A) is the same for every model at the cell.
-- **(A4) Monotone accuracy.** p_{m,c} = σ(α_m − β_c). The order of models by accuracy is therefore the same at every cell.
+- **(A3) Shared, pooled errors.** The error distribution ε (restricted to V ∖ A) is the same for every model at the cell, and it is drawn around a known pool u, with ε ~ Dirichlet(κ u) and u flat in v3.1. T2′ uses the limit ε = u.
+- **(A4) Monotone accuracy.** p_{m,c} = σ(α_m − β_{g(c)}). The order of models by accuracy is therefore the same at every cell.
 - **(A5) Silence.** When A = ∅, every model reads from ε: competence does not help where T says nothing.
 
 ### 4.2 Accuracy-gradient signatures
@@ -248,17 +260,24 @@ An error value concentrated on a (that is, ε(a) large, a ∉ A) has D(a) < 0. A
   - At an anchored cell with A_c = {d_c}, ℓ_c := logit P_{1,c}(d_c) − logit P_{2,c}(d_c) = α_1 − α_2.
   - If more than half of the anchored cells are non-defective, then median_c ℓ_c = α_1 − α_2.
   - So the model order and the contrasts are identified, even where PC fails at individual cells.
-  - The levels α_m are identified given a location constraint on β: the median of β_c over the non-defective anchored cells is 0.
+  - The levels α_m are identified given a location constraint on β: the median of β_{g(c)} over the non-defective anchored cells is 0.
 - **T4 (finite samples).** Let n be the smaller number of readings per model at the cell, and |V| the number of candidate values.
   - **(a) The two-model contrast rule.** Â = {y : D̂(y) > Δ/4} errs with probability at most 4|V| exp(−n Δ²/32).
   - **(b) The plug-in mode under PC.** With margin γ = p − (1 − p) · max ε, the mode errs with probability at most 2|V| exp(−n γ²/2).
+  - **(c) The minimum-distance rule under T2′.** Let γ_min be the smallest sup-norm distance between the predicted distributions of two candidate sets. The rule that picks the candidate whose predicted distribution is closest to P̂ errs with probability at most 2|V| exp(−n γ_min²/2).
+- **T2′ (all four forms, one model, known error pool).** Let ε = u be known and flat over V, with K = |V|, and let p be the model's accuracy at the cell.
+  - If A ≠ ∅, then P_m equals p/|A| on A and the floor (1 − p)/(K − |A|) off A.
+  - If A = ∅, then P_m is flat at 1/K.
+  - Hence A is identified from P_m alone whenever p ≠ |A|/K, that is, whenever the faithful share differs from what chance gives. This needs no second model.
+  - With p known (from α and β_g), the forms are separated by γ_min > 0 under the same condition.
 
 ### 4.4 Scope of the theory
 
 - **The bounds are conservative.** They come from Hoeffding's inequality. The MAP estimator with priors is what v3 runs, and the simulation (§8.1) measures its actual power.
 - **Single-model typing.** Mis-key hidden requirements and weak checks rest on T1. They need no accuracy contrast, only a plurality margin.
-- **Contrast-dependent typing.** Ambiguity and the *unstated* subtype rest on T2. They need Δ > 0, and their power scales with Δ²·n. With Δ ≈ 0, the priors decide, and they decide conservatively: P(|A| = 1) is high, and β is shrunk.
-- **(A3) may fail.** Models can make different errors. A model-specific error concentrated on a value can mimic ambiguity. The mitigations are in §12, and the simulation sweeps this violation.
+- **Ambiguity and the unstated subtype.** In v3.1 these rest on T2′, through the error pool, and on T2, through accuracy contrasts, jointly.
+- **The advantage is regime-dependent** (spike 2, §13 item 12). v3.1 beats the simple heuristics on ambiguity only at high cell accuracy (≥ 0.9) with four models. At accuracy 0.6–0.8, or with two models, majority vote does as well or better. Hidden requirements mostly tie with anchor-only. The calibrated population sits in the winning regime, and the paper reports the whole regime map.
+- **(A3) may fail.** Models can make different errors, and real errors concentrate: in the calibration, the most frequent wrong value holds 0.84 of the error mass. The flat pool is a regularisation, and the simulation's A3 arm is part of G0 (§8.2).
 - **(A5) may fail.** A strong model may guess an unstated value from domain knowledge. The effect is only to move a finding from the *unstated* to the *mis-key* subtype. Both are hidden requirements.
 
 ---
@@ -289,7 +308,8 @@ These follow v1 §3.3 and v2 §3.4: hitting sets over the acted violation sets o
   - The test passes while P(|A_c| = 2), computed on the re-run readings with α, β and ε held at their fitted values, stays ≥ τ_A.
 - **Budget.** The localisation budget is unchanged (80).
 - **Co-occurrence.** Ambiguity and hidden requirement co-occur as in v1 §2.4.
-- **Robustness rule.** With three or more models of distinct α, an ambiguity must also show the accuracy-gradient sign at both values. The mass on each value must rise with α across the models, with Spearman correlation ≥ 0.5. This guards against (A3) violations (§12).
+- **No rank-correlation rule.** v3's Spearman robustness rule is removed: with about 6 readings per model and cell it passed at about 0% of true pairs (spike 1). Robustness to (A3) is instead required of the whole method, through G0's A3 arm.
+- **Population.** Ambiguity requires at least four acting models (§7, G2).
 
 ### 5.4 Weak check
 
@@ -334,7 +354,8 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
   - at most 2 models per family and 4 in all;
   - at least 2 families;
   - same scenario, variants and seeds.
-- **Why.** Theorem T2 needs models of distinct accuracy, and more raters raise the readings per cell. The P1b population (2 models, nearly equal θ) leaves ambiguity and the unstated subtype to the priors.
+- **Why.** More raters raise the readings per cell, and spike 2 shows that ambiguity needs four acting models: with two, it loses to majority vote at 13 of 15 regime points. T2 also uses distinct accuracies.
+- **Four-model requirement (v3.1).** The admitted population must hold at least 4 acting models across at least 2 families; otherwise STOP (G2).
 - **Applying it.** The threshold is applied to the cached P1b screen (`results/p1b-screen.json`); no new screen runs are needed. The population is chosen by the unchanged ranking:
 
 | Family | Model | Act rate | Valid-call rate |
@@ -346,7 +367,7 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
 
   Within the qwen family, qwen3:14b (0.407) is ranked out by the per-family cap.
 - **Disclosure.** The new threshold was chosen during design, knowing which cached screen results it admits. The screen is outcome-free: it reads no mutant, truth or diagnosis. The change is recorded in the pre-registration before any v3 result.
-- **Fallback: a controlled weakened reader.** It is used only if G0 shows that the contrast of this population is too small for ambiguity. The weakened reader is the population's highest-act model with `search_k` = 1 instead of 5, registered as a separate interpreter. It is interpreter-visible, so it gets new run keys. It costs about one extra population member's share of the budget.
+- **No weakened reader.** v3's weakened-reader fallback is dropped in v3.1. T2′ identifies ambiguity without an accuracy contrast, and spike 2 shows the remaining limit is the number of models, not their contrast.
 
 ---
 
@@ -357,7 +378,7 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
 - **Generator.** Synthetic specifications. Each has:
   - C cells of both kinds (value and constraint), anchored and unanchored, with |V| drawn from the observed distribution;
   - M ∈ {2, 3, 4} models with abilities α_m;
-  - cell difficulties β_c ~ N(0, τ_true²);
+  - group difficulties β_g ~ N(0, τ_true²), with a within-group arm in which each cell's difficulty spreads around its group's by τ_within = 0.5;
   - error distributions drawn from a Dirichlet, including concentrated errors;
   - planted defects of every form at controlled rates;
   - per model, readings from 3 variants × 3 seeds, pooled over S scenarios, with act rates per model.
@@ -386,18 +407,20 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
   - τ_true;
   - defect rate;
   - error concentration;
-  - the misspecification arms.
+  - the misspecification arms;
+  - **the regime map:** mean cell accuracy ∈ {0.6, 0.7, 0.8, 0.9, 0.95} × accuracy spread Δ ∈ {0, 0.1, 0.2} × M ∈ {2, 4}, giving win, tie or loss against the best baseline per type, with a margin of 0.05.
 
-  The phase diagrams are compared with the boundaries that T2–T4 predict.
+  The phase diagrams are compared with the boundaries that T2, T2′ and T4 predict.
+- **Replicates.** At least 10 replicates per arm at the calibrated point, and 5 per point of the regime map. Spike 1 showed that 3 replicates are too noisy for G0's thresholds.
 
 ### 8.2 GO steps
 
 | Step | What | GPU | Pass criterion (pre-registered here) |
 |---|---|---|---|
-| **G0** simulation | Fit at the calibrated parameters and the planned budget; choose the free parameters of §9 by the selection rule | No | (i) mean \|θ̂ − θ\| ≤ 0.05; (ii) simulated typed F1 ≥ 0.6 for hidden requirement and for weak check, and ≥ 0.4 for ambiguity; (iii) v3 beats all three baselines on hidden requirement and ambiguity. If only (ii)-ambiguity fails, switch to the weakened reader (§7) and re-run G0 once. If G0 still fails, stop and report |
-| **G1** base replay | Fit v3 with the parameters frozen at G0 on the cached base runs: the P1b smoke run and the P1 base runs | No | (i) θ_m ≥ 0.5 for gpt-oss:20b and qwen3:30b-a3b (no collapse); (ii) the real defect R-SO (v1 §4.4: `SO-0031` stays `Chờ duyệt` after `APR-0102` is approved) is reported as a hidden requirement, if any acted behaviour reached its cell. If none did, G1 records "not observable" for (ii) and does not fail on it. On failure, stop and report; parameters are not re-tuned |
+| **G0** simulation | Fit at the calibrated parameters and the planned budget, with at least 10 replicates; choose the free parameters of §9 by the selection rule | No | (i) mean \|θ̂ − θ\| ≤ 0.05. (ii) Simulated typed F1 ≥ 0.6 for hidden requirement, ≥ 0.4 for ambiguity, and ≥ 0.4 for weak check (the gate's own bar; v3's 0.6 for weak was reached by no method, §13 item 13). (iii) Regime-based: at the calibrated point, under the A3 and A5 arms, and at the population's own M and Δ, v3.1 is never below the best baseline by more than 0.05 on any type; and at the calibrated point it beats the best baseline on ambiguity by more than 0.05. If G0 fails, stop and report |
+| **G1** base replay | Fit v3.1 with the parameters frozen at G0 on the cached base runs: the P1b smoke run and the P1 base runs | No | (i) θ_m ≥ 0.5 for gpt-oss:20b and qwen3:30b-a3b (no collapse). (ii) The real defect R-SO (v1 §4.4: `SO-0031` stays `Chờ duyệt` after `APR-0102` is approved) is reported as a hidden requirement, judged **on the P1b smoke run only** (author ruling, 2026-10-14: P1's two acted readings at that cell equal the anchor). If no acted behaviour reached the cell, G1 records "not observable" for (ii) and does not fail on it. On failure, stop and report; parameters are not re-tuned |
 | Freeze | The v3 pre-registration (§9) is committed with a test that pins every value | No | — |
-| **G2** population | Apply §7 to the cached screen and freeze the population into the gate configuration | No | At least 2 families admitted, otherwise STOP (v2 rule) |
+| **G2** population | Apply §7 to the cached screen and freeze the population into the gate configuration | No | At least 2 families and at least 4 acting models admitted, otherwise STOP |
 | **G3** smoke | The base specification on the 48 GB host, population budget 60, with the checks of P1b Task 18 Step 5 | Hours | Every P1b smoke check passes, and θ_m ≥ 0.5 for each population model |
 | **Gate v3** | The 20 development mutants | Days | §8.3 |
 
@@ -419,7 +442,7 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
 
 These are deferred:
 - the hypotheses of v1 §1.4 on the test split;
-- ablations: anchor removed (back to latent truth), the joint class key instead of cells, the accuracy-gradient robustness rule removed, the v2 stage 2;
+- ablations: anchor removed (back to latent truth), the joint class key instead of cells, a free per-cell ε instead of the flat pool, per-cell difficulty instead of grouped difficulty, the v2 stage 2;
 - the remaining real defects R-12 and R-DE;
 - S2 (τ²-bench).
 
@@ -432,8 +455,8 @@ The v3 pre-registration is a document (`experiments/p2-preregistration.md`) plus
 | Group | Values |
 |---|---|
 | Unchanged from v1 and v2 | temperature 0.7; Tell variants 0–2; seeds 1–3; budgets 200/100/80; scorability k = 3; K_max = 6; the gate rule; dev split (`dev_per_type` 5, `rng_seed` 20261006); harness nudges 2; ω = 0.3, m_min = 3; Rasch λ = 1.0; T-boundary scenarios ≤ 12; workers ≤ `OLLAMA_NUM_PARALLEL` |
-| New, fixed by this spec | \|A_c\| ≤ 2; the candidate rule of §3.1; the normalisation of §2.5; the row-matching rule of §2.6; the cell scope of §2.4; pooling of lifted cells (§2.7); EM tolerance 1e-6 and at most 200 iterations; the screen's act-rate threshold 0.3; the ambiguity robustness rule (Spearman ≥ 0.5 with three or more models); the G0–G3 criteria of §8.2 |
-| Chosen at G0 by the selection rule, then frozen | π and the form shares (s_mis, s_amb, s_∅); τ; κ; μ_α, σ_α; τ_H, τ_A, τ_W |
+| New, fixed by this spec | \|A_c\| ≤ 2; the candidate rule of §3.1; the normalisation of §2.5; the row-matching rule of §2.6; the cell scope of §2.4; pooling of lifted cells (§2.7); EM tolerance 1e-6 and at most 200 iterations; the screen's act-rate threshold 0.3; κ = 10 with a flat pool u_c; difficulty grouped by value column and by clause; multi-start EM (T3's start plus a common α ∈ {0, 1, 2, 3}); G0 with at least 10 replicates, and τ ∈ {1, 2} in the grid; at least 4 acting models; the G0–G3 criteria of §8.2 |
+| Chosen at G0 by the selection rule, then frozen | π and the form shares (s_mis, s_amb, s_∅); τ; μ_α, σ_α; τ_H, τ_A, τ_W |
 | Selection rule (fixed now) | A grid over the free parameters, written in the simulation module before G0 runs. The objective is the mean simulated typed F1 over hidden requirement, ambiguity and weak check, at the calibrated parameters and under the misspecification arms equally weighted. Ties go to the more conservative setting (higher P(\|A\| = 1), smaller π) |
 
 ---
@@ -472,7 +495,7 @@ The v3 pre-registration is a document (`experiments/p2-preregistration.md`) plus
 - Normalisation and row matching on the real base pack, including the `soline` surrogate rule.
 - Cell scope excludes inherited rows.
 - Typing: refutation separates hidden requirement from contradiction of size 1.
-- The ambiguity robustness rule.
+- T2′: a single model separates the forms when the error pool is known.
 - Weak checks on unanchored cells.
 - Determinism.
 - The pre-registration test.
@@ -483,8 +506,8 @@ The v3 pre-registration is a document (`experiments/p2-preregistration.md`) plus
 
 | Risk | Mitigation |
 |---|---|
-| (A3) fails: model-specific errors mimic ambiguity | High P(\|A\| = 1) prior; the Spearman robustness rule with three or more models (§5.3); the simulation's misspecification arm in G0's selection objective |
-| Δ too small for ambiguity and the unstated subtype | The relaxed screen (§7); the weakened-reader fallback; the G0 criterion stops the work before any GPU is used |
+| (A3) fails: errors concentrate, or are model-specific, and mimic ambiguity | High P(\|A\| = 1) prior; the A3 arm in G0's selection objective and in criterion (iii) |
+| The advantage is regime-dependent (high accuracy, four models) | G2 requires 4 acting models; G3 checks θ; G0 (iii) is judged at the population's own M and Δ; the paper reports the full regime map, including where heuristics suffice |
 | Hard cells mistaken for hidden requirements | The β prior (§3.3); refutation (§5.1) |
 | The row-matching rule misclassifies a key | Unit tests on the base pack; G1 inspection of unmatched rows |
 | Defects are not sparse on some specification | T3's breakdown point is ½. The base has few findings (14 in the P1b smoke run, most of them noise under v2) |
@@ -503,8 +526,26 @@ The v3 pre-registration is a document (`experiments/p2-preregistration.md`) plus
    - B: three views from seeds cannot separate two models without an anchor.
    - C: interventions multiply runs.
 5. **Typing names.** Aligned with v1 §2.4. Mis-key and unstated are both hidden requirements; a contradiction is internal to C and stays symbolic.
-6. **Accuracy contrast.** Relaxed screen (act ≥ 0.3), with a weakened-reader fallback.
+6. **Accuracy contrast.** Relaxed screen (act ≥ 0.3). The weakened-reader fallback was dropped in v3.1 (item 11).
 7. **Gate.** The v2 rule is kept. This is the second iteration on the dev split, by the author's decision.
+
+**v3.1 amendments.** All of these were decided on 2026-10-14, after the P2a plan's pre-check and two simulation spikes. No mutant was looked at, and nothing was pre-registered yet. Evidence: `results/p2-spikes.md`.
+
+8. **Spike 1** (per-column difficulty) failed. Ambiguity typed F1 stayed near 0 under every difficulty model. The real competitor of a pair is ∅ with a free per-cell ε_c, which fits any split; the Spearman rule passed at about 0% of true pairs.
+9. **Errors.** ε_c ~ Dirichlet(κ u_c), with a flat pool and κ = 10, the best of κ ∈ {10, 50, fixed} in spike 2.
+10. **Difficulty** is grouped by value column and by clause (within-column spread ≈ 0; within clause kind ≈ 1.6). EM is multi-start (the plan's pre-check finding).
+11. **The Spearman rule and the weakened reader are dropped.** T2′ is added.
+12. **Spike 2 at the calibrated point** (10 replicates; hidden / ambiguity / weak F1):
+    - v3.1: 0.83 / 0.81 / 0.45;
+    - majority vote: 0.73 / 0.69 / 0.40;
+    - anchor-only: 0.78 / 0 / 0;
+    - v2's stage 2: 0.45 / 0 / 0.11.
+    The mean θ error is 0.016. The regime map shows the advantage only at high accuracy with four models.
+13. **G0 criteria revised** (author approval, 2026-10-14):
+    - weak check ≥ 0.4, the gate's bar, instead of 0.6, which no method reached;
+    - criterion (iii) is regime-based, and includes a required win on ambiguity;
+    - at least 10 replicates.
+14. **Population and G1.** G2 requires at least 4 acting models. G1 (ii) is judged on the P1b smoke run only (author ruling).
 
 ---
 
@@ -542,14 +583,22 @@ By the lemma:
 - if A ≠ ∅, then D(y) = Δ/|A| > 0 for y ∈ A, and D(y) = −Δ ε̃(y) ≤ 0 for y ∉ A, so {y : D(y) > 0} = A;
 - if A = ∅, then D ≡ 0, so {y : D(y) > 0} = ∅ = A.
 
-Under (A4), p_{1,c} − p_{2,c} = σ(α_1 − β_c) − σ(α_2 − β_c), which has the sign of α_1 − α_2 at every finite β_c. ∎
+Under (A4), p_{1,c} − p_{2,c} = σ(α_1 − β_{g(c)}) − σ(α_2 − β_{g(c)}), which has the sign of α_1 − α_2 at every finite β. ∎
+
+### T2′
+
+Let ε = u be flat over V, with K = |V|.
+- **A ≠ ∅.** Then ε̃ = u(· | V ∖ A) equals 1/(K − |A|) off A. So P_m(y) = p/|A| for y ∈ A, and P_m(y) = (1 − p)/(K − |A|) for y ∉ A.
+- **A = ∅.** Then P_m(y) = 1/K for every y.
+
+Suppose two candidate sets A ≠ A′ gave the same P_m. If both are non-empty, P_m takes the value p/|A| exactly on A and a single other value off A. The two values differ when p/|A| ≠ (1 − p)/(K − |A|), which is equivalent to p ≠ |A|/K. Then A is recoverable as the level set of P_m that does not equal the floor, so A = A′. If one of them is ∅, P_m is flat, and a non-empty A yields a flat P_m only when p = |A|/K. Hence A is identified whenever p ≠ |A|/K. ∎
 
 ### T3
 
-At an anchored cell with A_c = {d_c}, P_{m,c}(d_c) = p_{m,c} = σ(α_m − β_c) by (A2). Hence logit P_{1,c}(d_c) − logit P_{2,c}(d_c) = α_1 − α_2: the same value v at every non-defective anchored cell.
+At an anchored cell with A_c = {d_c}, P_{m,c}(d_c) = p_{m,c} = σ(α_m − β_{g(c)}) by (A2). Hence logit P_{1,c}(d_c) − logit P_{2,c}(d_c) = α_1 − α_2: the same value v at every non-defective anchored cell.
 
-If more than half of the anchored cells are non-defective, more than half of the values ℓ_c equal v, so the median equals v. The order of the models follows from the sign of v. Given the contrasts, the median of β_c over the non-defective anchored cells being 0 fixes the levels:
-- for any model m, the median over those cells of logit P_{m,c}(d_c) is α_m − median β_c = α_m. ∎
+If more than half of the anchored cells are non-defective, more than half of the values ℓ_c equal v, so the median equals v. The order of the models follows from the sign of v. Given the contrasts, the median of β_{g(c)} over the non-defective anchored cells being 0 fixes the levels:
+- for any model m, the median over those cells of logit P_{m,c}(d_c) is α_m − median β_{g(c)} = α_m. ∎
 
 ### T4
 
@@ -562,6 +611,8 @@ By a union bound over y ∈ V and m ∈ {1, 2}, with probability at least 1 − 
 - for y ∉ A, D(y) ≤ 0, so D̂(y) < Δ/4.
 
 Hence Â = A, and this includes A = ∅, where D ≡ 0.
+
+**(c) The minimum-distance rule.** If every |P̂(y) − P(y)| < γ_min/2, then P̂ is closer in sup norm to the true candidate's predicted distribution than to any other's. That holds because any two candidates' predictions differ by at least γ_min at some y. Hoeffding's inequality and a union bound over V give the failure probability 2|V| exp(−n γ_min²/2).
 
 **(b) The plug-in mode.** If every |P̂(y) − P(y)| < γ/2, the mode of P̂ equals the mode x of P, because P(x) − P(y) ≥ γ for every y ≠ x. Hoeffding's inequality and a union bound over V give the failure probability 2|V| exp(−2n(γ/2)²) = 2|V| exp(−nγ²/2). ∎
 
