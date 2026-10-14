@@ -126,6 +126,12 @@ Rows of a table with an executor-generated key are matched on the remaining LOCK
 
 A lifted cell (a golden clause lifted by v1's lifting, or a cross-cutting clause) is **one cell across every scenario where it applies**. Its readings are pooled over those scenarios, and it has one latent A_c. Cells that do not lift stay per scenario. Pooling raises the number of readings per model and cell, which the finite-sample bound of §4 depends on.
 
+A pooled value cell compares readings in the **lifted vocabulary** (clarified at planning, 2026-10-14):
+- the cell's anchor is the clause's placeholder, for example `{qty}`;
+- in scenario s, a reading is replaced by the placeholder that `lift_value(reading, column type, s)` returns, when it returns one; otherwise it stays as normalised text.
+
+So "the reading equals this scenario's value of `qty`" is the same reading in every scenario.
+
 ---
 
 ## 3. The anchored cell model (replaces v2 §3.3)
