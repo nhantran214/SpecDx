@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 from specdx.infer.cells import Reading
 from specdx.infer.latent import Observation, fit
+from specdx.infer.typing import resolve_calls
 from specdx.sim.generator import SimSpec
 
 Predictions = set[tuple[str, str]]
@@ -20,6 +21,17 @@ def by_cell(spec: SimSpec) -> dict[str, list[Reading]]:
     for r in spec.readings:
         out[r.cell].append(r)
     return out
+
+
+def _resolved(spec: SimSpec, raw: Predictions) -> Predictions:
+    """A baseline's raw (cell, type) calls through the cell-level rules v3 gets from
+    `type_cells`: an anchored ambiguity brings its hidden requirement, and a cell reporting
+    hidden or ambiguity reports no weak check."""
+    kinds: dict[str, set[str]] = {}
+    for cid, kind in raw:
+        kinds.setdefault(cid, set()).add(kind)
+    return {(cid, kind) for cid, ks in kinds.items()
+            for kind in resolve_calls(spec.cells[cid].anchor is not None, ks)}
 
 
 def _mode(values: Sequence[str]) -> str:
@@ -45,7 +57,7 @@ def majority_vote(spec: SimSpec) -> Predictions:
             out.add((cid, "ambiguity"))
         elif cell.kind != "constraint" and any(r.value != top and r.clean for r in rs):
             out.add((cid, "weak"))
-    return out
+    return _resolved(spec, out)
 
 
 def anchor_only(spec: SimSpec) -> Predictions:
@@ -104,4 +116,4 @@ def stage2_v2(spec: SimSpec, k_max: int = 6, p_single: float = 0.9) -> Predictio
                 for cid, v in content[k].items():
                     if spec.cells[cid].kind != "constraint" and content[reference].get(cid) != v:
                         out.add((cid, "weak"))
-    return out
+    return _resolved(spec, out)

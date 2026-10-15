@@ -102,6 +102,19 @@ def co_occur(cell: Cell, post: CellPosterior, readings: Sequence[Reading],
     return hidden, ambiguity
 
 
+def resolve_calls(anchored: bool, calls: set[str]) -> set[str]:
+    """The cell-level rules every method's raw calls on one cell go through, v3 and the
+    simulation's baselines alike. (a) An anchored cell's ambiguity brings its hidden
+    requirement (ruling F1). (b) A cell reporting a hidden requirement or an ambiguity
+    reports no weak check (resolution 14: weak truths are unanchored cells only)."""
+    out = set(calls)
+    if anchored and "ambiguity" in out:
+        out.add("hidden")
+    if out & {"hidden", "ambiguity"}:
+        out.discard("weak")
+    return out
+
+
 def type_cells(cells: Mapping[str, Cell], fit: AnchoredFit,
                by_cell: Mapping[str, Sequence[Reading]], params: V3Params) -> list[CellFinding]:
     """Every cell finding of the fit, cell by cell in id order. An ambiguity and its hidden
@@ -118,10 +131,9 @@ def type_cells(cells: Mapping[str, Cell], fit: AnchoredFit,
             out.append(found)
         if ambiguity is not None:
             out.append(ambiguity)
-        if found is not None or ambiguity is not None:
-            continue
         weak = weak_finding(cell, post, mine, params.tau_w)
-        if weak is not None:
+        kinds = {f.type for f in (found, ambiguity, weak) if f is not None}
+        if weak is not None and "weak" in resolve_calls(cell.anchor is not None, kinds):
             out.append(weak)
     return out
 

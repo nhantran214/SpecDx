@@ -10,7 +10,7 @@ from specdx.cli import main
 from specdx.infer.anchored import V3Params
 from specdx.infer.cells import Cell, Reading
 from specdx.sim.baselines import anchor_only, majority_vote, stage2_v2
-from specdx.sim.generator import SimConfig, SimSpec, Truth
+from specdx.sim.generator import SimConfig, SimSpec, Truth, generate
 from specdx.sim.metrics import Counts, calibration, theta_error, typed_counts
 from specdx.sim.study import (
     METHODS,
@@ -143,3 +143,35 @@ def test_the_simulate_command_writes_json_and_markdown(tmp_path) -> None:
     report = out.with_suffix(".md").read_text(encoding="utf-8")
     assert "## Sweep: arms" in report and "Exploratory: below §8.1's minimum of 10" in report
     assert main(["simulate", "--sweep", "nope", "--out", str(out)]) == 2
+
+
+def _assert_resolved(spec: SimSpec, found: set[tuple[str, str]]) -> None:
+    for cid, cell in spec.cells.items():
+        kinds = {t for c, t in found if c == cid}
+        assert not ("weak" in kinds and kinds & {"hidden", "ambiguity"}), (cid, kinds)
+        assert "ambiguity" not in kinds or cell.anchor is None or "hidden" in kinds, (cid, kinds)
+
+
+def test_baselines_get_v3_s_cell_level_post_processing() -> None:
+    spec = _spec({
+        # reads off its anchor and, from a clean run, the anchor: weak must not join hidden
+        "h": ("d", HIDDEN, {"m0": ["a", "a", "a", "d"], "m1": ["a", "a", "a", "a"]}),
+        # the models' votes differ on an anchored cell that reads its anchor: hidden co-reported
+        "z": ("a", AMB, {"m0": ["a", "a", "a"], "m1": ["b", "b", "b"]}),
+    })
+    found = majority_vote(spec)
+    assert {("h", "hidden"), ("z", "ambiguity"), ("z", "hidden")} <= found
+    assert ("h", "weak") not in found
+    _assert_resolved(spec, found)
+    for seed in range(4):
+        generated = generate(dataclasses.replace(TINY, seed=seed, columns=30, items=6))
+        for baseline in (majority_vote, anchor_only, stage2_v2):
+            _assert_resolved(generated, baseline(generated))
+
+
+def test_replicates_must_be_positive(tmp_path, capsys) -> None:
+    for bad in ("0", "-2"):
+        assert main(["simulate", "--sweep", "arms", "--replicates", bad,
+                     "--out", str(tmp_path / "sim")]) == 2
+        assert "--replicates must be at least 1" in capsys.readouterr().err
+    assert not (tmp_path / "sim.json").exists()

@@ -171,6 +171,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             sweep_markdown,
         )
 
+        if args.replicates is not None and args.replicates < 1:
+            print("error: --replicates must be at least 1", file=sys.stderr)
+            return 2
         names = list(SWEEPS) if args.sweep == "all" else [args.sweep]
         if any(n not in SWEEPS for n in names):
             print(f"error: unknown sweep {args.sweep!r}; choose from {', '.join(SWEEPS)} or all",
