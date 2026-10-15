@@ -10,7 +10,7 @@ import pytest
 
 from specdx.infer import anchored
 from specdx.infer.act import Rasch
-from specdx.infer.anchored import AnchoredFit, V3Params
+from specdx.infer.anchored import AnchoredFit, StartFit, V3Params
 from specdx.infer.cells import Cell, CellData, Reading
 from specdx.infer.typing import CellDiagnosis
 from specdx.types import Defect, Scenario
@@ -28,11 +28,15 @@ def g1():
     return module
 
 
-def _replay(g1, theta, readings=(), defects=()):
+def _replay(g1, theta, readings=(), defects=(), starts=None, unread=()):
+    """Every model in theta has a reading at an unrelated cell unless named in unread."""
     cell = Cell(g1.R_SO_CELL, "value", "chờ duyệt", g1.R_SO, "so.trang_thai", "so.trang_thai",
                 ("DE-SM-02:draft_quote",))
-    data = CellData({cell.id: cell} if readings else {}, list(readings))
-    fit = AnchoredFit({m: 0.0 for m in theta}, theta, {}, {}, {}, True, 1, V3Params())
+    other = [Reading("grn12|po:PO-0015:sl_dat", f"o-{m}", m, "f", "grn12", "15")
+             for m in theta if m not in unread]
+    data = CellData({cell.id: cell} if readings else {}, other + list(readings))
+    fit = AnchoredFit({m: 0.0 for m in theta}, theta, {}, {}, {}, True, 1, V3Params(),
+                      starts=starts or {})
     return g1.Replay("smoke", [], data, Rasch({}, {}, {}, {}), fit,
                      CellDiagnosis(list(defects)), {})
 
@@ -79,3 +83,43 @@ def test_g1_refuses_provisional_parameters_and_a_broken_mapping(g1, monkeypatch,
     monkeypatch.setattr(anchored, "PARAMS_FROZEN", True)
     monkeypatch.setattr(g1, "load_cache", lambda path: {})
     assert g1.main(["--out", str(out)]) == 2 and not out.exists()
+
+
+def test_g1_needs_a_reading_for_each_named_model(g1) -> None:
+    good = {"gpt-oss:20b": 0.97, "qwen3:30b-a3b": 0.91}
+    holds, why = g1.theta_holds(_replay(g1, good, unread=("qwen3:30b-a3b",)))
+    assert not holds and "no readings for qwen3:30b-a3b" in why
+    assert not g1.verdict(_replay(g1, good, unread=("qwen3:30b-a3b",)))
+    assert g1.theta_holds(_replay(g1, good))[0]
+
+
+def test_any_crash_exits_2_not_1(g1, monkeypatch, tmp_path) -> None:
+    out = tmp_path / "g1.md"
+    monkeypatch.setattr(anchored, "PARAMS_FROZEN", True)
+
+    def boom(path):
+        raise OSError("no cache")
+
+    monkeypatch.setattr(g1, "load_cache", boom)
+    assert g1.main(["--out", str(out)]) == 2 and not out.exists()
+
+
+def test_out_under_the_run_cache_is_refused(g1, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(anchored, "PARAMS_FROZEN", True)
+    monkeypatch.setattr(g1, "WORK_DIR", tmp_path / "work")
+    called = []
+    monkeypatch.setattr(g1, "load_cache", lambda path: called.append(path) or {})
+    assert g1.main(["--out", str(tmp_path / "work" / "sub" / "g1.md")]) == 2
+    assert not called and not (tmp_path / "work").exists()
+
+
+def test_render_reports_each_start_and_marks_provisional_runs(g1, monkeypatch) -> None:
+    good = {"gpt-oss:20b": 0.97, "qwen3:30b-a3b": 0.91}
+    starts = {"t3": StartFit(-100.5, True, 12), "alpha=2.0": StartFit(-300.0, False, 500)}
+    r = _replay(g1, good, starts=starts)
+    monkeypatch.setattr(anchored, "PARAMS_FROZEN", True)
+    text = g1.render([r, r], V3Params())
+    assert text.splitlines()[2] == "# G1: PASS"
+    assert "t3 -100.5 True 12, alpha=2.0 -300.0 False 500" in text
+    monkeypatch.setattr(anchored, "PARAMS_FROZEN", False)
+    assert g1.render([r, r], V3Params()).splitlines()[2] == "# G1: PROVISIONAL (not G1)"
