@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from specdx.eval.pilot import (
     run_gate,
 )
 from specdx.infer.act import Act
+from specdx.infer.anchored import V3Params
+from specdx.infer.cells import SATISFIED, VIOLATED, Cell, CellData, Reading
 from specdx.infer.items import ItemView
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.orchestrate.work_orders import WorkStep
@@ -111,6 +114,23 @@ class _Lens:
         return frozenset()
 
 
+class _Cells:
+    """The constraint cell c1, and three anchored cells every behaviour reads at its
+    anchor: they are what tells the fit that the models are accurate."""
+
+    def extract(self, behaviours):
+        ok = [b for b in behaviours if b.status == "ok"]
+        cells = {"c1": Cell("c1", "constraint", SATISFIED, "c1", "c1", "invariant", ("s",))}
+        cells |= {f"k{j}": Cell(f"k{j}", "value", "ok", f"k{j}", f"t.k{j}", f"t.k{j}", ("s",))
+                  for j in range(3)}
+        readings = [Reading("c1", b.run_key, b.interpreter.model, b.interpreter.family,
+                            b.scenario.id, VIOLATED if b.state.derived.get("v") else SATISFIED)
+                    for b in ok]
+        readings += [Reading(f"k{j}", b.run_key, b.interpreter.model, b.interpreter.family,
+                             b.scenario.id, "ok") for b in ok for j in range(3)]
+        return CellData(cells if ok else {}, readings)
+
+
 class _Refute:
     def refute(self, targets, scenario, behaviours):
         return RefuteResult(True, "w", 1)
@@ -121,7 +141,11 @@ class _Bench:
 
     def loop_context(self, variant, config):
         return LoopContext(_Runner(variant.name == "broken"), _Lens(), CANON,
-                           list(CANON.values()), 5, lambda i, b: _Refute())
+                           list(CANON.values()), 5, lambda i, b: _Refute(), cells=_Cells())
+
+
+PARAMS = V3Params(pi=0.1, s_mis=0.5, s_amb=0.25, s_empty=0.25, beta_sd=1.0,
+                  mu_alpha=1.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8)
 
 
 def _mutant(mid, kind, location, step="s"):
@@ -134,13 +158,21 @@ def _config(tmp_path) -> GateConfig:
     path.write_text(json.dumps({"models_by_family": {"q": ["m1"], "l": ["m2"]},
                                 "variants": [0], "seeds": [1, 2], "budget": 10,
                                 "dev_per_type": 1, "rng_seed": 1}), encoding="utf-8")
-    return GateConfig.load(path)
+    return dataclasses.replace(GateConfig.load(path), params=PARAMS)
 
 
-def test_the_gate_configuration_carries_both_run_budgets(tmp_path) -> None:
+def test_the_gate_configuration_carries_both_run_budgets_and_the_parameters(tmp_path) -> None:
     assert (_config(tmp_path).specdx().probe_budget,
             _config(tmp_path).specdx().localize_budget) == (100, 80)
-    gate = GateConfig.load(Path(__file__).parents[2] / "experiments" / "p1-gate.json")
+    assert _config(tmp_path).specdx().params == PARAMS
+    # The parameters come from the code, never from the JSON, even when it carries some.
+    p1 = Path(__file__).parents[2] / "experiments" / "p1-gate.json"
+    tampered = tmp_path / "gate.json"
+    carried = {**dataclasses.asdict(V3Params()), "pi": 0.9}  # π 0.9 is no grid value
+    tampered.write_text(json.dumps({**json.loads(p1.read_text(encoding="utf-8")),
+                                    "params": carried}), encoding="utf-8")
+    assert GateConfig.load(tampered).params == V3Params()
+    gate = GateConfig.load(p1)
     assert (gate.specdx().probe_budget, gate.specdx().localize_budget) == (100, 80)
 
 
@@ -185,7 +217,7 @@ def test_a_failed_mutant_makes_the_gate_incomplete(tmp_path) -> None:
     result = run_gate(_config(tmp_path), _Bench(), mutants)
     assert not result.passed and result.headline == "INCOMPLETE"
     report = gate_markdown(result)
-    assert report.startswith("# P1b gate v2: INCOMPLETE")
+    assert report.startswith("# SpecDx gate v3: INCOMPLETE")
     assert "PASSED" not in report and "- `broken`: bad SQL" in report
     assert json.loads(result.to_json())["headline"] == "INCOMPLETE"
 
@@ -250,11 +282,13 @@ def test_scorability_comes_from_the_base_runs_and_only_scorable_mutants_count(
     assert data["scorable_per_type"]["hidden"] == 1 and data["mutants_per_type"]["hidden"] == 2
     assert [(x["mutant"], x["scorable"]) for x in mutants] == [("H1-00", True), ("H1-01", False)]
     assert all(x["unobservable"] == [] and x["delta_shift"] == {"grn12|s": 0.0} for x in mutants)
-    # the per-specification report fields (spec v2 §3.7, §3.8), on every mutant that ran
+    # the per-specification report fields (spec v2 §3.7, §3.8; v3 §5.5), on every mutant
     for x in mutants:
-        assert x["theta"] == base["theta"] and x["kappa"] == base["kappa"]
-        assert x["family_effect"] == base["family_effect"]
+        assert x["kappa"] == base["kappa"] and set(x["theta"]) == set(base["theta"])
+        assert set(x["family_effect"]) == set(base["family_effect"])
         assert set(x["items"]) == {"grn12|s"} and x["literals"] == []
+        assert set(x["cells"]) == {"c1", "k0", "k1", "k2"} and x["converged"] is True
+    assert base["cells"]["c1"]["anchor"] == "satisfied" and base["converged"] is True
     report = gate_markdown(result)
     assert "| hidden | 1 of 2 |" in report and "| H1-01 | hidden | 0 | no |" in report
 
@@ -278,7 +312,7 @@ def _gate_file(tmp_path, population, screen=None) -> GateConfig:
         raw["screen"] = str(screen)
     path = tmp_path / "gate.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
-    return GateConfig.load(path)
+    return dataclasses.replace(GateConfig.load(path), params=PARAMS)
 
 
 def test_the_gate_runs_only_on_the_screened_population(tmp_path) -> None:
@@ -291,7 +325,7 @@ def test_the_gate_runs_only_on_the_screened_population(tmp_path) -> None:
     with pytest.raises(ValueError, match="empty"):
         run_gate(_gate_file(tmp_path, {}), _Bench(), [])
     screen.write_text(json.dumps({"population": {"q": ["m1"]}, "stop": True}), encoding="utf-8")
-    with pytest.raises(ValueError, match="fewer than 2 families"):
+    with pytest.raises(ValueError, match="fewer than 2 families or 4 models"):
         load_population(screen)
 
 

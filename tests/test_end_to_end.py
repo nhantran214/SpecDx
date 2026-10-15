@@ -13,6 +13,7 @@ from tonomyx.tools.registry import ToolContext
 
 from specdx.active.loop import run_specdx
 from specdx.eval.pilot import GateConfig, gate_markdown, run_gate
+from specdx.infer.anchored import V3Params
 from specdx.mutate.operators import all_mutants
 from specdx.orchestrate.reference import reference_executor
 from specdx.workbench import Workbench
@@ -36,6 +37,8 @@ CONFIG = GateConfig(
     models_by_family={"ref": ("reference",), "dev": ("deviant",)},
     variants=(0,), seeds=(1, 2), budget=12, dev_per_type=1, rng_seed=1, probe_budget=6,
     localize_budget=6,
+    params=V3Params(pi=0.1, s_mis=0.5, s_amb=0.25, s_empty=0.25, beta_sd=1.0,
+                    mu_alpha=0.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8),
 )
 
 
@@ -78,5 +81,5 @@ def test_a_split_that_no_tell_sentence_causes_stays_unlocalised(tmp_path) -> Non
     report = run_specdx(bench.base, bench.loop_context(bench.base, config), config)
     [split] = [d for d in report.defects if d.type == "ambiguity"]
     assert split.note == "grn12|DE-OP-02:record_goods_receipt" and split.location == ()
-    assert report.ddmin_runs == 2  # fails([]): one run per competent acting model x variant
+    assert report.ddmin_runs == 2  # fails([]): one run per acting model x variant
     # (2 models x 1 variant), and the split persists

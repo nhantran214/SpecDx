@@ -1,4 +1,9 @@
-"""The SpecDx main loop (spec §3.8)."""
+"""The SpecDx main loop (spec §3.8; v2 §3.8; v3 §5–§6).
+
+Per iteration: pilot, escalation, stage 1 (act), then the anchored cell model on the
+cells read so far, then the v3 diagnosis. Escalation still compares the acted views' class
+keys (v2 §3.8); the evidence about the specification comes from cells only.
+"""
 
 from __future__ import annotations
 
@@ -13,16 +18,11 @@ from specdx.active.budget import RunBudget
 from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.active.search import CellBandit, information_gain, should_escalate
 from specdx.infer.act import Act, Rasch, fit_rasch
-from specdx.infer.items import ItemView, acted_violations, observations
-from specdx.infer.latent import Posterior, fit
-from specdx.infer.scores import (
-    Diagnosis,
-    ambiguity_key,
-    diagnose,
-    identity,
-    merge_defects,
-)
-from specdx.infer.sensitivity import COMPETENT
+from specdx.infer.anchored import AnchoredFit, V3Params, fit_anchored, posterior_at
+from specdx.infer.cells import CellData
+from specdx.infer.items import ItemView, acted_violations
+from specdx.infer.scores import ambiguity_key, identity, merge_defects
+from specdx.infer.typing import CellDiagnosis, diagnose_v3
 from specdx.interpreters.population import committee, pilot
 from specdx.observe.run import RunRequest
 from specdx.scenarios.tguided import TLiteral
@@ -54,9 +54,15 @@ class LensLike(Protocol):
     def diff(self, a: Projection, b: Projection) -> frozenset[str]: ...
 
 
+class CellsLike(Protocol):
+    def extract(self, behaviours: Sequence[Behaviour]) -> CellData: ...
+
+
+# The ddmin oracle's statistical test on one test's re-runs (spec v3 §5.3).
+Persists = Callable[[Sequence[Behaviour]], bool]
 # The localised sentence ids, or None when the ambiguity stays unlocalised.
 Localizer = Callable[
-    [SpecVariant, Defect, Sequence[InterpreterId], RunBudget], tuple[str, ...] | None
+    [SpecVariant, Defect, Sequence[InterpreterId], RunBudget, Persists], tuple[str, ...] | None
 ]
 AmbiguityKey = tuple[str, str, tuple[str, ...]]
 
@@ -69,10 +75,7 @@ class SpecDxConfig:
     budget: int = 300
     tau: float = 0.05
     eps: float = 0.01
-    ambig_threshold: float = 0.5
-    weak_threshold: float = 0.5
     k_max: int = 6
-    p_single: float = 0.9
     rng_seed: int = 20261006
     synthesize: bool = True
     localize: bool = True
@@ -81,12 +84,15 @@ class SpecDxConfig:
     # refutation, and ddmin runs for localisation, each under its own cap.
     probe_budget: int = 100
     localize_budget: int = 80
+    # The anchored model's priors and thresholds (spec v3 §9).
+    params: V3Params = V3Params()
 
 
 @dataclass
 class LoopContext:
     """tboundary: the T-boundary scenarios, queued after the canon ones; literals: the T
-    literals they come from, reported per specification (spec v2 §3.7)."""
+    literals they come from, reported per specification (spec v2 §3.7). cells: the cell
+    lens the v3 diagnosis reads (infer.cells.CellLens); the loop refuses to run without."""
 
     runner: RunnerLike
     lens: LensLike
@@ -97,6 +103,7 @@ class LoopContext:
     localizer: Localizer | None = None
     tboundary: list[Scenario] = field(default_factory=list)
     literals: list[TLiteral] = field(default_factory=list)
+    cells: CellsLike | None = None
 
 
 @dataclass
@@ -104,9 +111,11 @@ class Report:
     """runs counts population runs; probe_runs and ddmin_runs the requested runs charged to
     the probe and localisation budgets. ambiguity_keys are the ambiguities found, before
     the differential and localisation; ambiguity_dropped those the differential removed.
-    The v2 additions (spec v2 §3.8): κ per model; per item δ, O_s, whether it is
-    observable, and its ambiguity signals S1, S2, p; the Unobservable list; the T literals.
-    family_effect is the model-family effect on the logit scale (spec v2 §3.3)."""
+    The v2 additions (spec v2 §3.8): κ per model; per item δ, O_s and whether it is
+    observable; the Unobservable list; the T literals. The v3 additions (spec v3 §3.5,
+    §5.5): θ_m (theta) and α_m (alpha) of the anchored model, the family effect on the
+    logit scale, the per-cell posterior summaries, and whether EM converged (converged,
+    iterations, the winning start) — non-convergence is reported, never silent."""
 
     variant: str
     defects: list[Defect]
@@ -119,13 +128,19 @@ class Report:
     ddmin_runs: int = 0
     ambiguity_keys: frozenset[AmbiguityKey] = frozenset()
     ambiguity_dropped: frozenset[AmbiguityKey] = frozenset()  # base noise, removed
-    # Singleton locations that spent probes and were dropped below τ_H (Diagnosis.spent).
+    # Multi-clause candidate locations that cost a probe run, or would have, and found
+    # nothing (resolution 8; CellDiagnosis.spent).
     spent: frozenset[tuple[str, ...]] = frozenset()
     kappa: dict[str, float] = field(default_factory=dict)
     family_effect: dict[str, float] = field(default_factory=dict)
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     unobservable: list[Defect] = field(default_factory=list)
     literals: list[TLiteral] = field(default_factory=list)
+    alpha: dict[str, float] = field(default_factory=dict)
+    cells: dict[str, dict[str, Any]] = field(default_factory=dict)
+    converged: bool = True
+    iterations: int = 0
+    fit_start: str = ""
 
     def to_json(self) -> str:
         return json.dumps(
@@ -133,26 +148,38 @@ class Report:
              "unobservable": [asdict(d) for d in self.unobservable],
              "runs": self.runs, "probe_runs": self.probe_runs, "ddmin_runs": self.ddmin_runs,
              "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta,
-             "kappa": self.kappa, "family_effect": self.family_effect, "items": self.items,
+             "alpha": self.alpha, "kappa": self.kappa, "family_effect": self.family_effect,
+             "converged": self.converged, "iterations": self.iterations,
+             "fit_start": self.fit_start, "items": self.items, "cells": self.cells,
              "literals": [x.as_dict() for x in self.literals],
              "spent": [list(loc) for loc in sorted(self.spent)]},
             ensure_ascii=False, indent=2,
         )
 
 
-def item_table(rasch: Rasch, diagnosis: Diagnosis) -> dict[str, dict[str, Any]]:
-    """Per item: stage 1 (δ, O_s, acted behaviours, observable) and, when observable, the
-    ambiguity signals (S1, S2 and its p-value, BH significance)."""
+def item_table(rasch: Rasch) -> dict[str, dict[str, Any]]:
+    """Per item, stage 1: δ, O_s, acted behaviours, observable."""
+    return {item: {"delta": rasch.delta[item], "observability": rasch.observability[item],
+                   "acted": rasch.acted[item], "observable": rasch.observable(item)}
+            for item in sorted(rasch.delta)}
+
+
+def cell_table(data: CellData, fit: AnchoredFit) -> dict[str, dict[str, Any]]:
+    """Per cell (spec v3.1 §3.5, §5.5): its anchor, the readings per model, β_{g(c)}, the
+    posterior over A_c (sets: at most 22 [sorted set, p] pairs, most probable first), the
+    form masses, the MAP set and its posterior."""
+    counts: dict[str, dict[str, int]] = {}
+    for r in data.readings:
+        mine = counts.setdefault(r.cell, {})
+        mine[r.model] = mine.get(r.model, 0) + 1
     out: dict[str, dict[str, Any]] = {}
-    for item in sorted(rasch.delta):
-        row: dict[str, Any] = {"delta": rasch.delta[item],
-                               "observability": rasch.observability[item],
-                               "acted": rasch.acted[item], "observable": rasch.observable(item)}
-        signal = diagnosis.signals.get(item)
-        if signal is not None:
-            row |= {"s1": signal.s1, "s2": signal.s2, "p": signal.p,
-                    "significant": signal.significant}
-        out[item] = row
+    for cid, post in sorted(fit.cells.items()):
+        best = post.map_set
+        sets = sorted(([sorted(s), p] for s, p in post.sets.items()),
+                      key=lambda x: (-x[1], x[0]))
+        out[cid] = {"anchor": post.anchor, "readings": dict(sorted(counts[cid].items())),
+                    "beta": post.beta, "sets": sets, "forms": post.forms, "map": sorted(best),
+                    "map_posterior": post.sets[best]}
     return out
 
 
@@ -189,13 +216,11 @@ def oracle_interpreters(
     theta: dict[str, float],
     variants: tuple[int, ...],
     acted: Collection[str],
-    competent: float = COMPETENT,
 ) -> list[InterpreterId]:
-    """The ddmin oracle's re-runs (spec v2 §3.6): one per competent model and Tell variant,
-    at seed 1, most competent first. Competent is θ ≥ 0.5 with an acted behaviour: a
-    prior-only θ (no acted behaviour) is not evidence of competence."""
-    models = [(m, f) for f, ms in models_by_family.items() for m in ms
-              if m in acted and theta.get(m, 0.0) >= competent]
+    """The ddmin oracle's re-runs (spec v3 §5.3): one per model with at least one acted
+    behaviour in the specification and per Tell variant, at seed 1, highest θ_m first. No θ
+    threshold: a model that never acted cannot yield a reading, whatever its θ."""
+    models = [(m, f) for f, ms in models_by_family.items() for m in ms if m in acted]
     models.sort(key=lambda mf: -theta.get(mf[0], 0.0))
     return [InterpreterId(m, f, v, 1) for m, f in models for v in variants]
 
@@ -206,6 +231,9 @@ def run_specdx(
     """base: the base specification's report. Ambiguities it already holds (same step and
     fields) are dropped before localisation, so only the mutant's own are localised, and
     candidates at locations it already holds are refuted last (§11)."""
+    if ctx.cells is None:
+        raise ValueError("the v3 loop reads cells: the loop context has no cell lens")
+    cells = ctx.cells
     rng = random.Random(config.rng_seed)
     budget = RunBudget(config.probe_budget, config.localize_budget)
     refutations: dict = {}
@@ -218,9 +246,11 @@ def run_specdx(
     views: list[ItemView] = []
     acts: list[Act] = []
     seen_sets: set[frozenset[str]] = set()
-    posterior = Posterior({}, {}, {})
+    population = {m: f for f, ms in config.models_by_family.items() for m in ms}
+    data = CellData({}, [])
+    model = fit_anchored({}, [], models=population, params=config.params)
     rasch = fit_rasch([])
-    diagnosis = Diagnosis([])
+    diagnosis = CellDiagnosis([])
     defects: list[Defect] = []
     spent: frozenset[tuple[str, ...]] = frozenset()
     previous: dict[str, float] = {}
@@ -228,7 +258,6 @@ def run_specdx(
     runs = 0
     executed_before = ctx.runner.executed
     members = committee(config.models_by_family, config.variants, config.seeds)
-    population = {m: f for f, ms in config.models_by_family.items() for m in ms}
     # Base locations whose candidates spent probes, or would: contradictions, and hidden
     # findings refuted by a probe run or never attempted. A base finding that symbolic
     # repair refuted cost no probe; if it needs one on a mutant, the mutant changed it.
@@ -253,7 +282,7 @@ def run_specdx(
         order.append(scenario.id)
 
         # Each batch is charged to the budget before it is dispatched (spec v2 §5.1).
-        pilot_ids = pilot(config.models_by_family, posterior.theta or None)
+        pilot_ids = pilot(config.models_by_family, model.theta if model.cells else None)
         batch = pilot_ids[:config.budget - runs]
         runs += len(batch)
         fresh = ctx.runner.run_batch([RunRequest(variant, scenario, i) for i in batch])
@@ -274,17 +303,17 @@ def run_specdx(
             views.extend(mine)
             acts.extend(ctx.lens.acts(b))
         rasch = fit_rasch(acts)
-        posterior = fit(observations(views), models=population, k_max=config.k_max,
-                        p_single=config.p_single)
+        data = cells.extract(behaviours)
+        model = fit_anchored(data.cells, data.readings, models=population,
+                             params=config.params)
         refuter = _Memoised(ctx.refuter_factory(
-            ranked_interpreters(config.models_by_family, posterior.theta, config.variants),
+            ranked_interpreters(config.models_by_family, model.theta, config.variants),
             budget,
         ), refutations)
-        diagnosis = diagnose(
-            behaviours, violated, views, posterior, refuter, ctx.lens.diff,
+        diagnosis = diagnose_v3(
+            behaviours, violated, data, model, refuter,
             observable=rasch.observable_items(), relevant=ctx.lens.relevant,
-            tau=config.tau, ambig_threshold=config.ambig_threshold,
-            weak_threshold=config.weak_threshold, rng_seed=config.rng_seed, known=known,
+            tau=config.tau, known=known,
         )
         defects, spent = diagnosis.defects, diagnosis.spent
         scores = {repr(identity(d)): d.score for d in defects}
@@ -295,15 +324,20 @@ def run_specdx(
     dropped = found & base.ambiguity_keys if base is not None else frozenset()
     defects = [d for d in defects if d.type != "ambiguity" or ambiguity_key(d) not in dropped]
     if config.localize and ctx.localizer is not None:
-        interps = oracle_interpreters(config.models_by_family, posterior.theta, config.variants,
+        interps = oracle_interpreters(config.models_by_family, model.theta, config.variants,
                                       {v.model for v in views if v.acted})
         # Best supported first, until the localisation budget runs out; from then on every
         # ambiguity is unlocalised: an empty location, which matches no ground truth.
         located: dict[int, tuple[str, ...]] = {}
         for i in sorted((i for i, d in enumerate(defects) if d.type == "ambiguity"),
                         key=lambda i: -defects[i].score):
-            sentences = (None if budget.exhausted("ddmin")
-                         else ctx.localizer(variant, defects[i], interps, budget))
+            cell = diagnosis.ambiguity_cells[ambiguity_key(defects[i])]
+            persists = _persists(cells, data, model, cell)
+            # The oracle passes only while P(|A_c| = 2) ≥ τ_A, so an ambiguity reported
+            # below it (F1 co-occurrence, direction B) could never be localised.
+            localisable = model.cells[cell].p_pair >= config.params.tau_a
+            sentences = (None if budget.exhausted("ddmin") or not localisable
+                         else ctx.localizer(variant, defects[i], interps, budget, persists))
             located[i] = tuple(sentences or ())
         # Localised defects that now share type and location merge; unlocalised ones keep
         # their identity from before localisation (step and fields), so they stay apart.
@@ -316,8 +350,23 @@ def run_specdx(
         defects = merge_defects(out, key=lambda d: merge_key[id(d)])
 
     return Report(variant.name, defects, runs, ctx.runner.executed - executed_before, order,
-                  dict(posterior.theta), behaviours, probe_runs=budget.probe,
+                  dict(model.theta), behaviours, probe_runs=budget.probe,
                   ddmin_runs=budget.ddmin, ambiguity_keys=found, ambiguity_dropped=dropped,
                   spent=spent, kappa=dict(rasch.kappa),
-                  family_effect=dict(posterior.family_effect), items=item_table(rasch, diagnosis),
-                  unobservable=diagnosis.unobservable, literals=list(ctx.literals))
+                  family_effect=dict(model.family_effect), items=item_table(rasch),
+                  unobservable=diagnosis.unobservable, literals=list(ctx.literals),
+                  alpha=dict(model.alpha), cells=cell_table(data, model),
+                  converged=model.converged, iterations=model.iterations,
+                  fit_start=model.start)
+
+
+def _persists(cells: CellsLike, data: CellData, model: AnchoredFit, cell: str) -> Persists:
+    """Spec v3 §5.3: a ddmin test passes while P(|A_c| = 2), computed on the re-run
+    readings of the ambiguity's cell with α, β and ε held at their fitted values, stays at
+    or above τ_A."""
+    def persists(runs: Sequence[Behaviour]) -> bool:
+        readings = [r for r in cells.extract(runs).readings if r.cell == cell]
+        post = posterior_at(model, data.cells[cell], readings)
+        return post.p_pair >= model.params.tau_a
+
+    return persists

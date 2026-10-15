@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from itertools import combinations
 from pathlib import Path
 
 import httpx
@@ -14,11 +13,12 @@ from tonomyx.tools.catalog import build_registry
 
 from specdx.active.budget import RunBudget
 from specdx.active.ddmin import OutOfBudget, localize_ambiguity
-from specdx.active.loop import LoopContext, SpecDxConfig
+from specdx.active.loop import LoopContext, Persists, SpecDxConfig
 from specdx.active.refute import CombinedRefuter, DirectedProbe, SymbolicRepair
 from specdx.config import BASE_PACK, OLLAMA_URL, OLLAMA_URLS, PDF_DIR, WORK_DIR
 from specdx.db import PackDatabase, _hold_lock, golden_tables, split_background
 from specdx.infer.act import drafting_steps
+from specdx.infer.cells import CellLens
 from specdx.infer.items import SpecLens
 from specdx.interpreters.cache import RunCache
 from specdx.interpreters.executor import SpecInterpreterExecutor, interpreter_settings
@@ -156,6 +156,7 @@ class Workbench:
         background, _ = split_background(golden_tables(pack))
         lens = SpecLens(clauses, self.steps, ColumnModel.of(pack),
                         drafting=drafting_steps(pack, self.steps), initial=background)
+        cells = CellLens(lens, pack, variant.corpus)
         canon = canon_scenarios(pack)
         literals = extract_literals(variant.corpus)
         candidates = enumerate_scenarios(boundary_domain(pack, [x.bound for x in literals]))
@@ -171,7 +172,7 @@ class Workbench:
             )
 
         def localizer(v: SpecVariant, defect: Defect, interps: Sequence[InterpreterId],
-                      budget: RunBudget) -> tuple[str, ...] | None:
+                      budget: RunBudget, persists: Persists) -> tuple[str, ...] | None:
             scenario_id, step_id = defect.note.split("|", 1)
             scenario: Scenario = by_id[scenario_id]
             step = next(s for s in self.steps if s.id == step_id)
@@ -179,25 +180,25 @@ class Workbench:
             # Top 5 chunks, not §3.7's 20: bounds the ddmin cost in P1 (§11).
             chunks = v.corpus.search(query, k=5)
             pool = v.corpus.sentence_ids([c.id for c in chunks])
-            fields = frozenset(defect.location)
 
             def split_persists(corpus: TellCorpus) -> bool:
-                """Spec v2 §3.6: the re-run (one behaviour per competent model and variant,
-                seed 1) still yields two classes that differ on the ambiguity's fields. The
-                test's runs are charged, then dispatched as one batch."""
+                """Spec v3 §5.3: re-run each model that acted, under each Tell variant at
+                seed 1, and ask the loop's test (persists) whether the cell still splits.
+                The test's runs are charged, then dispatched as one batch."""
                 probe = SpecVariant(f"{v.name}+ddmin", v.pack, corpus)
                 for _ in interps:
                     if not budget.take("ddmin"):
                         raise OutOfBudget
+                if not interps:
+                    return False
                 runs = self.runner.run_batch(
                     [RunRequest(probe, scenario, i, kind="ddmin") for i in interps])
-                seen = [view.projection for b in runs for view in lens.views(b, lens.violations(b))
-                        if view.item == defect.note and view.acted]
-                return any(lens.diff(a, b) & fields for a, b in combinations(seen, 2))
+                return persists(runs)
 
             found = localize_ambiguity(v.corpus, pool, split_persists,
                                        max_tests=config.localize_tests)
             return None if found is None else tuple(found)
 
         return LoopContext(self.runner, lens, canon, candidates, discount_cap_pct(pack),
-                           refuter_factory, localizer, tboundary=tboundary, literals=literals)
+                           refuter_factory, localizer, tboundary=tboundary, literals=literals,
+                           cells=cells)

@@ -5,6 +5,7 @@ import pytest
 
 from specdx.eval.pilot import load_population
 from specdx.eval.screen import (
+    Screen,
     ScreenResult,
     choose_population,
     load_profile,
@@ -19,7 +20,8 @@ from specdx.variant import SpecVariant
 BASE = SpecVariant("base", Path("."), TellCorpus([]))
 CANON = {"happy": Scenario("happy", 15, 15, 0), "grn12": Scenario("grn12", 15, 12, 0)}
 # model -> (acted steps of 9, tool calls, valid calls) for each of its runs
-PLAN = {"good": (7, 10, 9), "edge": (6, 10, 8), "sloppy": (9, 10, 7), "idle": (2, 4, 4)}
+PLAN = {"good": (7, 10, 9), "edge": (3, 10, 8), "sloppy": (9, 10, 7), "idle": (2, 4, 4),
+        "good2": (8, 10, 9), "edge2": (4, 10, 9)}
 
 
 class _Runner:
@@ -57,9 +59,9 @@ def test_each_candidate_runs_nine_times_on_happy_and_is_measured() -> None:
     assert {c[4] for c in runner.calls} == {"screen"} and len(runner.calls) == 36
     assert results["good"].runs == 9 and results["good"].act_rate == pytest.approx(7 / 9)
     assert results["good"].valid_rate == pytest.approx(0.9)
-    assert results["edge"].admitted  # 6/9 and 0.8 exactly: the thresholds are inclusive
+    assert results["edge"].admitted  # 3/9 ≥ 0.3 (spec v3 §7), and 0.8 exactly is inclusive
     assert not results["sloppy"].admitted  # acts, but 0.7 of its calls are valid
-    assert not results["idle"].admitted
+    assert not results["idle"].admitted  # 2/9 < 0.3
     assert results["absent"].note == "not installed" and not results["absent"].admitted
     assert screen.population == {"a": ("good", "edge")} and screen.stop
 
@@ -83,12 +85,23 @@ def test_ties_break_by_valid_call_rate_then_name() -> None:
 
 def test_the_screen_json_is_what_the_gate_freezes(tmp_path) -> None:
     runner = _Runner()
-    screen = run_screen(runner, BASE, _Lens(), CANON, {"a": ("good",), "b": ("edge",)})
+    screen = run_screen(runner, BASE, _Lens(), CANON,
+                        {"a": ("good", "good2"), "b": ("edge", "edge2")})
     path = tmp_path / "screen.json"
     path.write_text(screen.to_json(), encoding="utf-8")
-    assert not screen.stop and load_population(path) == {"a": ("good",), "b": ("edge",)}
-    assert json.loads(path.read_text())["rules"]["act_rate_min"] == 0.6
+    assert not screen.stop
+    assert load_population(path) == {"a": ("good2", "good"), "b": ("edge2", "edge")}
+    rules = json.loads(path.read_text())["rules"]
+    assert (rules["act_rate_min"], rules["min_families"], rules["min_models"]) == (0.3, 2, 4)
     assert "| good | a | 9 |" in screen_markdown(screen, "test")
+
+
+def test_the_screen_stops_without_two_families_and_four_acting_models() -> None:
+    # Spec v3.1 §7 and G2: ambiguity needs four acting models, across at least 2 families.
+    assert not Screen([], {"a": ("m1", "m2"), "b": ("m3", "m4")}).stop
+    assert Screen([], {"a": ("m1", "m2"), "b": ("m3",)}).stop
+    assert Screen([], {"a": ("m1", "m2")}).stop
+    assert "fewer than 2 families or 4 models" in screen_markdown(Screen([], {"a": ("m1",)}), "x")
 
 
 def test_a_profile_loads_by_path(tmp_path) -> None:
@@ -108,3 +121,23 @@ def test_the_shipped_profiles_widen_each_other() -> None:
     assert all(models(a) < models(b) for a, b in zip(profiles, profiles[1:], strict=False))
     assert set(profiles[0].candidates) == {"qwen", "openai", "mistral", "ibm", "meta"}
     assert all(p.workers <= p.ollama_num_parallel for p in profiles)
+
+
+def test_the_cached_p1b_screen_admits_the_v3_population_without_a_run(
+    tmp_path, monkeypatch,
+) -> None:
+    from specdx.cli import main
+    from specdx.eval.screen import rescreen
+
+    cached = Path(__file__).parents[2] / "results" / "p1b-screen.json"
+    screen = rescreen(cached)
+    assert screen.population == {"openai": ("gpt-oss:20b",),
+                                 "qwen": ("qwen3:30b-a3b", "qwen2.5:14b"),
+                                 "mistral": ("mistral-small3.2:24b",)}  # spec v3 §7
+    assert not screen.stop
+    monkeypatch.setattr("specdx.workbench.Workbench.open",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no workbench")))
+    out = tmp_path / "p2-screen"
+    assert main(["screen", "--from", str(cached), "--out", str(out)]) == 0
+    assert load_population(out.with_suffix(".json")) == screen.population
+    assert main(["screen", "--out", str(out)]) == 2

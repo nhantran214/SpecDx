@@ -1,9 +1,16 @@
+"""The v3 loop on scripted interpreters: fakes for the runner, the v2 lens (stage 1,
+escalation, violation sets) and the cell lens (the evidence)."""
+
 import dataclasses
 import json
 from pathlib import Path
 
+import pytest
+
 from specdx.active.loop import LoopContext, SpecDxConfig, oracle_interpreters, run_specdx
 from specdx.infer.act import Act
+from specdx.infer.anchored import V3Params
+from specdx.infer.cells import Cell, CellData, Reading, normalise
 from specdx.infer.items import ItemView
 from specdx.infer.scores import UNATTEMPTED
 from specdx.scenarios.tguided import TLiteral
@@ -14,8 +21,14 @@ from specdx.variant import SpecVariant
 CANON = {"discount8": Scenario("discount8", 15, 15, 8), "grn12": Scenario("grn12", 15, 12, 0),
          "happy": Scenario("happy", 15, 15, 0)}
 MODELS = {"qwen": ("q1", "q2"), "llama": ("l1",)}
-GOOD = ("q1", "l1")
+GOOD = ("q1", "l1")  # accurate at every calibration item; q2 at three of five
 VARIANT = SpecVariant("toy", Path("."), TellCorpus([]))
+P = V3Params(pi=0.1, s_mis=0.5, s_amb=0.25, s_empty=0.25, beta_sd=1.0,
+             mu_alpha=1.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8)
+
+
+def _config(**kwargs) -> SpecDxConfig:
+    return SpecDxConfig(MODELS, **({"params": P, "synthesize": False} | kwargs))
 
 
 class FakeRunner:
@@ -26,7 +39,7 @@ class FakeRunner:
         self.executed += 1
         self.calls.append(scenario.id)
         klass, bad = self.plan(scenario, interp)
-        return Behaviour(f"{scenario.id}|{interp.key}", interp, scenario,
+        return Behaviour(f"{scenario.id}|{interp.key}|{variant.name}", interp, scenario,
                          State({}, {"k": klass, "v": ",".join(sorted(bad))}, {}))
 
     def run_batch(self, requests):
@@ -36,10 +49,13 @@ class FakeRunner:
 CLAUSES = frozenset({"c1", "n", "noise", "n1", "n2", "n3"})
 
 
+def _calibration(model: str, j: int, run_key: str) -> str:
+    return "OK" if model in GOOD or j < 3 else f"E{j}-{run_key}"
+
+
 class FakeLens:
-    """One item under test plus five calibration items, as a real run has eleven steps:
-    competence is learnt from the steps where competent models agree. Every behaviour acts
-    at every item, and every clause is read at the steps under test."""
+    """One item under test plus five calibration items, as a real run has eleven steps.
+    Every behaviour acts at every item, and every clause is read at the steps under test."""
 
     relevant = {"step": CLAUSES, "step2": CLAUSES} | {f"cal{j}": frozenset() for j in range(5)}
 
@@ -52,7 +68,7 @@ class FakeLens:
         out = [ItemView(f"{b.scenario.id}|step", b.run_key, model, family, k, violated,
                         (("x", ((k, ()),)),))]
         for j in range(5):
-            cal = "OK" if model in GOOD else f"E{j}-{b.run_key}"
+            cal = _calibration(model, j, b.run_key)
             out.append(ItemView(f"{b.scenario.id}|cal{j}", b.run_key, model, family, cal,
                                 frozenset(), (("x", ((cal, ()),)),)))
         return out
@@ -62,6 +78,34 @@ class FakeLens:
 
     def diff(self, a, b):
         return frozenset({"x.k"}) if a != b else frozenset()
+
+
+class FakeCells:
+    """A value cell per acted view: at the steps under test the class read there (anchored
+    to OK with clause c1 at the scenarios in `anchored`), at the calibration items OK."""
+
+    def __init__(self, lens: FakeLens, anchored: frozenset[str] = frozenset({"grn12"})) -> None:
+        self.lens, self.anchored = lens, anchored
+
+    def extract(self, behaviours):
+        cells: dict[str, Cell] = {}
+        readings: list[Reading] = []
+        for b in behaviours:
+            for v in self.lens.views(b, self.lens.violations(b)):
+                if not v.acted:
+                    continue
+                sid, step = v.item.split("|")
+                if step.startswith("cal"):
+                    cell = Cell(v.item, "value", "ok", f"golden:{step}", f"cal.{step}",
+                                f"cal.{step}", (step,))
+                elif sid in self.anchored:
+                    cell = Cell(v.item, "value", "ok", "c1", "x.k", "x.k", (step,))
+                else:
+                    cell = Cell(v.item, "value", None, None, "x.k", "x.k", (step,))
+                cells[cell.id] = cell
+                readings.append(Reading(cell.id, b.run_key, v.model, v.family, sid,
+                                        normalise(v.klass), not v.violated, v.variant))
+        return CellData(cells, sorted(readings, key=lambda r: (r.cell, r.run_key)))
 
 
 class AlwaysRefute:
@@ -88,81 +132,84 @@ class NeverRefute:
         return RefuteResult(False, None, 0, attempted=False)
 
 
-def _ctx(runner, localizer=None, lens=None, refuter=None):
-    return LoopContext(runner, lens or FakeLens(), CANON, list(CANON.values()), 5,
-                       refuter or (lambda interps, budget: AlwaysRefute()), localizer)
+def _ctx(runner, localizer=None, lens=None, refuter=None, anchored=frozenset({"grn12"})):
+    lens = lens or FakeLens()
+    return LoopContext(runner, lens, CANON, list(CANON.values()), 5,
+                       refuter or (lambda interps, budget: AlwaysRefute()), localizer,
+                       cells=FakeCells(lens, anchored))
 
 
 def test_a_planted_hidden_requirement_is_reported_first() -> None:
-    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)),
-                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), _config(budget=100))
     top = report.defects[0]
-    assert (top.type, top.location) == ("hidden", ("c1",)) and "grn12" in top.scenarios
+    assert (top.type, top.location) == ("hidden", ("c1",)) and top.scenarios == ("grn12",)
+    assert top.note == "refuted by w" and top.subtype
     assert report.theta["q1"] > report.theta["q2"]
 
 
 def test_an_agreeing_pilot_on_known_ground_does_not_escalate() -> None:
     runner = FakeRunner(_hidden_plan)
-    run_specdx(VARIANT, _ctx(runner), SpecDxConfig(MODELS, budget=100, synthesize=False))
+    run_specdx(VARIANT, _ctx(runner), _config(budget=100))
     assert runner.calls.count("discount8") == 9 and runner.calls.count("grn12") == 9
     assert runner.calls.count("happy") == 2
 
 
 def test_the_budget_is_respected() -> None:
     runner = FakeRunner(_hidden_plan)
-    report = run_specdx(VARIANT, _ctx(runner), SpecDxConfig(MODELS, budget=5, synthesize=False))
+    report = run_specdx(VARIANT, _ctx(runner), _config(budget=5))
     assert report.runs <= 5 and runner.executed <= 5
 
 
+def test_the_loop_refuses_a_context_without_cells() -> None:
+    ctx = dataclasses.replace(_ctx(FakeRunner(_hidden_plan)), cells=None)
+    with pytest.raises(ValueError, match="cell lens"):
+        run_specdx(VARIANT, ctx, _config(budget=10))
+
+
 def _split_plan(scenario, interp):
+    """grn12: the accurate models read the step two ways, q1 and l1 opposite to each other
+    and q2 both ways and wrong once, so the pilot already disagrees."""
+    if scenario.id == "grn12":
+        if interp.model == "q2":
+            return ("X", "E", "Y")[interp.seed - 1], set()
+        first = "X" if interp.model == "q1" else "Y"
+        return (first if interp.seed != 2 else ("Y" if first == "X" else "X")), set()
     good = interp.model in GOOD
-    if scenario.id == "grn12" and good:
-        # Two competent models read the same text two ways, so the pilot already disagrees.
-        return ("X" if interp.model == "q1" else "Y", set())
     return ("OK", set()) if good else (f"E{interp.seed}-{scenario.id}", {"n"})
 
 
+def _split_ctx(runner, localizer=None, lens=None, refuter=None):
+    return _ctx(runner, localizer, lens, refuter, anchored=frozenset())
+
+
 def test_ambiguity_locations_are_replaced_by_the_localiser() -> None:
-    report = run_specdx(
-        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: ("A:01",)),
-        SpecDxConfig(MODELS, budget=200, synthesize=False),
-    )
+    report = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan),
+                                            lambda v, d, i, b, p: ("A:01",)),
+                        _config(budget=200))
     assert any(d.type == "ambiguity" and d.location == ("A:01",) for d in report.defects)
 
 
 def test_an_unlocalised_ambiguity_keeps_its_type_with_an_empty_location() -> None:
-    report = run_specdx(
-        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: None),
-        SpecDxConfig(MODELS, budget=200, synthesize=False),
-    )
+    report = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan),
+                                            lambda v, d, i, b, p: None),
+                        _config(budget=200))
     ambiguities = [d for d in report.defects if d.type == "ambiguity"]
     assert ambiguities and all(d.location == () for d in ambiguities)
 
 
 def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) -> None:
-    config = SpecDxConfig(MODELS, budget=100, synthesize=False)
+    config = _config(budget=100)
     base = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config)
     assert ("c1",) in {d.location for d in base.defects}
     assert isinstance(base.spent, frozenset) and ("c1",) not in base.spent
-    # A singleton no class violates alone is dropped below τ_H, and the report keeps it as
-    # spent: the probe it cost must not be paid again on every mutant.
-    def _shared_plan(scenario, interp):
-        if scenario.id == "grn12" and interp.model in GOOD:
-            return "K", {"c1", "n"}
-        return _hidden_plan(scenario, interp)
-
-    dropped = run_specdx(VARIANT, _ctx(FakeRunner(_shared_plan)), config)
-    assert not [d for d in dropped.defects if d.type == "hidden"]
-    assert dropped.spent == {("c1",), ("n",)}
-    assert json.loads(dropped.to_json())["spent"] == [["c1"], ["n"]]  # a reloaded base keeps it
     seen = []
-    real = run_specdx.__globals__["diagnose"]
+    real = run_specdx.__globals__["diagnose_v3"]
 
     def recording(*args, known=frozenset(), **kwargs):
         seen.append(known)
         return real(*args, known=known, **kwargs)
 
-    monkeypatch.setitem(run_specdx.__globals__, "diagnose", recording)
+    monkeypatch.setitem(run_specdx.__globals__, "diagnose_v3", recording)
     run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=base)
     assert seen and all(("c1",) in known for known in seen)
     # Symbolic repair spent no probe on the base, so a mutant needing one probes it early;
@@ -175,26 +222,28 @@ def test_the_base_reports_locations_are_refuted_last_on_a_mutant(monkeypatch) ->
         Defect("hidden", ("d",), ("s",), (), 1.0, "refuted by grn12|q1|v0|s1"),
         Defect("ambiguity", ("e",), ("s",), (), 1.0),
         Defect("weak", ("f",), ("s",), (), 1.0),
-    ], spent=frozenset({("g",)}))  # a singleton dropped below τ_H after it cost a probe
+    ], spent=frozenset({("g", "h")}))  # a multi-clause candidate that cost a probe
     run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config, base=noted)
-    assert seen and all(known == {("a",), ("b",), ("d",), ("g",)} for known in seen)
+    assert seen and all(known == {("a",), ("b",), ("d",), ("g", "h")} for known in seen)
+    assert json.loads(noted.to_json())["spent"] == [["g", "h"]]  # a reloaded base keeps it
 
 
 def test_a_base_noise_ambiguity_is_removed_before_localisation() -> None:
-    config = SpecDxConfig(MODELS, budget=200, synthesize=False)
-    base = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan)),
+    config = _config(budget=200)
+    base = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan)),
                       dataclasses.replace(config, localize=False))
     assert [d for d in base.defects if d.type == "ambiguity"]
     assert base.ambiguity_keys == {("ambiguity", "step", ("x.k",))}
     calls = []
 
-    def localiser(v, d, i, b):
+    def localiser(v, d, i, b, p):
         calls.append(d.note)
         return (f"A:{len(calls):02d}",)  # another run, other sentence ids
 
-    mutant = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser), config, base=base)
+    mutant = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), localiser), config,
+                        base=base)
     assert not [d for d in mutant.defects if d.type == "ambiguity"] and calls == []
-    alone = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser), config)
+    alone = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), localiser), config)
     assert [d.location for d in alone.defects if d.type == "ambiguity"] == [("A:01",)]
 
 
@@ -209,8 +258,8 @@ class TwoStepLens(FakeLens):
 def test_localised_ambiguities_that_share_a_location_are_merged() -> None:
     report = run_specdx(
         VARIANT,
-        _ctx(FakeRunner(_split_plan), lambda v, d, i, b: ("A:01",), lens=TwoStepLens()),
-        SpecDxConfig(MODELS, budget=200, synthesize=False),
+        _split_ctx(FakeRunner(_split_plan), lambda v, d, i, b, p: ("A:01",), lens=TwoStepLens()),
+        _config(budget=200),
     )
     assert len(report.ambiguity_keys) == 2
     assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
@@ -218,8 +267,9 @@ def test_localised_ambiguities_that_share_a_location_are_merged() -> None:
 
 def test_unlocalised_ambiguities_at_different_steps_stay_apart() -> None:
     report = run_specdx(
-        VARIANT, _ctx(FakeRunner(_split_plan), lambda v, d, i, b: None, lens=TwoStepLens()),
-        SpecDxConfig(MODELS, budget=200, synthesize=False),
+        VARIANT,
+        _split_ctx(FakeRunner(_split_plan), lambda v, d, i, b, p: None, lens=TwoStepLens()),
+        _config(budget=200),
     )
     unlocalised = [d for d in report.defects if d.type == "ambiguity"]
     assert [d.location for d in unlocalised] == [(), ()]
@@ -227,11 +277,11 @@ def test_unlocalised_ambiguities_at_different_steps_stay_apart() -> None:
 
 
 def test_the_report_records_the_ambiguities_the_differential_dropped() -> None:
-    config = SpecDxConfig(MODELS, budget=200, synthesize=False)
-    base = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan)),
+    config = _config(budget=200)
+    base = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan)),
                       dataclasses.replace(config, localize=False))
-    mutant = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), lens=TwoStepLens()), config,
-                        base=base)
+    mutant = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), lens=TwoStepLens()),
+                        config, base=base)
     assert mutant.ambiguity_keys == {("ambiguity", "step", ("x.k",)),
                                      ("ambiguity", "step2", ("x.k",))}
     assert mutant.ambiguity_dropped == {("ambiguity", "step", ("x.k",))}
@@ -241,7 +291,7 @@ def test_an_unattempted_singleton_is_hidden_and_an_attempted_one_a_contradiction
     def run(probe_budget):
         return run_specdx(
             VARIANT, _ctx(FakeRunner(_hidden_plan), refuter=lambda i, b: NeverRefute(b)),
-            SpecDxConfig(MODELS, budget=100, synthesize=False, probe_budget=probe_budget),
+            _config(budget=100, probe_budget=probe_budget),
         )
 
     capped = run(0)
@@ -257,7 +307,7 @@ def test_an_unattempted_singleton_is_hidden_and_an_attempted_one_a_contradiction
 
 def _ddmin_localiser(calls, runs=3):
     """Spends `runs` ddmin runs per ambiguity, like the real one; unlocalised if cut short."""
-    def localiser(v, d, i, budget):
+    def localiser(v, d, i, budget, persists):
         calls.append(d.note)
         for _ in range(runs):
             if not budget.take("ddmin"):
@@ -267,18 +317,21 @@ def _ddmin_localiser(calls, runs=3):
 
 
 def _split_and_shared_plan(scenario, interp):
-    """grn12: the competent models split two ways and all violate c1, so the scenario has
-    both an ambiguity to localise and a candidate to refute."""
+    """grn12: the split, and seed 2 violates n where the other seeds violate c1, so the
+    scenario has an ambiguity to localise and a two-clause candidate to refute (no single
+    clause hits every violation set)."""
     klass, bad = _split_plan(scenario, interp)
-    return (klass, {"c1"}) if scenario.id == "grn12" and interp.model in GOOD else (klass, bad)
+    if scenario.id == "grn12":
+        return klass, {"n"} if interp.seed == 2 else {"c1"}
+    return klass, bad
 
 
 def test_the_report_counts_probe_and_ddmin_runs() -> None:
     report = run_specdx(
         VARIANT,
-        _ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser([]),
-             refuter=lambda i, b: NeverRefute(b)),
-        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=4, localize_budget=5),
+        _split_ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser([]),
+                   refuter=lambda i, b: NeverRefute(b)),
+        _config(budget=200, probe_budget=4, localize_budget=5),
     )
     assert (report.probe_runs, report.ddmin_runs) == (1, 3)
     out = json.loads(report.to_json())
@@ -290,9 +343,9 @@ def test_refutation_spending_its_whole_budget_leaves_localisation_its_own() -> N
     calls: list[str] = []
     report = run_specdx(
         VARIANT,
-        _ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser(calls),
-             refuter=lambda i, b: NeverRefute(b)),
-        SpecDxConfig(MODELS, budget=200, synthesize=False, probe_budget=1, localize_budget=80),
+        _split_ctx(FakeRunner(_split_and_shared_plan), _ddmin_localiser(calls),
+                   refuter=lambda i, b: NeverRefute(b)),
+        _config(budget=200, probe_budget=1, localize_budget=80),
     )
     assert report.probe_runs == 1  # the probe budget is spent
     assert calls and report.ddmin_runs == 3
@@ -304,8 +357,8 @@ def test_the_localisation_budget_caps_ddmin_in_descending_score_order() -> None:
         calls: list[str] = []
         report = run_specdx(
             VARIANT,
-            _ctx(FakeRunner(_split_plan), _ddmin_localiser(calls), lens=TwoStepLens()),
-            SpecDxConfig(MODELS, budget=200, synthesize=False, localize_budget=localize_budget),
+            _split_ctx(FakeRunner(_split_plan), _ddmin_localiser(calls), lens=TwoStepLens()),
+            _config(budget=200, localize_budget=localize_budget),
         )
         found = sorted(d.location for d in report.defects if d.type == "ambiguity")
         return report, calls, found
@@ -326,7 +379,7 @@ def test_t_boundary_scenarios_run_after_the_canon_ones_and_before_the_bandit() -
     extra = Scenario("o16-r14-d4-g2", 16, 14, 4, 2)  # a cell no queued scenario tried
     ctx = dataclasses.replace(_ctx(runner), candidates=[*CANON.values(), t1, extra],
                               tboundary=[t1, t2])
-    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=200))
+    report = run_specdx(VARIANT, ctx, _config(budget=200, synthesize=True))
     assert report.scenarios[:6] == ["discount8", "grn12", "happy", t1.id, t2.id, extra.id]
 
 
@@ -334,27 +387,54 @@ def test_a_queued_scenario_whose_signature_was_visited_is_skipped() -> None:
     runner = FakeRunner(_hidden_plan)
     twin = Scenario("twin", 15, 12, 0)  # grn12's parameters under another id
     ctx = dataclasses.replace(_ctx(runner), tboundary=[twin])
-    config = SpecDxConfig(MODELS, budget=100, synthesize=False)
+    config = _config(budget=100)
     report = run_specdx(VARIANT, ctx, config)
     assert report.scenarios == ["discount8", "grn12", "happy"] and "twin" not in runner.calls
     plain = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), config)
     assert report.runs == plain.runs  # the skipped twin spent no population budget
 
 
-def test_the_report_carries_stage_one_the_signals_and_the_literals() -> None:
+def test_the_report_carries_stage_one_the_cells_and_the_literals() -> None:
     literal = TLiteral("discount_pct", 5, "%", "tối đa", "KB", "KB:KB-0003", "KB:KB-0003:03", 9)
     ctx = dataclasses.replace(_ctx(FakeRunner(_hidden_plan)), literals=[literal])
-    report = run_specdx(VARIANT, ctx, SpecDxConfig(MODELS, budget=100, synthesize=False))
-    assert set(report.kappa) == {"q1", "q2", "l1"}
-    assert report.items
+    report = run_specdx(VARIANT, ctx, _config(budget=100))
+    assert set(report.kappa) == set(report.theta) == set(report.alpha) == {"q1", "q2", "l1"}
     item = report.items["grn12|step"]
-    assert item["observable"] and {"delta", "observability", "acted", "s1"} <= set(item)
+    assert item["observable"] and set(item) == {"delta", "observability", "acted", "observable"}
+    cell = report.cells["grn12|step"]
+    assert cell["anchor"] == "ok" and cell["readings"] == {"l1": 3, "q1": 3, "q2": 3}
+    assert set(cell["forms"]) == {"none", "mis", "amb", "empty"} and cell["map"] == ["k"]
+    # §3.5: the posterior over A_c, most probable first; it sums to 1
+    assert cell["sets"][0] == [["k"], cell["map_posterior"]] and len(cell["sets"]) <= 22
+    assert sum(p for _, p in cell["sets"]) == pytest.approx(1.0)
     out = json.loads(report.to_json())
     assert out["literals"] == [literal.as_dict()] and out["unobservable"] == []
     assert set(out["items"]) == set(report.items) and out["kappa"] == report.kappa
+    assert out["cells"] == report.cells and out["alpha"] == report.alpha
+    assert out["converged"] is True and out["iterations"] >= 1 and out["fit_start"]
     # the family effect the pre-registration promises: one value per family, in the report
     assert out["family_effect"] == report.family_effect
     assert set(report.family_effect) == {"qwen", "llama"}
+
+
+def test_non_convergence_surfaces_in_the_report_json(monkeypatch) -> None:
+    real = run_specdx.__globals__["fit_anchored"]
+
+    def one_step(*args, **kwargs):
+        return real(*args, **kwargs, max_iter=1)
+
+    monkeypatch.setitem(run_specdx.__globals__, "fit_anchored", one_step)
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), _config(budget=100))
+    out = json.loads(report.to_json())
+    assert out["converged"] is False and out["iterations"] == 1
+
+
+def test_identical_input_gives_a_byte_identical_report() -> None:
+    one = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), lambda v, d, i, b, p: None),
+                     _config(budget=200))
+    two = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), lambda v, d, i, b, p: None),
+                     _config(budget=200))
+    assert one.to_json() == two.to_json()
 
 
 class IdleLens(FakeLens):
@@ -367,55 +447,63 @@ class IdleLens(FakeLens):
 
 def test_an_item_nobody_acts_at_is_unobservable_and_types_nothing() -> None:
     report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), lens=IdleLens()),
-                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+                        _config(budget=100))
     assert not [d for d in report.defects if "c1" in d.location]
     assert report.items["grn12|step"]["observable"] is False
+    assert "grn12|step" not in report.cells
 
 
 def test_the_diagnosis_unobservable_list_reaches_the_report_and_its_json(monkeypatch) -> None:
-    real = run_specdx.__globals__["diagnose"]
+    real = run_specdx.__globals__["diagnose_v3"]
     entry = Defect("unobservable", ("c1",), ("grn12",), (), 1.0, "no observable item reads it")
 
     def wrapped(*args, **kwargs):
         return dataclasses.replace(real(*args, **kwargs), unobservable=[entry])
 
-    monkeypatch.setitem(run_specdx.__globals__, "diagnose", wrapped)
-    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)),
-                        SpecDxConfig(MODELS, budget=100, synthesize=False))
+    monkeypatch.setitem(run_specdx.__globals__, "diagnose_v3", wrapped)
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), _config(budget=100))
     assert report.unobservable == [entry]
     [row] = json.loads(report.to_json())["unobservable"]
     assert (row["type"], row["location"], row["scenarios"]) == ("unobservable", ["c1"], ["grn12"])
 
 
-def test_the_ddmin_oracle_reruns_each_competent_model_under_each_variant() -> None:
+def test_the_ddmin_oracle_reruns_every_acting_model_and_tests_the_cell() -> None:
     seen = []
 
-    def localiser(v, d, interps, budget):
-        seen.append(list(interps))
+    def localiser(v, d, interps, budget, persists):
+        seen.append((list(interps), persists))
         return ("A:01",)
 
-    report = run_specdx(VARIANT, _ctx(FakeRunner(_split_plan), localiser),
-                        SpecDxConfig(MODELS, variants=(0, 1), budget=400, synthesize=False))
+    runner = FakeRunner(_split_plan)
+    report = run_specdx(VARIANT, _split_ctx(runner, localiser),
+                        _config(variants=(0, 1), budget=400))
     assert [d.location for d in report.defects if d.type == "ambiguity"] == [("A:01",)]
-    competent = [m for m in ("q1", "q2", "l1") if report.theta[m] >= 0.5]
-    assert sorted(competent) == ["l1", "q1"]
-    assert {(i.model, i.variant, i.seed) for i in seen[0]} == {
-        (m, v, 1) for m in competent for v in (0, 1)}
+    interps, persists = seen[0]
+    assert {(i.model, i.variant, i.seed) for i in interps} == {
+        (m, v, 1) for m in ("q1", "q2", "l1") for v in (0, 1)}
+    thetas = [report.theta[i.model] for i in interps]
+    assert thetas == sorted(thetas, reverse=True)  # highest θ_m first
+    # the test re-reads the ambiguity's cell at the fitted parameters
+    rerun = [runner.run(VARIANT, CANON["grn12"], i, "ddmin") for i in interps]
+    assert persists(rerun) is True
+    agree = [dataclasses.replace(b, state=State({}, {"k": "X", "v": ""}, {})) for b in rerun]
+    assert persists(agree) is False
 
 
-def test_oracle_interpreters_are_the_competent_models_at_seed_one() -> None:
+def test_oracle_interpreters_are_the_acting_models_at_seed_one() -> None:
     interps = oracle_interpreters({"a": ("m1", "m2"), "b": ("m3",)},
                                   {"m1": 0.6, "m2": 0.4, "m3": 0.9}, (0, 2),
                                   acted={"m1", "m2", "m3"})
     assert [(i.model, i.family, i.variant, i.seed) for i in interps] == [
-        ("m3", "b", 0, 1), ("m3", "b", 2, 1), ("m1", "a", 0, 1), ("m1", "a", 2, 1)]
+        ("m3", "b", 0, 1), ("m3", "b", 2, 1), ("m1", "a", 0, 1), ("m1", "a", 2, 1),
+        ("m2", "a", 0, 1), ("m2", "a", 2, 1)]
 
 
-def test_a_model_that_never_acted_is_not_competent_at_its_prior_mode() -> None:
+def test_a_model_that_never_acted_is_left_out_of_the_oracle_whatever_its_theta() -> None:
     interps = oracle_interpreters({"a": ("idle", "acting", "weak")},
-                                  {"idle": 0.75, "acting": 0.6, "weak": 0.4}, (0,),
+                                  {"idle": 0.95, "acting": 0.6, "weak": 0.1}, (0,),
                                   acted={"acting", "weak"})
-    assert [i.model for i in interps] == ["acting"]  # θ = 0.75 alone is no evidence
+    assert [i.model for i in interps] == ["acting", "weak"]
 
 
 class SilentLens(FakeLens):
@@ -427,8 +515,39 @@ class SilentLens(FakeLens):
 
 def test_a_population_that_never_acts_types_nothing_and_still_reports() -> None:
     report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), lens=SilentLens()),
-                        SpecDxConfig(MODELS, budget=100, synthesize=False))
-    assert report.defects == [] and report.runs > 0
-    assert report.theta == {"q1": 0.75, "q2": 0.75, "l1": 0.75}  # the prior's mode, n_m = 0
+                        _config(budget=100))
+    assert report.defects == [] and report.runs > 0 and report.cells == {}
+    prior = 1 / (1 + 2.718281828459045 ** -P.mu_alpha)
+    assert report.theta == pytest.approx({"q1": prior, "q2": prior, "l1": prior})
     assert not any(row["observable"] for row in report.items.values())
     assert json.loads(report.to_json())["defects"] == []
+
+
+def test_an_ambiguity_below_tau_a_is_never_localised(monkeypatch) -> None:
+    """A reported ambiguity can score P(|A_c| = 2) below τ_A (F1 co-occurrence, direction
+    B). The ddmin oracle passes only at or above τ_A, so it could never be localised: the
+    loop leaves it unlocalised, with an empty location, without calling the localiser."""
+    real = run_specdx.__globals__["diagnose_v3"]
+    weak = Defect("ambiguity", ("y.z",), ("happy",), (), 0.9, "happy|step")
+
+    def with_weak(*args, **kwargs):
+        out = real(*args, **kwargs)
+        return dataclasses.replace(
+            out, defects=[*out.defects, weak],
+            ambiguity_cells={**out.ambiguity_cells,
+                             ("ambiguity", "step", ("y.z",)): "happy|step"})
+
+    monkeypatch.setitem(run_specdx.__globals__, "diagnose_v3", with_weak)
+    calls: list[str] = []
+
+    def localiser(v, d, i, b, p):
+        calls.append(d.note)
+        return ("A:01",)
+
+    report = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan), localiser),
+                        _config(budget=200))
+    assert report.cells["happy|step"]["forms"]["amb"] < P.tau_a
+    assert report.cells["grn12|step"]["forms"]["amb"] >= P.tau_a
+    assert calls == ["grn12|step"]
+    found = {d.note: d.location for d in report.defects if d.type == "ambiguity"}
+    assert found == {"grn12|step": ("A:01",), "happy|step": ()}

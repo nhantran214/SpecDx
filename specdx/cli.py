@@ -66,8 +66,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     cap = sub.add_parser("capability", help="check native tool calling of local models")
     cap.add_argument("models", nargs="+")
     scr = sub.add_parser("screen", help="run the capability screen and choose the population")
-    scr.add_argument("--profile", required=True,
-                     help="a hardware profile: a name under experiments/profiles, or a path")
+    scr.add_argument("--profile",
+                     help="a hardware profile: a name under experiments/profiles, or a path "
+                          "(required unless --from)")
+    scr.add_argument("--from", dest="cached", type=Path,
+                     help="apply the current admission rules to this screen's JSON instead of "
+                          "running one (spec v3 §7, G2); no run, database or model is used")
     scr.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
     scr.add_argument("--out", type=Path, required=True,
                      help="writes OUT.md and OUT.json (exit status 3 when the stop rule holds)")
@@ -200,6 +204,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             c = check_model(model)
             print(f"| {model} | {c.declares_tools} | {c.calls_tool} | {c.usable} |")
         return 0
+
+    if args.command == "screen" and args.cached is not None:
+        from specdx.eval.screen import rescreen, screen_markdown
+
+        screen = rescreen(args.cached)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.with_suffix(".json").write_text(screen.to_json(), encoding="utf-8")
+        text = screen_markdown(screen, f"current rules applied to {args.cached}")
+        args.out.with_suffix(".md").write_text(text, encoding="utf-8")
+        print(text)
+        return 3 if screen.stop else 0
+    if args.command == "screen" and args.profile is None:
+        print("error: screen needs --profile, or --from a screen's JSON", file=sys.stderr)
+        return 2
 
     if args.command in ("gate", "run"):
         from specdx.eval.pilot import GateConfig as _GateConfig

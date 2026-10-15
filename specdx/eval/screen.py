@@ -3,9 +3,9 @@
 It measures the capability to act, never agreement with C: scoring against C would be
 circular while the specification under diagnosis may itself be defective. Each candidate
 runs the base specification on the canon scenario happy, Tell variants 0-2 x seeds 1-3,
-through the harness. A model is admitted with act rate ≥ 0.6 and valid-call rate ≥ 0.8.
-The population keeps the best admitted models, at most 2 per family and 4 in all, and
-needs 2 families; with fewer, P1b stops and the thresholds are never lowered.
+through the harness. A model is admitted with act rate ≥ 0.3 (spec v3.1 §7; 0.6 in v2) and
+valid-call rate ≥ 0.8. The population keeps the best admitted models, at most 2 per family
+and 4 in all, and needs 2 families and 4 acting models (G2); with fewer, the work stops.
 """
 
 from __future__ import annotations
@@ -26,11 +26,12 @@ from specdx.variant import SpecVariant
 SCREEN_SCENARIO = "happy"
 SCREEN_VARIANTS: tuple[int, ...] = (0, 1, 2)
 SCREEN_SEEDS: tuple[int, ...] = (1, 2, 3)
-ACT_RATE_MIN = 0.6  # spec v2 §3.10
+ACT_RATE_MIN = 0.3  # spec v3 §7 (v2 §3.10 had 0.6)
 VALID_RATE_MIN = 0.8
 PER_FAMILY = 2
 MAX_MODELS = 4
 MIN_FAMILIES = 2
+MIN_MODELS = 4  # spec v3.1 §7, G2: ambiguity needs four acting models
 PROFILES = REPO_ROOT / "experiments" / "profiles"
 
 
@@ -86,8 +87,10 @@ class Screen:
 
     @property
     def stop(self) -> bool:
-        """The stop rule: fewer than MIN_FAMILIES families were admitted."""
-        return len(self.population) < MIN_FAMILIES
+        """The stop rule (G2): fewer than MIN_FAMILIES families, or fewer than MIN_MODELS
+        acting models, were admitted to the population."""
+        models = sum(len(ms) for ms in self.population.values())
+        return len(self.population) < MIN_FAMILIES or models < MIN_MODELS
 
     def to_json(self) -> str:
         return json.dumps({
@@ -95,7 +98,8 @@ class Screen:
             "stop": self.stop,
             "rules": {"act_rate_min": ACT_RATE_MIN, "valid_rate_min": VALID_RATE_MIN,
                       "per_family": PER_FAMILY, "max_models": MAX_MODELS,
-                      "min_families": MIN_FAMILIES, "scenario": SCREEN_SCENARIO,
+                      "min_families": MIN_FAMILIES, "min_models": MIN_MODELS,
+                      "scenario": SCREEN_SCENARIO,
                       "variants": list(SCREEN_VARIANTS), "seeds": list(SCREEN_SEEDS)},
             "results": [asdict(r) | {"admitted": r.admitted} for r in self.results],
         }, ensure_ascii=False, indent=2)
@@ -136,6 +140,16 @@ def choose_population(results: Sequence[ScreenResult]) -> dict[str, tuple[str, .
     return {f: tuple(ms) for f, ms in chosen.items()}
 
 
+def rescreen(path: Path) -> Screen:
+    """The admission rules as they now stand, applied to a screen's recorded measurements
+    (spec v3 §7: the 0.3 act rate on the cached P1b screen). No run is made."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    results = [ScreenResult(r["model"], r["family"], int(r["runs"]), float(r["act_rate"]),
+                            float(r["valid_rate"]), str(r.get("note", "")))
+               for r in raw["results"]]
+    return Screen(results, choose_population(results))
+
+
 def run_screen(
     runner: ScreenRunner, variant: SpecVariant, lens: ActLens, canon: Mapping[str, Scenario],
     candidates: Mapping[str, Sequence[str]],
@@ -149,11 +163,11 @@ def run_screen(
 def screen_markdown(screen: Screen, profile: str) -> str:
     chosen = {m for ms in screen.population.values() for m in ms}
     lines = [
-        f"# P1b capability screen ({profile})", "",
+        f"# Capability screen ({profile})", "",
         f"Base specification, scenario `{SCREEN_SCENARIO}`, Tell variants {list(SCREEN_VARIANTS)}"
         f" x seeds {list(SCREEN_SEEDS)}. Admission: act rate ≥ {ACT_RATE_MIN} and valid-call "
         f"rate ≥ {VALID_RATE_MIN}. Population: at most {PER_FAMILY} per family and "
-        f"{MAX_MODELS} in all, at least {MIN_FAMILIES} families.", "",
+        f"{MAX_MODELS} in all, at least {MIN_FAMILIES} families and {MIN_MODELS} models.", "",
         "| model | family | runs | act rate | valid-call rate | admitted | chosen | note |",
         "|---|---|---:|---:|---:|---|---|---|",
     ]
@@ -163,8 +177,8 @@ def screen_markdown(screen: Screen, profile: str) -> str:
                      f"{'yes' if r.model in chosen else ''} | {r.note} |")
     lines += ["", "## Population", ""]
     if screen.stop:
-        lines.append(f"STOP: fewer than {MIN_FAMILIES} families were admitted. P1b stops and "
-                     "reports; the thresholds are never lowered.")
+        lines.append(f"STOP: fewer than {MIN_FAMILIES} families or {MIN_MODELS} models were "
+                     "admitted. The work stops and reports.")
     else:
         lines += [f"- {family}: {', '.join(models)}"
                   for family, models in screen.population.items()]

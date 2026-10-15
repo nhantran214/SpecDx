@@ -72,6 +72,8 @@ P1_SETTINGS: dict[str, float | int] = {
     "search_reply_limit": 12000,
 }
 POPULATION_RUNS = 200
+# The v2 values P1b pre-registered; spec v3 took them out of SpecDxConfig.
+V2_P_SINGLE, V2_AMBIG, V2_WEAK = 0.9, 0.5, 0.5
 LLAMA = "llama3.1:8b"
 THETA_FLOOR = 0.5  # (b): P1 collapsed qwen3:14b to θ 0.003
 UNOBSERVABLE_SHARE = 0.5  # (c)
@@ -200,11 +202,11 @@ def replay(bench: Workbench, sid: str, config: GateConfig, cache: dict[str, Beha
     rasch = fit_rasch(acts)
     population = {m: f for f, ms in config.models_by_family.items() for m in ms}
     posterior = fit(observations(views), models=population, k_max=cfg.k_max,
-                    p_single=cfg.p_single)
+                    p_single=V2_P_SINGLE)
     diagnosis = diagnose(behaviours, violated, views, posterior, NoRefutation(), lens.diff,
                          observable=rasch.observable_items(), relevant=lens.relevant,
-                         tau=cfg.tau, ambig_threshold=cfg.ambig_threshold,
-                         weak_threshold=cfg.weak_threshold, rng_seed=cfg.rng_seed)
+                         tau=cfg.tau, ambig_threshold=V2_AMBIG,
+                         weak_threshold=V2_WEAK, rng_seed=cfg.rng_seed)
     return Replay(sid, lens, behaviours, views, acts, rasch, posterior, diagnosis)
 
 

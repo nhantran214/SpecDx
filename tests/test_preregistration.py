@@ -1,5 +1,7 @@
 """Every pre-registered value (spec v2 §3.10, experiments/p1b-preregistration.md) is the
-value the code uses. Changing one after a P1b result is seen breaks this test."""
+value the code uses. Changing one after a P1b result is seen breaks this test. Spec v3
+amends three: the screen's act rate (§7: 0.3), and S1's threshold and P(|A| = 1), which
+left the loop with stage 2 (§6); v2's stage 2 keeps P(|A| = 1) = 0.9 as a baseline."""
 
 import inspect
 from pathlib import Path
@@ -19,7 +21,7 @@ _CFG = SpecDxConfig.__dataclass_fields__
 
 @pytest.mark.parametrize(("value", "registered"), [
     (harness.MAX_NUDGES, 2),
-    (screen.ACT_RATE_MIN, 0.6), (screen.VALID_RATE_MIN, 0.8),
+    (screen.ACT_RATE_MIN, 0.3), (screen.VALID_RATE_MIN, 0.8),
     (len(screen.SCREEN_VARIANTS) * len(screen.SCREEN_SEEDS), 9),
     (screen.PER_FAMILY, 2), (screen.MAX_MODELS, 4), (screen.MIN_FAMILIES, 2),
     (act.RASCH_L2, 1.0), (act.OMEGA, 0.3), (act.M_MIN, 3),
@@ -31,8 +33,9 @@ _CFG = SpecDxConfig.__dataclass_fields__
     (matching.ABSOLUTE_BAR, 0.4),
     (inspect.signature(act.fit_rasch).parameters["tol"].default, 1e-6),
     (inspect.signature(act.fit_rasch).parameters["max_iter"].default, 100),
-    (_CFG["k_max"].default, 6), (_CFG["p_single"].default, 0.9),
-    (_CFG["tau"].default, 0.05), (_CFG["ambig_threshold"].default, 0.5),
+    (_CFG["k_max"].default, 6),
+    (inspect.signature(latent.fit).parameters["p_single"].default, 0.9),
+    (_CFG["tau"].default, 0.05),
     (executor.TEMPERATURE, 0.7),
     (inspect.signature(matching.gate_verdict).parameters["required"].default, 3),
     (screen.SCREEN_SCENARIO, "happy"),

@@ -9,6 +9,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 from specdx.active.loop import run_specdx
 from specdx.eval.pilot import GateConfig
+from specdx.infer.anchored import V3Params
 from specdx.interpreters.cache import RunCache
 from specdx.observe.run import RunRequest
 from specdx.orchestrate.reference import reference_executor
@@ -86,6 +87,8 @@ CONFIG = GateConfig(
     models_by_family={"ref": ("reference",), "dev": ("deviant",)},
     variants=(0,), seeds=(1, 2), budget=12, dev_per_type=1, rng_seed=1, probe_budget=6,
     localize_budget=6,
+    params=V3Params(pi=0.1, s_mis=0.5, s_amb=0.25, s_empty=0.25, beta_sd=1.0,
+                    mu_alpha=0.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8),
 )
 
 

@@ -34,6 +34,7 @@ from specdx.eval.matching import (
 )
 from specdx.eval.observability import scorable as scorable_ids
 from specdx.eval.observability import touch_counts
+from specdx.infer.anchored import V3Params
 from specdx.mutate.operators import GroundTruth, Mutant
 from specdx.types import DEFECT_TYPES, Defect, InfrastructureError
 from specdx.variant import SpecVariant
@@ -90,7 +91,8 @@ def load_population(path: Path) -> dict[str, tuple[str, ...]]:
     ended in the stop rule."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     if raw.get("stop"):
-        raise ValueError(f"{path}: the screen admitted fewer than 2 families; P1b stops")
+        raise ValueError(f"{path}: the screen admitted fewer than 2 families or 4 models; "
+                         "the work stops")
     return {f: tuple(ms) for f, ms in raw["population"].items()}
 
 
@@ -108,6 +110,9 @@ class GateConfig:
     probe_budget: int = SpecDxConfig.probe_budget
     localize_budget: int = SpecDxConfig.localize_budget
     screen: Path | None = None
+    # Never read from the JSON: the gate runs on the frozen V3Params (spec v3 §9); tests pass
+    # their own.
+    params: V3Params = V3Params()
 
     @classmethod
     def load(cls, path: Path) -> GateConfig:
@@ -133,7 +138,8 @@ class GateConfig:
     def specdx(self) -> SpecDxConfig:
         return SpecDxConfig(self.models_by_family, variants=self.variants, seeds=self.seeds,
                             budget=self.budget, rng_seed=self.rng_seed,
-                            probe_budget=self.probe_budget, localize_budget=self.localize_budget)
+                            probe_budget=self.probe_budget, localize_budget=self.localize_budget,
+                            params=self.params)
 
 
 class BenchLike(Protocol):
@@ -255,9 +261,13 @@ def _mutant_line(
         "touches": touched, "scorable": is_scorable,
         "unobservable": None if report is None else _defects(report.unobservable),
         "theta": None if report is None else report.theta,
+        "alpha": None if report is None else report.alpha,
         "kappa": None if report is None else report.kappa,
         "family_effect": None if report is None else report.family_effect,
+        "converged": None if report is None else report.converged,
+        "iterations": None if report is None else report.iterations,
         "items": None if report is None else report.items,
+        "cells": None if report is None else report.cells,
         "literals": None if report is None else [x.as_dict() for x in report.literals],
         "delta_shift": None if report is None or base is None else delta_shift(base, report),
         "failure": failure,
@@ -304,7 +314,9 @@ def run_gate(
                "defects": {k: _defects(v) for k, v in bases.items()}, "runs": _runs(base),
                "ambiguity_keys": _keys(base.ambiguity_keys),
                "unobservable": _defects(base.unobservable), "theta": base.theta,
-               "kappa": base.kappa, "family_effect": base.family_effect, "items": base.items,
+               "alpha": base.alpha, "kappa": base.kappa, "family_effect": base.family_effect,
+               "converged": base.converged, "iterations": base.iterations,
+               "items": base.items, "cells": base.cells,
                "literals": [x.as_dict() for x in base.literals], "touches": touched})
         for m in mutants:
             report: Report | None = None
@@ -355,14 +367,14 @@ def gate_markdown(result: GateResult) -> str:
     def win(w: dict[str, bool], t: str) -> str:
         return "yes" if w.get(t) else "no"
 
-    lines = [f"# P1b gate v2: {result.headline}", ""]
+    lines = [f"# SpecDx gate v3: {result.headline}", ""]
     if result.failed:
         lines += [f"{len(result.failed)} mutant(s) could not run, so no verdict is given.", ""]
     scorable_n, all_n = result.counts(True), result.counts(False)
     lines += [
         "## Verdict (primary table: scorable mutants)",
         "",
-        "The gate needs 3 wins of 4 (spec §4.8, §11 item 12, v2 §4.2). Contradiction and "
+        "The gate needs 3 wins of 4 (spec §4.8, §11 item 12, v2 §4.2, v3 §8.3). Contradiction and "
         "hidden: SpecDx's typed F1 must exceed both baselines' untyped F1, since the "
         "baselines cannot assign a type. Ambiguity and weak: the baselines report clauses, "
         "which can never locate those truths, so SpecDx's typed F1 must reach "

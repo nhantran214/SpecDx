@@ -1,4 +1,6 @@
-"""B2: the single most competent interpreter, every violated clause flagged (spec §4.5)."""
+"""B2: the single most competent interpreter, every violated clause flagged (spec §4.5).
+The most competent is the model with the highest θ_m of the anchored model (spec v3 §8.3),
+which run_gate passes as theta."""
 
 from __future__ import annotations
 
