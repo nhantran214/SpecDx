@@ -39,25 +39,24 @@ _SIZE = np.array([len(s) for s in SETS], dtype=float)
 
 
 # --- G0 frozen parameters: begin ---
-PARAMS_FROZEN = False
+PARAMS_FROZEN = True
 
 
 @dataclass(frozen=True)
 class V3Params:
-    """PROVISIONAL defaults, not chosen by G0 (spec v3.1 §9). Task 13 of the P2a plan
-    replaces this block with the values G0's selection rule picks. Until then every test
-    whose outcome depends on a value passes its parameters explicitly."""
+    """The values G0 chose by the selection rule of spec v3.1 §9, frozen in the v3
+    pre-registration (experiments/p2-preregistration.md)."""
 
-    pi: float = 0.1  # π: prior mass of the defect forms on an anchored cell
-    s_mis: float = 0.5  # form shares s_mis + s_amb + s_empty = 1
-    s_amb: float = 0.25
-    s_empty: float = 0.25
-    beta_sd: float = 1.0  # τ of §3.3: β_g ~ N(0, τ²) per difficulty group
-    mu_alpha: float = 0.0  # α_m ~ N(μ_α, σ_α²)
-    sigma_alpha: float = 1.5
-    tau_h: float = 0.5  # hidden candidate: P(A_c ≠ {d_c}) ≥ τ_H
-    tau_a: float = 0.5  # ambiguity: P(|A_c| = 2) ≥ τ_A
-    tau_w: float = 0.8  # weak check: MAP set {x} with posterior ≥ τ_W
+    pi: float = 0.2
+    s_mis: float = 0.4
+    s_amb: float = 0.3
+    s_empty: float = 0.3
+    beta_sd: float = 1.0
+    mu_alpha: float = 1.0
+    sigma_alpha: float = 1.0
+    tau_h: float = 0.5
+    tau_a: float = 0.3
+    tau_w: float = 0.9
 # --- G0 frozen parameters: end ---
 
 
