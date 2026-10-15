@@ -123,3 +123,23 @@ def test_render_reports_each_start_and_marks_provisional_runs(g1, monkeypatch) -
     assert "t3 -100.5 True 12, alpha=2.0 -300.0 False 500" in text
     monkeypatch.setattr(anchored, "PARAMS_FROZEN", False)
     assert g1.render([r, r], V3Params()).splitlines()[2] == "# G1: PROVISIONAL (not G1)"
+
+
+def test_a_crash_after_the_fit_also_exits_2(g1, monkeypatch, tmp_path, capsys) -> None:
+    out = tmp_path / "g1.md"
+    monkeypatch.setattr(anchored, "PARAMS_FROZEN", True)
+    monkeypatch.setattr(g1, "load_cache", lambda path: {})
+    monkeypatch.setattr(g1, "model_digests", lambda cache: {})
+    monkeypatch.setattr(g1, "open_base", lambda path: object())
+    monkeypatch.setattr(g1, "smoke_runs", lambda *a: [])
+    monkeypatch.setattr(g1, "p1_runs", lambda *a: [])
+    monkeypatch.setattr(g1, "replay", lambda *a: g1.Replay(
+        "x", [], CellData({}, []), Rasch({}, {}, {}, {}),
+        AnchoredFit({}, {}, {}, {}, {}, True, 1, V3Params()), CellDiagnosis([]), {}))
+
+    def boom(replays, params):
+        raise KeyError("cell")
+
+    monkeypatch.setattr(g1, "render", boom)
+    assert g1.main(["--out", str(out)]) == 2 and not out.exists()
+    assert "error: KeyError" in capsys.readouterr().err

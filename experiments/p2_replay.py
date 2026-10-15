@@ -247,15 +247,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                        gate_members(SMOKE_GATE), params),
                 replay("P1 base runs", base, p1_runs(base, cache, digests),
                        gate_members(P1_GATE), params)]
+        text = render(replays, params)
+        passed = verdict(replays[0])
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
     except (ReplayError, CalibrationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # a crash is an error (2), never G1's FAIL (1)
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render(replays, params), encoding="utf-8")
-    return 0 if verdict(replays[0]) else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
