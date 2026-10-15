@@ -12,6 +12,10 @@ from specdx.infer.anchored import (
     OTHER,
     SETS,
     V3Params,
+    _em,
+    _encode,
+    _flat,
+    _log_posterior,
     candidate_values,
     cell_posterior,
     fit_anchored,
@@ -215,7 +219,7 @@ def test_theta_does_not_collapse_when_most_anchored_cells_are_read_alike_off_the
                 readings.append(Reading(cell.id, f"{m}|{i}", m, m, "s", value))
     fit = fit_anchored(cells, readings, models={"gpt": "gpt", "qwen": "qwen"}, params=FIT)
     assert min(fit.theta.values()) >= 0.5
-    assert fit.start != "t3" and fit.starts[fit.start] > fit.starts["t3"]
+    assert fit.start != "t3" and fit.starts[fit.start].score > fit.starts["t3"].score
     assert all(fit.cells[f"c{c:02d}"].p_defect > 0.9 for c in range(26))
 
 
@@ -252,3 +256,46 @@ def test_posterior_at_the_fitted_parameters_reproduces_the_fit() -> None:
     again = posterior_at(fit, cell, [r for r in readings if r.cell == cell.id])
     for s, p in fit.cells[cell.id].sets.items():
         assert again.sets[s] == pytest.approx(p, abs=1e-9)
+
+
+# Fix round 1.
+
+
+def test_each_em_iteration_does_not_lower_the_log_posterior() -> None:
+    # The ε M-step is the exact EM step for the truncated error model: it adds the expected
+    # rejected draws that §3.2's renormalisation over V∖A implies.
+    cells, readings, _ = _world(0, {"none": 30, "mis": 3, "amb": 3, "empty": 3})
+    names = sorted(ALPHAS)
+    by_cell: dict[str, list[Reading]] = {}
+    for r in readings:
+        by_cell.setdefault(r.cell, []).append(r)
+    batch = _encode([cells[c] for c in sorted(by_cell)], by_cell, names, FIT)
+    prior = _flat(batch)
+    start = np.full(len(names), 1.0)
+    scores = [_log_posterior(batch, start, np.zeros(int(batch.groups.max()) + 1), prior,
+                             prior, FIT)]
+    for n in range(1, 31):
+        a, b, e, _, _ = _em(batch, prior, start, FIT, 0.0, n)
+        scores.append(_log_posterior(batch, a, b, e, prior, FIT))
+    drops = [after - before for before, after in zip(scores, scores[1:], strict=False)]
+    assert min(drops) >= -1e-9, min(drops)
+
+
+def test_every_start_reports_its_score_and_whether_it_converged() -> None:
+    cells, readings, _ = _world(5, {"none": 3, "mis": 1}, reads=6)
+    fit = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT, max_iter=1)
+    assert set(fit.starts) == {"t3", "alpha=0.0", "alpha=1.0", "alpha=2.0", "alpha=3.0"}
+    assert all(not s.converged and s.iterations == 1 for s in fit.starts.values())
+    full = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT)
+    assert all(s.converged for s in full.starts.values())
+    assert full.starts[full.start].score == max(s.score for s in full.starts.values())
+
+
+def test_a_model_whose_family_disagrees_raises() -> None:
+    cells, readings, _ = _world(5, {"none": 2}, reads=2)
+    models = {m: m for m in ALPHAS}
+    clash = readings + [dataclasses.replace(readings[0], run_key="extra", family="other")]
+    with pytest.raises(ValueError, match="m1"):
+        fit_anchored(cells, clash, models=models, params=FIT)
+    with pytest.raises(ValueError, match="m1"):
+        fit_anchored(cells, readings, models=models | {"m1": "other"}, params=FIT)

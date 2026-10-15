@@ -268,6 +268,16 @@ _NEWTON_MAX = 50
 STARTS: tuple[float, ...] = (0.0, 1.0, 2.0, 3.0)
 
 
+@dataclass(frozen=True)
+class StartFit:
+    """One EM start's outcome: its final log posterior, whether it met the tolerance, and
+    the iterations it used (a start that hit max_iter is visible here, not only the best)."""
+
+    score: float
+    converged: bool
+    iterations: int
+
+
 @dataclass
 class AnchoredFit:
     """§3.5's outputs. alpha and theta = σ(α) per model (θ: the accuracy at a cell of
@@ -277,7 +287,7 @@ class AnchoredFit:
     and consumers default it to 0. converged is False
     when EM stopped at max_iter (§3.4: reported, never silent). start: the EM start whose
     fixed point has the highest log posterior (t3, or a common α such as "alpha=2.0");
-    starts: every start's final log posterior."""
+    starts: each start's StartFit (final log posterior, whether it converged, iterations)."""
 
     alpha: dict[str, float]
     theta: dict[str, float]
@@ -288,7 +298,7 @@ class AnchoredFit:
     iterations: int
     params: V3Params
     start: str = "t3"
-    starts: dict[str, float] = field(default_factory=dict)
+    starts: dict[str, StartFit] = field(default_factory=dict)
 
 
 def _flat(batch: _Batch) -> np.ndarray:
@@ -355,13 +365,24 @@ def _newton(rsum: np.ndarray, trials: np.ndarray, alpha: np.ndarray, beta: np.nd
     return alpha, beta
 
 
-def _error_update(batch: _Batch, r: np.ndarray, prior: np.ndarray,
-                  params: V3Params) -> np.ndarray:
-    """§3.4's M-step for ε_c: the expected error counts, smoothed by the Dirichlet prior
-    κ·u_c. The mode of Dirichlet(1 + κ·u + counts), which keeps every value's error mass
-    positive (the literal mode of Dirichlet(κ·u) is 0 wherever κ·u + count < 1)."""
+def _error_update(batch: _Batch, post: np.ndarray, r: np.ndarray, eps: np.ndarray,
+                  prior: np.ndarray) -> np.ndarray:
+    """§3.4's M-step for ε_c, the exact EM step of the truncated error model (§3.2 draws an
+    error from ε renormalised over V∖A). Each error reading is a draw from ε after rejecting
+    draws that fell inside A, so besides the expected error counts (a reading outside A, or
+    any reading under ∅) the complete data hold the expected rejected draws: under A ≠ ∅,
+    each of its N_err,A error readings rejects ε(k)/(1 − ε(A)) draws on each slot k in A,
+    weighted by post(A). Then ε_c is the mode of the Dirichlet κ·u_c posterior over all
+    draws, (counts + rejected + κ·u_c) / (total + κ), which keeps every value's error mass
+    positive (the literal mode of Dirichlet(κ·u) is 0 wherever κ·u + count < 1); the support
+    mask keeps unused slots at zero and OTHER positive."""
     counts = (batch.counts * (1.0 - r)).sum(axis=2)
-    out = (counts + KAPPA * prior) * batch.support
+    reads = batch.counts.sum(axis=2)
+    outside = 1.0 - eps @ _IN.T.astype(float)
+    n_err = reads.sum(axis=1, keepdims=True) - reads @ _IN.T.astype(float)
+    nonempty = (_SIZE > 0)[None, :]
+    reject = np.where(nonempty, post * n_err / outside, 0.0) @ _IN.astype(float)
+    out = (counts + eps * reject + KAPPA * prior) * batch.support
     return out / out.sum(axis=1, keepdims=True)
 
 
@@ -395,7 +416,7 @@ def _em(batch: _Batch, prior: np.ndarray, alpha: np.ndarray, params: V3Params, t
         np.add.at(rsum, batch.groups, (batch.counts * r).sum(axis=1))
         np.add.at(trials, batch.groups, (1.0 - post[:, EMPTY])[:, None] * reads)
         new_alpha, new_beta = _newton(rsum, trials, alpha, beta, params)
-        new_eps = _error_update(batch, r, prior, params)
+        new_eps = _error_update(batch, post, r, eps, prior)
         moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
                     float(np.max(np.abs(new_beta - beta), initial=0.0)),
                     float(np.max(np.abs(new_eps - eps), initial=0.0)))
@@ -413,27 +434,31 @@ def fit_anchored(
     α in STARTS (§3.4's multi-start), and the fixed point with the highest log posterior is
     kept (ties to the earlier start). models: model → family for the whole population; a
     model without readings keeps α = μ_α. Cells without readings are left out."""
-    family = dict(models) | {r.model: r.family for r in readings}
-    names = sorted(family)
+    family = dict(models)
     by_cell: dict[str, list[Reading]] = {}
     for r in sorted(readings, key=lambda x: (x.cell, x.run_key)):
+        if family.setdefault(r.model, r.family) != r.family:
+            raise ValueError(f"model {r.model!r} has conflicting families: "
+                             f"{family[r.model]!r} and {r.family!r}")
         by_cell.setdefault(r.cell, []).append(r)
+    names = sorted(family)
     used = [cells[c] for c in sorted(by_cell)]
     batch = _encode(used, by_cell, names, params)
     prior = _flat(batch)
     alpha = np.full(len(names), params.mu_alpha)
     beta, eps = np.zeros(len(set(batch.groups.tolist()))), prior
     converged, iterations, start = True, 0, "t3"
-    scores: dict[str, float] = {}
+    scores: dict[str, StartFit] = {}
     if used:
         starts = [("t3", _t3_alpha(batch, params))] + [
             (f"alpha={a}", np.full(len(names), a)) for a in STARTS]
         best = -np.inf
         for label, alpha0 in starts:
             a, b, e, ok, n = _em(batch, prior, alpha0, params, tol, max_iter)
-            scores[label] = _log_posterior(batch, a, b, e, prior, params)
-            if scores[label] > best:
-                best, start = scores[label], label
+            score = _log_posterior(batch, a, b, e, prior, params)
+            scores[label] = StartFit(score, ok, n)
+            if score > best:
+                best, start = score, label
                 alpha, beta, eps, converged, iterations = a, b, e, ok, n
     cell_beta = beta[batch.groups]
     post, r = _e_step(batch, alpha, cell_beta, eps)
