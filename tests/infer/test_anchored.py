@@ -1,6 +1,7 @@
 """The anchored cell model (spec v3 §3). Every test passes its parameters explicitly: the
 defaults are provisional until G0 chooses them."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -13,6 +14,8 @@ from specdx.infer.anchored import (
     V3Params,
     candidate_values,
     cell_posterior,
+    fit_anchored,
+    posterior_at,
     set_log_prior,
 )
 from specdx.infer.cells import Cell, Reading
@@ -129,3 +132,123 @@ def test_an_unanchored_cell_has_no_defect_mass_and_counts_single_values_as_none(
                           error={"x": 0.5, OTHER: 0.5}, params=P)
     assert post.p_defect == 0.0 and post.map_set == {"x"}
     assert post.forms["mis"] == 0.0 and post.forms["none"] > 0.5
+
+
+# Part 2 (spec v3 §3.4–§3.5): the fit.
+
+ALPHAS = {"m1": 2.0, "m2": 1.0, "m3": 0.0}
+FIT = V3Params(pi=0.2, s_mis=0.4, s_amb=0.3, s_empty=0.3, beta_sd=1.0,
+               mu_alpha=1.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8)
+PLANTED = {"none": ("d",), "mis": ("a",), "amb": ("d", "a"), "empty": ()}
+VALUES = ("d", "a", "b", "c", "e")
+
+
+def _world(seed: int, columns: dict[str, int], reads: int = 24, per_column: int = 4):
+    """The v3.1 §3.2 model at T2′'s known pool: columns of anchored cells (one per scenario)
+    share a planted form and a difficulty β_g ~ N(0, 0.5²); errors fall on the flat pool u;
+    each model reads each cell `reads` times."""
+    rng = np.random.default_rng(seed)
+    cells: dict[str, Cell] = {}
+    readings: list[Reading] = []
+    truth: dict[str, str] = {}
+    plan = [form for form, n in columns.items() for _ in range(n)]
+    for col, form in enumerate(plan):
+        admitted = PLANTED[form]
+        beta = rng.normal(0.0, 0.5)
+        for s in range(per_column):
+            c = col * per_column + s
+            cell = Cell(f"c{c:03d}", "value", "d", f"golden:t:{c}:x", f"t.x{col}",
+                        f"t.x{col}", ("s",))
+            cells[cell.id], truth[cell.id] = cell, form
+            eps = np.full(len(VALUES), 1.0 / len(VALUES))
+            outside = np.array([0.0 if v in admitted else e
+                                for v, e in zip(VALUES, eps, strict=True)])
+            for m, a in ALPHAS.items():
+                p = 1.0 / (1.0 + math.exp(-(a - beta)))
+                for i in range(reads):
+                    if admitted and rng.random() < p:
+                        y = admitted[int(rng.integers(len(admitted)))]
+                    else:
+                        y = VALUES[int(rng.choice(len(VALUES), p=outside / outside.sum()))]
+                    readings.append(Reading(cell.id, f"{m}|{c}|{i}", m, m, "s", y))
+    return cells, readings, truth
+
+
+def _form(fit, cell: str) -> str:
+    forms = fit.cells[cell].forms
+    return max(forms, key=lambda f: forms[f])
+
+
+def test_the_fit_recovers_accuracy_and_all_four_forms() -> None:
+    hits: dict[str, list[bool]] = {form: [] for form in PLANTED}
+    for seed in (0, 1, 2):  # a form belongs to a column, so one seed's errors come in fours
+        cells, readings, truth = _world(seed, {"none": 30, "mis": 3, "amb": 3, "empty": 3})
+        fit = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT)
+        assert fit.converged
+        for m, a in ALPHAS.items():
+            assert abs(fit.theta[m] - 1 / (1 + math.exp(-a))) <= 0.05, (m, fit.theta[m])
+        for c, form in truth.items():
+            hits[form].append(_form(fit, c) == form)
+    for form, got in hits.items():
+        assert sum(got) / len(got) >= 0.8, (form, sum(got), len(got))
+
+
+def test_the_fit_is_deterministic_and_ignores_the_order_of_readings() -> None:
+    cells, readings, _ = _world(3, {"none": 8, "mis": 1, "amb": 1, "empty": 1}, reads=6)
+    one = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT)
+    two = fit_anchored(cells, readings[::-1], models={m: m for m in ALPHAS}, params=FIT)
+    assert one == two
+
+
+def test_theta_does_not_collapse_when_most_anchored_cells_are_read_alike_off_the_anchor() -> None:
+    # Shaped after the P1b smoke run: most anchored cells are rows no model writes (every
+    # reading absent), the rest agree with their anchors. T3's median start sits below
+    # the MAP; the fit keeps the start with the highest log posterior.
+    cells: dict[str, Cell] = {}
+    readings: list[Reading] = []
+    for c in range(40):
+        cell = Cell(f"c{c:02d}", "value", "d", f"golden:t:{c}:x", "t.x", "t.x", ("s",))
+        cells[cell.id] = cell
+        for m in ("gpt", "qwen"):
+            for i in range(9):
+                value = "absent" if c < 26 else ("d" if i < 8 else f"e{i}")
+                readings.append(Reading(cell.id, f"{m}|{i}", m, m, "s", value))
+    fit = fit_anchored(cells, readings, models={"gpt": "gpt", "qwen": "qwen"}, params=FIT)
+    assert min(fit.theta.values()) >= 0.5
+    assert fit.start != "t3" and fit.starts[fit.start] > fit.starts["t3"]
+    assert all(fit.cells[f"c{c:02d}"].p_defect > 0.9 for c in range(26))
+
+
+def test_non_convergence_is_reported() -> None:
+    cells, readings, _ = _world(5, {"none": 3, "mis": 1}, reads=6)
+    fit = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT, max_iter=1)
+    assert not fit.converged and fit.iterations == 1
+
+
+def test_weights_family_effect_and_a_model_without_readings() -> None:
+    cells, readings, _ = _world(11, {"none": 5, "mis": 1}, reads=6)
+    families = {"m1": "f", "m2": "f", "m3": "g", "idle": "g"}
+    readings = [dataclasses.replace(r, family=families[r.model]) for r in readings]
+    fit = fit_anchored(cells, readings, models=families, params=FIT)
+    assert fit.alpha["idle"] == pytest.approx(FIT.mu_alpha)
+    assert fit.family_effect["f"] == pytest.approx(
+        (fit.alpha["m1"] + fit.alpha["m2"]) / 2 - sum(fit.alpha.values()) / 4)
+    assert set(fit.weights) == {r.run_key for r in readings}
+    assert all(0.0 <= w <= 1.0 for w in fit.weights.values())
+    mean = {m: np.mean([w for k, w in fit.weights.items() if k.startswith(m)]) for m in ALPHAS}
+    assert mean["m1"] > mean["m3"]
+
+
+def test_an_empty_input_gives_an_empty_converged_fit() -> None:
+    fit = fit_anchored({}, [], models={"m1": "f"}, params=FIT)
+    assert fit.cells == {} and fit.converged and fit.iterations == 0
+    assert fit.theta["m1"] == pytest.approx(1 / (1 + math.exp(-FIT.mu_alpha)))
+
+
+def test_posterior_at_the_fitted_parameters_reproduces_the_fit() -> None:
+    cells, readings, _ = _world(13, {"none": 3, "amb": 1}, reads=8)
+    fit = fit_anchored(cells, readings, models={m: m for m in ALPHAS}, params=FIT)
+    cell = cells["c012"]
+    again = posterior_at(fit, cell, [r for r in readings if r.cell == cell.id])
+    for s, p in fit.cells[cell.id].sets.items():
+        assert again.sets[s] == pytest.approx(p, abs=1e-9)

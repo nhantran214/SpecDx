@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 
 import numpy as np
@@ -257,3 +257,206 @@ def cell_posterior(
     eps /= eps.sum()
     post, _ = _e_step(batch, a, np.array([beta]), eps)
     return _posterior(batch, 0, post, beta, eps)
+
+
+_NEWTON_TOL = 1e-10
+_NEWTON_MAX = 50
+# EM starts besides T3's median: one common α for every model, on the logit scale. On the
+# base data more than half of the anchored cells are read alike by every model and differ
+# from d_c (apr case rows no tool writes; golden event actors no interpreter writes), past
+# T3's breakdown point, and EM from T3's start alone stops ~200 nats below the MAP.
+STARTS: tuple[float, ...] = (0.0, 1.0, 2.0, 3.0)
+
+
+@dataclass
+class AnchoredFit:
+    """§3.5's outputs. alpha and theta = σ(α) per model (θ: the accuracy at a cell of
+    median difficulty); family_effect: each family's mean logit θ minus the population's
+    (v2 §3.3); cells: the per-cell posteriors; weights: w_b per run key, the mean faithful
+    probability over the cells the behaviour read; a behaviour that read no cell is absent,
+    and consumers default it to 0. converged is False
+    when EM stopped at max_iter (§3.4: reported, never silent). start: the EM start whose
+    fixed point has the highest log posterior (t3, or a common α such as "alpha=2.0");
+    starts: every start's final log posterior."""
+
+    alpha: dict[str, float]
+    theta: dict[str, float]
+    family_effect: dict[str, float]
+    cells: dict[str, CellPosterior]
+    weights: dict[str, float]
+    converged: bool
+    iterations: int
+    params: V3Params
+    start: str = "t3"
+    starts: dict[str, float] = field(default_factory=dict)
+
+
+def _flat(batch: _Batch) -> np.ndarray:
+    """u_c, the flat pool over each cell's slots (its candidate values and OTHER). Value
+    labels mean nothing across columns, so a flat profile is the only pool beyond the
+    column; the strong pull keeps ∅ from fitting a sharp split or mode (v3.1 §3.3)."""
+    flat = batch.support.astype(float)
+    return flat / flat.sum(axis=1, keepdims=True)
+
+
+def _t3_alpha(batch: _Batch, params: V3Params) -> np.ndarray:
+    """Theorem T3's median estimator: α_m = median over the anchored cells m read of
+    logit P̂_{m,c}(d_c), with P̂ = (hits + ½)/(n + 1) so no logit is infinite; μ_α for a
+    model that read no anchored cell."""
+    anchored = np.array([cell.anchor is not None for cell in batch.cells], dtype=bool)
+    n = batch.counts.sum(axis=1)
+    share = (batch.counts[:, 0, :] + 0.5) / (n + 1.0)
+    out = []
+    for m in range(batch.counts.shape[2]):
+        mine = anchored & (n[:, m] > 0)
+        logits = np.log(share[mine, m] / (1 - share[mine, m]))
+        out.append(float(np.median(logits)) if mine.any() else params.mu_alpha)
+    return np.array(out)
+
+
+def _objective(alpha: np.ndarray, beta: np.ndarray, rsum: np.ndarray, trials: np.ndarray,
+               params: V3Params) -> float:
+    eta = alpha[None, :] - beta[:, None]
+    fit = (rsum * eta - trials * np.logaddexp(0.0, eta)).sum()
+    prior = (((alpha - params.mu_alpha) ** 2).sum() / (2 * params.sigma_alpha ** 2)
+             + (beta ** 2).sum() / (2 * params.beta_sd ** 2))
+    return float(fit - prior)
+
+
+def _newton(rsum: np.ndarray, trials: np.ndarray, alpha: np.ndarray, beta: np.ndarray,
+            params: V3Params) -> tuple[np.ndarray, np.ndarray]:
+    """§3.4's M-step for α and β: the penalised logistic objective with the faithful
+    probabilities as fractional successes. rsum[g, m] sums them over model m's readings of
+    the cells of difficulty group g; trials[g, m] counts those readings weighted by each
+    cell's q_c = P(A_c ≠ ∅), since under ∅ no reading is a trial of accuracy. Newton steps
+    through the Schur complement of the diagonal β block, halved while they would lower the
+    objective."""
+    for _ in range(_NEWTON_MAX):
+        p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - beta[:, None])))
+        resid = rsum - trials * p
+        w = trials * p * (1 - p)
+        g_a = resid.sum(axis=0) - (alpha - params.mu_alpha) / params.sigma_alpha ** 2
+        g_b = -resid.sum(axis=1) - beta / params.beta_sd ** 2
+        h_aa = -w.sum(axis=0) - 1 / params.sigma_alpha ** 2
+        h_bb = -w.sum(axis=1) - 1 / params.beta_sd ** 2
+        h_ab = w.T
+        schur = np.diag(h_aa) - (h_ab / h_bb) @ h_ab.T
+        d_a = np.linalg.solve(schur, -g_a + (h_ab / h_bb) @ g_b)
+        d_b = (-g_b - h_ab.T @ d_a) / h_bb
+        before = _objective(alpha, beta, rsum, trials, params)
+        t = 1.0
+        while t > 1e-8 and _objective(alpha + t * d_a, beta + t * d_b, rsum, trials,
+                                      params) < before - 1e-12:
+            t /= 2
+        alpha, beta = alpha + t * d_a, beta + t * d_b
+        if max(float(np.max(np.abs(t * d_a), initial=0.0)),
+               float(np.max(np.abs(t * d_b), initial=0.0))) < _NEWTON_TOL:
+            break
+    return alpha, beta
+
+
+def _error_update(batch: _Batch, r: np.ndarray, prior: np.ndarray,
+                  params: V3Params) -> np.ndarray:
+    """§3.4's M-step for ε_c: the expected error counts, smoothed by the Dirichlet prior
+    κ·u_c. The mode of Dirichlet(1 + κ·u + counts), which keeps every value's error mass
+    positive (the literal mode of Dirichlet(κ·u) is 0 wherever κ·u + count < 1)."""
+    counts = (batch.counts * (1.0 - r)).sum(axis=2)
+    out = (counts + KAPPA * prior) * batch.support
+    return out / out.sum(axis=1, keepdims=True)
+
+
+def _log_posterior(batch: _Batch, alpha: np.ndarray, beta: np.ndarray, eps: np.ndarray,
+                   prior: np.ndarray, params: V3Params) -> float:
+    """log P(readings | α, β, ε) with every A_c summed out, plus the log priors of α, β (one
+    per group) and ε (up to constants): what the EM starts are compared on."""
+    _, lik = _likelihoods(batch, alpha, beta[batch.groups], eps)
+    joint = _log_joint(batch, lik)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        top = joint.max(axis=1, keepdims=True)
+        marginal = float((top[:, 0] + np.log(np.exp(joint - top).sum(axis=1))).sum())
+        dirichlet = float(np.where(batch.support, KAPPA * prior * np.log(eps), 0.0).sum())
+    return (marginal + dirichlet
+            - float(((alpha - params.mu_alpha) ** 2).sum()) / (2 * params.sigma_alpha ** 2)
+            - float((beta ** 2).sum()) / (2 * params.beta_sd ** 2))
+
+
+def _em(batch: _Batch, prior: np.ndarray, alpha: np.ndarray, params: V3Params, tol: float,
+        max_iter: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, int]:
+    """EM from one start, with every β_g = 0 and ε_c = u_c (§3.4): α, β per group, ε,
+    whether the largest parameter change fell below tol, and the iterations used."""
+    groups = int(batch.groups.max()) + 1
+    beta = np.zeros(groups)
+    eps = prior.copy()
+    reads = batch.counts.sum(axis=1)
+    for iterations in range(1, max_iter + 1):
+        post, r = _e_step(batch, alpha, beta[batch.groups], eps)
+        rsum = np.zeros((groups, len(alpha)))
+        trials = np.zeros((groups, len(alpha)))
+        np.add.at(rsum, batch.groups, (batch.counts * r).sum(axis=1))
+        np.add.at(trials, batch.groups, (1.0 - post[:, EMPTY])[:, None] * reads)
+        new_alpha, new_beta = _newton(rsum, trials, alpha, beta, params)
+        new_eps = _error_update(batch, r, prior, params)
+        moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
+                    float(np.max(np.abs(new_beta - beta), initial=0.0)),
+                    float(np.max(np.abs(new_eps - eps), initial=0.0)))
+        alpha, beta, eps = new_alpha, new_beta, new_eps
+        if moved < tol:
+            return alpha, beta, eps, True, iterations
+    return alpha, beta, eps, False, max_iter
+
+
+def fit_anchored(
+    cells: Mapping[str, Cell], readings: Sequence[Reading], *, models: Mapping[str, str],
+    params: V3Params, tol: float = EM_TOL, max_iter: int = EM_MAX_ITER,
+) -> AnchoredFit:
+    """MAP by EM (§3.4), deterministic. EM runs from T3's median start and from each common
+    α in STARTS (§3.4's multi-start), and the fixed point with the highest log posterior is
+    kept (ties to the earlier start). models: model → family for the whole population; a
+    model without readings keeps α = μ_α. Cells without readings are left out."""
+    family = dict(models) | {r.model: r.family for r in readings}
+    names = sorted(family)
+    by_cell: dict[str, list[Reading]] = {}
+    for r in sorted(readings, key=lambda x: (x.cell, x.run_key)):
+        by_cell.setdefault(r.cell, []).append(r)
+    used = [cells[c] for c in sorted(by_cell)]
+    batch = _encode(used, by_cell, names, params)
+    prior = _flat(batch)
+    alpha = np.full(len(names), params.mu_alpha)
+    beta, eps = np.zeros(len(set(batch.groups.tolist()))), prior
+    converged, iterations, start = True, 0, "t3"
+    scores: dict[str, float] = {}
+    if used:
+        starts = [("t3", _t3_alpha(batch, params))] + [
+            (f"alpha={a}", np.full(len(names), a)) for a in STARTS]
+        best = -np.inf
+        for label, alpha0 in starts:
+            a, b, e, ok, n = _em(batch, prior, alpha0, params, tol, max_iter)
+            scores[label] = _log_posterior(batch, a, b, e, prior, params)
+            if scores[label] > best:
+                best, start = scores[label], label
+                alpha, beta, eps, converged, iterations = a, b, e, ok, n
+    cell_beta = beta[batch.groups]
+    post, r = _e_step(batch, alpha, cell_beta, eps)
+    sums: dict[str, list[float]] = {}
+    for c, keys in enumerate(batch.keys):
+        for key, k, m in keys:
+            sums.setdefault(key, []).append(float(r[c, k, m]))
+    alphas = {name: float(alpha[i]) for i, name in enumerate(names)}
+    mean = sum(alphas.values()) / len(alphas) if alphas else 0.0
+    effect = {f: sum(alphas[m] for m in names if family[m] == f)
+              / sum(1 for m in names if family[m] == f) - mean
+              for f in sorted(set(family.values()))}
+    return AnchoredFit(
+        alphas, {m: float(1 / (1 + np.exp(-a))) for m, a in alphas.items()}, effect,
+        {cell.id: _posterior(batch, c, post, float(cell_beta[c]), eps)
+         for c, cell in enumerate(used)},
+        {k: sum(v) / len(v) for k, v in sorted(sums.items())}, converged, iterations, params,
+        start, scores)
+
+
+def posterior_at(fit: AnchoredFit, cell: Cell, readings: Sequence[Reading]) -> CellPosterior:
+    """P(A_c | readings) with α, β_{g(c)}, ε_c and V_c held at their fitted values: the
+    ddmin oracle's test on re-run readings (§5.3)."""
+    fitted = fit.cells[cell.id]
+    return cell_posterior(cell, fitted.values, readings, alpha=fit.alpha, beta=fitted.beta,
+                          error=fitted.error, params=fit.params)
