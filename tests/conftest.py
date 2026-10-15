@@ -9,8 +9,9 @@ import pytest
 from tonomyx.canon.pack import CanonPack
 
 from specdx import db as db_module
-from specdx.config import BASE_PACK
+from specdx.config import BASE_PACK, PDF_DIR
 from specdx.db import PackDatabase
+from specdx.spec.tell import TellCorpus, pdf_chunks
 from specdx.types import State
 
 _DB = PackDatabase()
@@ -19,6 +20,12 @@ _DB = PackDatabase()
 @pytest.fixture(scope="session")
 def pack() -> CanonPack:
     return CanonPack(BASE_PACK)
+
+
+@pytest.fixture(scope="session")
+def tell_corpus(pack: CanonPack, tmp_path_factory: pytest.TempPathFactory) -> TellCorpus:
+    """The base specification's real Tell corpus, its PDFs extracted into a temporary cache."""
+    return TellCorpus.build(pack, pdf_chunks(PDF_DIR, tmp_path_factory.mktemp("tell")))
 
 
 @pytest.fixture
