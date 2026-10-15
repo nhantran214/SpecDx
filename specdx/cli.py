@@ -75,6 +75,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     doc.add_argument("--profile", help="the profile whose candidate models to check "
                                        "(default: the one local VRAM suggests, else gpu16)")
     sub.add_parser("cache-info", help="cached runs per model and digest, and per specification")
+    sim = sub.add_parser("simulate", help="run the simulation study's sweeps (spec v3 §8.1); "
+                                          "no GPU, no database, no model calls")
+    sim.add_argument("--sweep", default="all",
+                     help="a sweep name (delta, models, n, tau_true, defect_rate, error_conc, "
+                          "arms, regime) or all")
+    sim.add_argument("--replicates", type=int,
+                     help="replicates per point (default: §8.1's minimum, 10, or 5 on the "
+                          "regime map; fewer is labelled exploratory)")
+    sim.add_argument("--config", type=Path,
+                     help="the base SimConfig as JSON (default: SimConfig's defaults)")
+    sim.add_argument("--params", type=Path,
+                     help="V3Params as JSON (default: V3Params' defaults)")
+    sim.add_argument("--out", type=Path, required=True, help="writes OUT.json and OUT.md")
     sub.add_parser("mutants", help="write every mutant and list its ground truth")
     run = sub.add_parser("run", help="run SpecDx on the base specification or one mutant")
     run.add_argument("--variant", default="base")
@@ -141,6 +154,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         from specdx.interpreters.cache import RunCache, cache_summary
 
         print(cache_summary(RunCache(WORK_DIR / "runs.jsonl")))
+        return 0
+
+    if args.command == "simulate":
+        import json
+
+        from specdx.infer.anchored import V3Params
+        from specdx.sim.generator import SimConfig
+        from specdx.sim.study import (
+            SWEEPS,
+            config_dict,
+            load_config,
+            load_params,
+            min_replicates,
+            run_sweep,
+            sweep_markdown,
+        )
+
+        names = list(SWEEPS) if args.sweep == "all" else [args.sweep]
+        if any(n not in SWEEPS for n in names):
+            print(f"error: unknown sweep {args.sweep!r}; choose from {', '.join(SWEEPS)} or all",
+                  file=sys.stderr)
+            return 2
+        base = load_config(args.config) if args.config else SimConfig()
+        params = load_params(args.params) if args.params else V3Params()
+        replicates = {n: args.replicates or min_replicates(n) for n in names}
+        sweeps = {n: run_sweep(n, base, params, replicates[n]) for n in names}
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.with_suffix(".json").write_text(json.dumps(
+            {"base": config_dict(base), "params": dataclasses.asdict(params),
+             "replicates": replicates, "sweeps": sweeps}, indent=2), encoding="utf-8")
+        text = sweep_markdown(sweeps, params, replicates)
+        args.out.with_suffix(".md").write_text(text, encoding="utf-8")
+        print(text)
         return 0
 
     if args.command == "capability":
