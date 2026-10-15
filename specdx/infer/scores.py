@@ -106,7 +106,7 @@ def merge_defects(
             d.type, d.location,
             tuple(sorted(set(old.scenarios) | set(d.scenarios))),
             tuple(sorted(set(old.witnesses) | set(d.witnesses))),
-            best.score, note,
+            best.score, note, best.subtype,
         )
     return sorted(merged.values(), key=lambda d: (-d.score, d.type, d.location, d.note))
 
@@ -137,6 +137,48 @@ def _observable(
     relevant: Mapping[str, frozenset[str]],
 ) -> bool:
     return any(item in observable for item in items_reading(clause, scenario_id, relevant))
+
+
+# The multi-clause candidate path (§3.4), shared by v2's diagnose and v3's diagnose_v3
+# (spec v3.1 §11: hitting sets and refutation are reused unchanged).
+
+Candidate = tuple[float, str, frozenset[str]]  # (support, scenario id, clauses)
+
+
+def scenario_groups(behaviours: Sequence[Behaviour]) -> dict[str, list[Behaviour]]:
+    """The behaviours that ran, by scenario id, each in input order."""
+    groups: dict[str, list[Behaviour]] = defaultdict(list)
+    for b in behaviours:
+        if b.status == "ok":
+            groups[b.scenario.id].append(b)
+    return dict(groups)
+
+
+def hitting_candidates(
+    groups: Mapping[str, Sequence[Behaviour]], violated: Mapping[str, frozenset[str]],
+    weights: Mapping[str, float], tau: float,
+) -> list[Candidate]:
+    """Every scenario's soft hitting sets over its runs' weighted V(b), in scenario order."""
+    candidates: list[Candidate] = []
+    for sid, group in groups.items():
+        sets = [(violated[b.run_key], weights.get(b.run_key, 0.0)) for b in group]
+        candidates += [(support, sid, hitting)
+                       for hitting, support in soft_hitting_sets(sets, tau=tau)]
+    return candidates
+
+
+def refutation_order(known: frozenset[tuple[str, ...]]) -> Callable[[tuple], tuple]:
+    """The sort key of candidates (support, scenario, clauses, ...): the base report's
+    locations last, then descending support, scenario, size and clauses (§11)."""
+    return lambda c: (tuple(sorted(c[2])) in known, -c[0], c[1], len(c[2]), sorted(c[2]))
+
+
+def observable_clauses(
+    hitting: Iterable[str], scenario_id: str, observable: frozenset[str],
+    relevant: Mapping[str, frozenset[str]],
+) -> bool:
+    """Every clause of the set is read by some observable item of the scenario (§3.9)."""
+    return all(_observable(c, scenario_id, observable, relevant) for c in hitting)
 
 
 def _weak(
@@ -220,25 +262,17 @@ def diagnose(
     for v in views:
         if v.acted:
             by_item[v.item].append(v)
-    groups: dict[str, list[Behaviour]] = defaultdict(list)
-    for b in behaviours:
-        if b.status == "ok":
-            groups[b.scenario.id].append(b)
+    groups = scenario_groups(behaviours)
     # Every scenario's candidates, refuted in descending score order, locations the base
     # report does not hold first: the probe budget goes to the best supported new
     # candidates first (§11).
-    candidates: list[tuple[float, str, frozenset[str]]] = []
-    for sid, group in groups.items():
-        sets = [(violated[b.run_key], weights.get(b.run_key, 0.0)) for b in group]
-        candidates += [(support, sid, hitting)
-                       for hitting, support in soft_hitting_sets(sets, tau=tau)]
-    candidates.sort(key=lambda c: (tuple(sorted(c[2])) in known, -c[0], c[1], len(c[2]),
-                                   sorted(c[2])))
+    candidates = hitting_candidates(groups, violated, weights, tau)
+    candidates.sort(key=refutation_order(known))
     for support, sid, hitting in candidates:
         group = groups[sid]
         witnesses = tuple(b.run_key for b in group if violated[b.run_key] & hitting)
         location = tuple(sorted(hitting))
-        if not all(_observable(c, sid, observable, relevant) for c in hitting):
+        if not observable_clauses(hitting, sid, observable, relevant):
             # No refutation either: nothing the population does can tell its type (§3.9).
             unobservable.append(Defect(UNOBSERVABLE, location, (sid,), witnesses, support,
                                        "no observable item reads every clause"))

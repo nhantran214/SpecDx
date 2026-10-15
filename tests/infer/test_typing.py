@@ -2,17 +2,24 @@
 
 import pytest
 
+from specdx.active.refute import SYMBOLIC_WITNESS
+from specdx.eval.matching import location_matches
 from specdx.infer.anchored import AnchoredFit, CellPosterior, V3Params
-from specdx.infer.cells import Cell, Reading
+from specdx.infer.cells import Cell, CellData, Reading
+from specdx.infer.scores import UNATTEMPTED
 from specdx.infer.typing import (
     AMBIGUOUS_PICK,
     MIS_KEY,
     UNSTATED,
     ambiguity_finding,
+    diagnose_v3,
     hidden_finding,
+    refutation_scenario,
     type_cells,
     weak_finding,
 )
+from specdx.mutate.operators import GroundTruth
+from specdx.types import Behaviour, InterpreterId, RefuteResult, Scenario, State
 
 P = V3Params(pi=0.1, s_mis=0.5, s_amb=0.25, s_empty=0.25, beta_sd=1.0,
              mu_alpha=0.0, sigma_alpha=1.5, tau_h=0.5, tau_a=0.5, tau_w=0.8)
@@ -136,3 +143,167 @@ def test_a_cell_reporting_a_hidden_requirement_reports_no_weak_check() -> None:
                        {"c": readings}, _params(0.5, 0.5, 0.8))
     assert [(f.cell, f.type, f.subtype) for f in found] == [("c", "hidden", MIS_KEY)]
 
+
+# Part 2 (spec v3 §5.1–§5.5): diagnose_v3 on hand-built cells and fits.
+
+S1, S2 = Scenario("s1", 15, 12, 0), Scenario("s2", 15, 15, 0)
+CLAUSE = "golden:po:PO-0015:trang_thai"
+VALUE = Cell("s1|po:PO-0015:trang_thai", "value", "d", CLAUSE, "po.trang_thai",
+             "po.trang_thai", ("step",))
+
+
+class Recorder:
+    """Returns the scripted result for each target set; records every call in order."""
+
+    def __init__(self, results: dict[frozenset[str], RefuteResult] | None = None) -> None:
+        self.results, self.calls, self.groups = results or {}, [], []
+
+    def refute(self, targets, scenario, behaviours):
+        self.calls.append((tuple(sorted(targets)), scenario.id))
+        self.groups.append(tuple(b.run_key for b in behaviours))
+        return self.results.get(targets, RefuteResult(True, SYMBOLIC_WITNESS, 1))
+
+
+def _b(key: str, model: str, scenario: Scenario) -> Behaviour:
+    return Behaviour(key, InterpreterId(model, model, 0, 1), scenario, State.empty())
+
+
+def _case(cells, posts, readings, weights=None):
+    fit = AnchoredFit({"m1": 2.0, "m2": 0.0}, {}, {}, {p.cell: p for p in posts},
+                      weights or {r.run_key: 0.5 for r in readings}, True, 1, P)
+    return CellData({c.id: c for c in cells}, readings), fit
+
+
+def _hidden_case():
+    readings = [Reading(VALUE.id, "b1", "m1", "m1", "s1", "a"),
+                Reading(VALUE.id, "b2", "m2", "m2", "s1", "a")]
+    post = _post(VALUE, {F({"a"}): 0.9, F({"d"}): 0.1})
+    data, fit = _case([VALUE], [post], readings)
+    runs = [_b("b1", "m1", S1), _b("b2", "m2", S1)]
+    return data, fit, runs, {"b1": F({CLAUSE}), "b2": F({CLAUSE})}
+
+
+EVERY = F({"s1|step", "s2|step"})
+NOTHING: frozenset[tuple[str, ...]] = frozenset()
+
+
+def _diagnose(data, fit, runs, violated, refuter, observable=EVERY, known=NOTHING):
+    relevant = {"step": F({CLAUSE, "inv:x", "inv:y"})}
+    return diagnose_v3(runs, violated, data, fit, refuter, observable=observable,
+                       relevant=relevant, known=known)
+
+
+def test_refutation_separates_a_hidden_requirement_from_a_contradiction_of_one() -> None:
+    data, fit, runs, violated = _hidden_case()
+    refuter = Recorder({F({CLAUSE}): RefuteResult(True, "s1|m1|v0|s100", 2)})
+    found = _diagnose(data, fit, runs, violated, refuter)
+    [hidden] = found.defects
+    assert (hidden.type, hidden.location, hidden.note, hidden.subtype) == (
+        "hidden", (CLAUSE,), "refuted by s1|m1|v0|s100", MIS_KEY)
+    assert refuter.calls == [((CLAUSE,), "s1")]  # the singleton hitting set defers to the cell
+    failed = Recorder({F({CLAUSE}): RefuteResult(False, None, 7)})
+    [contradiction] = _diagnose(data, fit, runs, violated, failed).defects
+    assert (contradiction.type, contradiction.note) == ("contradiction",
+                                                        "unrefuted after 7 attempts")
+    capped = Recorder({F({CLAUSE}): RefuteResult(False, None, 0, attempted=False)})
+    [default] = _diagnose(data, fit, runs, violated, capped).defects
+    assert (default.type, default.note) == ("hidden", UNATTEMPTED)
+
+
+def test_a_pooled_candidate_is_refuted_where_most_readings_leave_the_anchor() -> None:
+    pooled = Cell("golden:po:PO-0015:sl_dat", "value", "{ordered}", "golden:po:PO-0015:sl_dat",
+                  "po.sl_dat", "po.sl_dat", ("step",))
+    readings = [Reading(pooled.id, "b1", "m1", "m1", "s1", "1"),
+                Reading(pooled.id, "b2", "m2", "m2", "s2", "35"),
+                Reading(pooled.id, "b3", "m1", "m1", "s2", "{ordered}"),
+                Reading(pooled.id, "b4", "m2", "m2", "s1", "{ordered}")]
+    data, fit = _case([pooled], [_post(pooled, {F({"1"}): 0.8, F({"{ordered}"}): 0.2})],
+                      readings)
+    runs = [_b("b1", "m1", S1), _b("b2", "m2", S2), _b("b3", "m1", S2), _b("b4", "m2", S1)]
+    refuter = Recorder()
+    [d] = _diagnose(data, fit, runs, dict.fromkeys(("b1", "b2", "b3", "b4"), F()),
+                    refuter).defects
+    assert refuter.calls == [((pooled.id,), "s1")] and d.scenarios == ("s1", "s2")  # a tie
+    assert refutation_scenario(pooled, readings[1:]) == "s2"
+
+
+def test_multi_clause_contradictions_come_from_weighted_hitting_sets() -> None:
+    runs = [_b(f"b{i}", "m1", S1) for i in range(4)]
+    violated = {"b0": F({"inv:x"}), "b1": F({"inv:x"}), "b2": F({"inv:y"}), "b3": F({"inv:y"})}
+    data, fit = _case([], [], [], weights={f"b{i}": 0.5 for i in range(4)})
+    pair = F({"inv:x", "inv:y"})
+    failed = _diagnose(data, fit, runs, violated, Recorder({pair: RefuteResult(False, None, 4)}))
+    assert [(d.type, d.location) for d in failed.defects] == [
+        ("contradiction", ("inv:x", "inv:y"))]
+    probed = _diagnose(data, fit, runs, violated, Recorder({pair: RefuteResult(True, "s1|p", 3)}))
+    assert probed.defects == [] and probed.spent == {("inv:x", "inv:y")}
+    repaired = _diagnose(data, fit, runs, violated, Recorder())
+    assert repaired.defects == [] and repaired.spent == frozenset()
+
+
+def test_candidates_go_by_score_and_the_base_reports_locations_last() -> None:
+    data, fit, runs, violated = _hidden_case()
+    runs += [_b("b3", "m1", S1), _b("b4", "m1", S1)]
+    violated |= {"b3": F({"inv:x"}), "b4": F({"inv:y"})}
+    fit.weights.update({"b3": 0.5, "b4": 0.5})
+    triple = (CLAUSE, "inv:x", "inv:y")  # hits every violation set: support 1.0 > 0.9
+    order = Recorder()
+    _diagnose(data, fit, runs, violated, order)
+    assert [c[0] for c in order.calls] == [triple, (CLAUSE,)]
+    later = Recorder()
+    _diagnose(data, fit, runs, violated, later, known=F({triple}))
+    assert [c[0] for c in later.calls] == [(CLAUSE,), triple]
+
+
+def test_an_unobservable_candidate_is_listed_and_never_refuted() -> None:
+    data, fit, runs, violated = _hidden_case()
+    refuter = Recorder()
+    found = _diagnose(data, fit, runs, violated, refuter, observable=F())
+    assert refuter.calls == [] and found.defects == []
+    assert [(d.type, d.location) for d in found.unobservable] == [("unobservable", (CLAUSE,))]
+
+
+def test_ambiguities_and_weak_checks_use_v2s_location_formats_and_merge_by_step() -> None:
+    cells = [Cell(f"{s}|po:PO-0015:trang_thai", "value", None, None, "po.trang_thai",
+                  "po.trang_thai", ("step",)) for s in ("s1", "s2")]
+    event = Cell("s1|evt:DRAFTED:SO-0031:DE-SM-02", "event", None, None, "evt:DRAFTED:SO-0031",
+                 "evt", ("step",))
+    readings = [Reading(c.id, f"{c.id}|{m}|{i}", m, m, c.id.split("|")[0], v, True)
+                for c in cells for m, vals in (("m1", "xy"), ("m2", "yx")) for i, v in
+                enumerate(vals)]
+    readings += [Reading(event.id, f"e{i}", "m1", "m1", "s1", "present" if i else "absent", True)
+                 for i in range(3)]
+    posts = [_post(c, {F({"x", "y"}): 0.9 if c.id.startswith("s1") else 0.7, F({"x"}): 0.1})
+             for c in cells] + [_post(event, {F({"present"}): 0.95, F(): 0.05})]
+    data, fit = _case([*cells, event], posts, readings)
+    runs = [_b(r.run_key, r.model, S1 if r.scenario == "s1" else S2) for r in readings]
+    found = _diagnose(data, fit, runs, {r.run_key: F() for r in readings}, Recorder())
+    by_type = {d.type: d for d in found.defects}
+    amb, weak = by_type["ambiguity"], by_type["weak"]
+    assert (amb.location, amb.scenarios, amb.note) == (("po.trang_thai",), ("s1", "s2"),
+                                                        "s1|step")
+    assert found.ambiguity_cells == {("ambiguity", "step", ("po.trang_thai",)): cells[0].id}
+    assert (weak.location, weak.witnesses) == (("evt:DRAFTED:SO-0031",), ("e0",))
+    w2 = GroundTruth("W2-00", "weak", F({"evt:DRAFTED:SO-0031"}), "field")
+    h1 = GroundTruth("H1-00", "hidden", F({CLAUSE}), "clause")
+    assert location_matches(weak, w2)
+    data, fit, runs, violated = _hidden_case()
+    [hidden] = _diagnose(data, fit, runs, violated, Recorder()).defects
+    assert location_matches(hidden, h1)
+
+
+def test_the_diagnosis_is_deterministic() -> None:
+    data, fit, runs, violated = _hidden_case()
+    assert (_diagnose(data, fit, runs, violated, Recorder())
+            == _diagnose(data, fit, runs[::-1], violated, Recorder()))
+    # A multi-clause contradiction: its witnesses and the behaviours the refuter sees do not
+    # follow the input order (ruling F19).
+    runs = [_b(f"b{i}", "m1", S1) for i in range(4)]
+    violated = {"b0": F({"inv:x"}), "b1": F({"inv:x"}), "b2": F({"inv:y"}), "b3": F({"inv:y"})}
+    data, fit = _case([], [], [], weights={f"b{i}": 0.5 for i in range(4)})
+    pair = F({"inv:x", "inv:y"})
+    forward, backward = (Recorder({pair: RefuteResult(False, None, 4)}) for _ in range(2))
+    found = _diagnose(data, fit, runs, violated, forward)
+    assert found == _diagnose(data, fit, runs[::-1], violated, backward)
+    assert found.defects[0].witnesses == ("b0", "b1", "b2", "b3")
+    assert forward.groups == backward.groups == [("b0", "b1", "b2", "b3")]

@@ -8,11 +8,26 @@ contradictions.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.infer.anchored import AnchoredFit, CellPosterior, V3Params
-from specdx.infer.cells import Cell, Reading
+from specdx.infer.cells import Cell, CellData, Reading
+from specdx.infer.scores import (
+    UNATTEMPTED,
+    UNOBSERVABLE,
+    Diagnosis,
+    ambiguity_key,
+    hitting_candidates,
+    identity,
+    merge_defects,
+    observable_clauses,
+    refutation_order,
+    scenario_groups,
+)
+from specdx.types import Behaviour, Defect, Refuter
 
 MIS_KEY = "mis-key"
 AMBIGUOUS_PICK = "ambiguous-pick"
@@ -137,3 +152,131 @@ def type_cells(cells: Mapping[str, Cell], fit: AnchoredFit,
             out.append(weak)
     return out
 
+
+# The real diagnosis (§5.1–§5.5): refutation, multi-clause contradictions, observability.
+
+@dataclass
+class CellDiagnosis(Diagnosis):
+    """findings: every cell finding before refutation. ambiguity_cells: each reported
+    ambiguity's identity before localisation (scores.ambiguity_key) → the cell behind it,
+    the best scored when several merged: the ddmin oracle re-reads that cell (§5.3).
+    spent: the multi-clause candidates refuted by a probe run, or never attempted, that
+    found nothing (resolution 8); a cell candidate always yields a finding, so no singleton
+    location is spent in v3.1."""
+
+    findings: list[CellFinding] = field(default_factory=list)
+    ambiguity_cells: dict[tuple[str, str, tuple[str, ...]], str] = field(default_factory=dict)
+
+
+def _observable_cell(cell: Cell, readings: Sequence[Reading], observable: frozenset[str]) -> bool:
+    """Stage 1 (v2 §3.5): a cell carries evidence when an observable item reads it."""
+    return any(f"{r.scenario}|{step}" in observable for r in readings for step in cell.steps)
+
+
+def _scenarios(readings: Sequence[Reading]) -> tuple[str, ...]:
+    return tuple(sorted({r.scenario for r in readings}))
+
+
+def refutation_scenario(cell: Cell, readings: Sequence[Reading]) -> str:
+    """Where a candidate is refuted: its own scenario, or for a pooled cell the scenario
+    with the most acted readings outside d_c, ties to the smaller scenario id."""
+    off = Counter(r.scenario for r in readings if r.value != cell.anchor)
+    every = _scenarios(readings)
+    return min(every, key=lambda s: (-off[s], s))
+
+
+def _note(cell: Cell, readings: Sequence[Reading]) -> str:
+    """An ambiguity's or weak check's item, scenario|step: the scenario with the most
+    readings (ties to the smaller id) and the cell's first in-scope step."""
+    counts = Counter(r.scenario for r in readings)
+    return f"{min(counts, key=lambda s: (-counts[s], s))}|{cell.steps[0]}"
+
+
+def diagnose_v3(
+    behaviours: Sequence[Behaviour],
+    violated: Mapping[str, frozenset[str]],
+    data: CellData,
+    fit: AnchoredFit,
+    refuter: Refuter,
+    *,
+    observable: frozenset[str],
+    relevant: Mapping[str, frozenset[str]],
+    tau: float = 0.05,
+    known: frozenset[tuple[str, ...]] = frozenset(),
+) -> CellDiagnosis:
+    """violated: each run's V(b), restricted to the items where it acted (v2 §3.4).
+    observable: the observable items (stage 1). relevant: step id → the clauses relevant to
+    it. known: locations the base report holds, refuted last on a mutant (v1 §11 item 13).
+    Thresholds come from fit.params. The multi-clause path is v2's (scores.py's shared
+    helpers); witnesses are sorted and the refuter sees each group in run-key order, so
+    the diagnosis does not depend on the order of the behaviours."""
+    params = fit.params
+    by_cell = data.by_cell()
+    findings = type_cells(data.cells, fit, by_cell, params)
+    groups = {sid: sorted(group, key=lambda b: b.run_key)
+              for sid, group in scenario_groups(behaviours).items()}
+
+    def witnesses(group: Sequence[Behaviour], targets: frozenset[str]) -> tuple[str, ...]:
+        return tuple(sorted(b.run_key for b in group if violated[b.run_key] & targets))
+
+    defects: list[Defect] = []
+    unobservable: list[Defect] = []
+    spent: set[tuple[str, ...]] = set()
+    # (score, scenario, targets, the cell finding or None for a multi-clause candidate)
+    candidates: list[tuple[float, str, frozenset[str], CellFinding | None]] = []
+    for f in findings:
+        if f.type != "hidden":
+            continue
+        cell, mine = data.cells[f.cell], by_cell[f.cell]
+        assert cell.clause is not None
+        if not _observable_cell(cell, mine, observable):
+            unobservable.append(Defect(UNOBSERVABLE, (cell.clause,), _scenarios(mine),
+                                       f.witnesses, f.score, "no observable item reads the cell"))
+            continue
+        candidates.append((f.score, refutation_scenario(cell, mine), frozenset({cell.clause}), f))
+    for support, sid, hitting in hitting_candidates(groups, violated, fit.weights, tau):
+        if len(hitting) < 2:
+            continue  # a single clause is the cell path's: hidden or a contradiction of 1
+        if not observable_clauses(hitting, sid, observable, relevant):
+            unobservable.append(Defect(UNOBSERVABLE, tuple(sorted(hitting)), (sid,),
+                                       witnesses(groups[sid], hitting), support,
+                                       "no observable item reads every clause"))
+            continue
+        candidates.append((support, sid, hitting, None))
+    candidates.sort(key=refutation_order(known))
+    for score, sid, targets, finding in candidates:
+        group = groups[sid]
+        location = tuple(sorted(targets))
+        result = refuter.refute(targets, group[0].scenario, group)
+        failed = not result.refuted and result.attempted
+        if finding is not None:
+            mine = by_cell[finding.cell]
+            if failed:
+                defects.append(Defect("contradiction", location, _scenarios(mine),
+                                      finding.witnesses, score,
+                                      f"unrefuted after {result.attempts} attempts"))
+            else:
+                note = f"refuted by {result.witness}" if result.refuted else UNATTEMPTED
+                defects.append(Defect("hidden", location, _scenarios(mine), finding.witnesses,
+                                      score, note, finding.subtype))
+        elif failed:
+            defects.append(Defect("contradiction", location, (sid,), witnesses(group, targets),
+                                  score, f"unrefuted after {result.attempts} attempts"))
+        elif not result.refuted or result.witness != SYMBOLIC_WITNESS:
+            spent.add(location)  # it cost a probe, or would have, and found nothing
+    cells_of: dict[tuple[str, str, tuple[str, ...]], tuple[float, str]] = {}
+    for f in findings:
+        if f.type == "hidden":
+            continue
+        cell, mine = data.cells[f.cell], by_cell[f.cell]
+        if not _observable_cell(cell, mine, observable):
+            continue
+        d = Defect(f.type, (cell.location,), _scenarios(mine), f.witnesses, f.score,
+                   _note(cell, mine))
+        defects.append(d)
+        if f.type == "ambiguity":
+            key = ambiguity_key(d)
+            if key not in cells_of or f.score > cells_of[key][0]:
+                cells_of[key] = (f.score, cell.id)
+    return CellDiagnosis(merge_defects(defects, key=identity), merge_defects(unobservable), {},
+                         frozenset(spent), findings, {k: v for k, (_, v) in cells_of.items()})

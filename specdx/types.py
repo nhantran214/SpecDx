@@ -132,7 +132,8 @@ class Target:
 
 @dataclass(frozen=True)
 class Defect:
-    """One typed finding about the specification."""
+    """One typed finding about the specification. subtype: a hidden finding's mis-key,
+    ambiguous-pick or unstated (spec v3 §5.1); informational, never scored."""
 
     type: str
     location: tuple[str, ...]
@@ -140,6 +141,7 @@ class Defect:
     witnesses: tuple[str, ...]
     score: float
     note: str = ""
+    subtype: str = ""
 
     @property
     def key(self) -> tuple[str, tuple[str, ...]]:
