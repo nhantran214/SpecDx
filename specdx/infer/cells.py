@@ -36,7 +36,7 @@ def normalise(value: str, column_type: str = "text") -> str:
             return "true"
         if text in _FALSE:
             return "false"
-    if _NUMERAL.match(text):
+    if column_type in ("int", "numeric") and _NUMERAL.match(text):
         number = Decimal(text.replace(",", "."))
         return "0" if number == 0 else format(number.normalize(), "f")
     return text
@@ -54,6 +54,7 @@ def occurs(value: str, texts: Iterable[str]) -> bool:
     needle = normalise(value)
     if not needle:
         return False
+    # The boundary class [\w-] excludes only the ASCII hyphen, on purpose.
     pattern = re.compile(rf"(?<![\w-]){re.escape(needle)}(?![\w-])")
     return any(pattern.search(text) for text in texts)
 
@@ -75,6 +76,7 @@ def executor_generated(
         rows = _case_rows(pack, table)
         if table == "evt" or not keys or not rows:
             continue
+        # The composite-key join is latent: only evt has a composite key and it is excluded.
         if not any(occurs(":".join(r[k] for k in keys), texts) for r in rows):
             out.add(table)
     return frozenset(out)
