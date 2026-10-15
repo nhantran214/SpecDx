@@ -23,6 +23,7 @@ ABSENT = "absent"
 _NUMERAL = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
 _TRUE = frozenset({"t", "true", "1"})
 _FALSE = frozenset({"f", "false", "0"})
+_NUMERIC_TYPES = frozenset({"int", "bigint", "numeric"})
 
 
 def normalise(value: str, column_type: str = "text") -> str:
@@ -36,7 +37,7 @@ def normalise(value: str, column_type: str = "text") -> str:
             return "true"
         if text in _FALSE:
             return "false"
-    if column_type in ("int", "numeric") and _NUMERAL.match(text):
+    if column_type in _NUMERIC_TYPES and _NUMERAL.match(text):
         number = Decimal(text.replace(",", "."))
         return "0" if number == 0 else format(number.normalize(), "f")
     return text

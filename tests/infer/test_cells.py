@@ -28,6 +28,8 @@ from specdx.spec.tell import Chunk, Sentence
     ("0015", "text", "0015"), ("007", "text", "007"),
     # Decimal-comma convention: 1,000 is 1 (not 1000); 1.000 would be 1000.
     ("1,000", "numeric", "1"),
+    # bigint columns are numeric too.
+    ("35.0", "bigint", "35"),
 ])
 def test_normalisation_is_syntactic(raw: str, column_type: str, expected: str) -> None:
     assert normalise(raw, column_type) == expected
