@@ -417,7 +417,7 @@ The differential against the base (v1 §11 item 13) and the ordering of base loc
 
 | Step | What | GPU | Pass criterion (pre-registered here) |
 |---|---|---|---|
-| **G0** simulation | Fit at the calibrated parameters and the planned budget, with at least 10 replicates; choose the free parameters of §9 by the selection rule | No | (i) mean \|θ̂ − θ\| ≤ 0.05. (ii) Simulated typed F1 ≥ 0.6 for hidden requirement, ≥ 0.4 for ambiguity, and ≥ 0.4 for weak check (the gate's own bar; v3's 0.6 for weak was reached by no method, §13 item 13). (iii) Regime-based: at the calibrated point, under the A3 and A5 arms, and at the population's own M and Δ, v3.1 is never below the best baseline by more than 0.05 on any type; and at the calibrated point it beats the best baseline on ambiguity by more than 0.05. If G0 fails, stop and report |
+| **G0** simulation | Fit at the calibrated parameters and the planned budget, with at least 10 replicates; choose the free parameters of §9 by the selection rule | No | (i) mean \|θ̂ − θ\| ≤ 0.05. (ii) Simulated typed F1 ≥ 0.6 for hidden requirement and ≥ 0.4 for ambiguity. Simulated weak-check F1 is reported against the gate's 0.4 bar **for information only**; it does not gate (§13 item 15). (iii) Regime-based: at the calibrated point, under the A3 and A5 arms, and at the population's own M and Δ, v3.1 is never below the best baseline by more than 0.05 on any type; and at the calibrated point it beats the best baseline on ambiguity by more than 0.05. If G0 fails, stop and report |
 | **G1** base replay | Fit v3.1 with the parameters frozen at G0 on the cached base runs: the P1b smoke run and the P1 base runs | No | (i) θ_m ≥ 0.5 for gpt-oss:20b and qwen3:30b-a3b (no collapse). (ii) The real defect R-SO (v1 §4.4: `SO-0031` stays `Chờ duyệt` after `APR-0102` is approved) is reported as a hidden requirement, judged **on the P1b smoke run only** (author ruling, 2026-10-14: P1's two acted readings at that cell equal the anchor). If no acted behaviour reached the cell, G1 records "not observable" for (ii) and does not fail on it. On failure, stop and report; parameters are not re-tuned |
 | Freeze | The v3 pre-registration (§9) is committed with a test that pins every value | No | — |
 | **G2** population | Apply §7 to the cached screen and freeze the population into the gate configuration | No | At least 2 families and at least 4 acting models admitted, otherwise STOP |
@@ -546,6 +546,20 @@ The v3 pre-registration is a document (`experiments/p2-preregistration.md`) plus
     - criterion (iii) is regime-based, and includes a required win on ambiguity;
     - at least 10 replicates.
 14. **Population and G1.** G2 requires at least 4 acting models. G1 (ii) is judged on the P1b smoke run only (author ruling).
+15. **Weak check in G0 is information only** (author ruling, 2026-10-15; option B of A/B/C/D). After the plan's pre-flight rulings, a full G0 preview failed on weak alone. The sensitivity previews (`results/p2-spikes/amended-preview/`) showed that simulated weak-check F1 depends on two things outside the method:
+    - **A calibration choice the base data do not determine.** The generator cannot represent value columns that are anchored in some scenarios only. Weak F1 was 0.40 per cell, and 0.24–0.34 under three per-column rules.
+    - **Seed noise.** Weak F1 moves by about ±0.08 between seed sets.
+
+    G0's weak-check bar therefore measures generator assumptions rather than the method, and it is reported but does not gate. Two things still hold:
+    - The gate's own weak-check rule (typed F1 ≥ 0.4 on the development mutants, §8.3) is unchanged.
+    - Criterion (iii) still includes weak checks: v3.1 may not fall more than 0.05 below the best baseline on any type.
+
+    Every G0-altering change made after the first preview is disclosed in the pre-registration:
+    - F1 (co-occurrence);
+    - F12(a,c) (calibration);
+    - the exact EM for the truncated error model;
+    - suppression of weak checks on cells that report a hidden requirement;
+    - the baselines sharing v3.1's cell-level post-processing.
 
 ---
 
