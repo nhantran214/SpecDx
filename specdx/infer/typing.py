@@ -105,8 +105,9 @@ def co_occur(cell: Cell, post: CellPosterior, readings: Sequence[Reading],
 def type_cells(cells: Mapping[str, Cell], fit: AnchoredFit,
                by_cell: Mapping[str, Sequence[Reading]], params: V3Params) -> list[CellFinding]:
     """Every cell finding of the fit, cell by cell in id order. An ambiguity and its hidden
-    requirement co-occur on an anchored cell (`co_occur`). A cell reporting an ambiguity
-    reports no weak check: its readings are not deviant."""
+    requirement co-occur on an anchored cell (`co_occur`). A cell reporting an ambiguity or
+    a hidden requirement reports no weak check: its readings are not deviant, and the same
+    defect is not typed twice (resolution 14: weak truths are unanchored cells only)."""
     out: list[CellFinding] = []
     for cid in sorted(fit.cells):
         cell, post, mine = cells[cid], fit.cells[cid], by_cell.get(cid, [])
@@ -117,6 +118,7 @@ def type_cells(cells: Mapping[str, Cell], fit: AnchoredFit,
             out.append(found)
         if ambiguity is not None:
             out.append(ambiguity)
+        if found is not None or ambiguity is not None:
             continue
         weak = weak_finding(cell, post, mine, params.tau_w)
         if weak is not None:

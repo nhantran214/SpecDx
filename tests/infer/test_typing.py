@@ -124,3 +124,15 @@ def test_on_an_anchored_cell_an_ambiguity_and_its_hidden_requirement_co_occur() 
     assert type_cells({"c": ANCHORED}, _fit({"m1": 1.0}, by_pair), by_cell,
                       _params(0.9, 0.5, 0.9)) == []
 
+
+def test_a_cell_reporting_a_hidden_requirement_reports_no_weak_check() -> None:
+    # An anchored mis-key cell: MAP {a} != {d}, and the reading of d is clean, so
+    # weak_finding alone would type the same defect a second time (resolution 14: weak
+    # truths are unanchored cells only).
+    post = _post(ANCHORED, {F({"a"}): 0.95, F({"d"}): 0.05})
+    readings = [_r("c", "m1", "a", 0), _r("c", "m2", "d", 1, True)]
+    assert weak_finding(ANCHORED, post, readings, 0.8) is not None
+    found = type_cells({"c": ANCHORED}, _fit({"m1": 1.0, "m2": 1.0}, post),
+                       {"c": readings}, _params(0.5, 0.5, 0.8))
+    assert [(f.cell, f.type, f.subtype) for f in found] == [("c", "hidden", MIS_KEY)]
+
