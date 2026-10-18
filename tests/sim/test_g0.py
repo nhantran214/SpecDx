@@ -180,3 +180,43 @@ def test_the_pre_registration_table_names_every_parameter() -> None:
     assert table.splitlines()[:2] == ["| parameter | field | value |", "|---|---|---:|"]
     assert len(table.splitlines()) == 2 + len(dataclasses.fields(V3Params))
     assert "| π | `pi` | 0.1 |" in table and "| τ_W | `tau_w` | 0.6 |" in table
+
+
+def test_run_refuses_to_overwrite_the_frozen_parameters_file(monkeypatch, tmp_path, capsys) -> None:
+    calls: list = []
+
+    def fake(calibration, out, **kwargs):
+        calls.append(kwargs)
+        return g0.PASS
+
+    monkeypatch.setattr(g0, "run", fake)
+    args = ["run", "--calibration", str(tmp_path / "c.json"), "--out", str(tmp_path / "g0")]
+    assert g0.PARAMS_FROZEN is True
+    assert g0.main(args) == 2 and calls == []
+    err = capsys.readouterr().err
+    assert "frozen" in err and "--params-out" in err
+    # an explicit path is the way to reproduce G0 without touching the frozen file
+    elsewhere = tmp_path / "reproduced.json"
+    assert g0.main([*args, "--params-out", str(elsewhere)]) == 0
+    assert calls == [{"replicates": g0.REPLICATES, "params_out": elsewhere}]
+    # before anything is frozen, the default location is still the one written
+    monkeypatch.setattr(g0, "PARAMS_FROZEN", False)
+    calls.clear()
+    assert g0.main(args) == 0 and calls[0]["params_out"] == g0.PARAMS_FILE
+
+
+def test_an_unexpected_exception_exits_2_while_pass_and_fail_keep_0_and_1(
+        monkeypatch, tmp_path, capsys) -> None:
+    args = ["run", "--calibration", str(tmp_path / "c.json"), "--out", str(tmp_path / "g0"),
+            "--params-out", str(tmp_path / "p.json")]
+
+    def crash(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(g0, "run", crash)
+    assert g0.main(args) == 2
+    assert "unexpected RuntimeError: boom" in capsys.readouterr().err
+    monkeypatch.setattr(g0, "run", lambda *_a, **_k: g0.FAIL)
+    assert g0.main(args) == 1
+    monkeypatch.setattr(g0, "run", lambda *_a, **_k: g0.PASS)
+    assert g0.main(args) == 0

@@ -6,7 +6,7 @@ import httpx
 import psycopg
 import pytest
 
-from specdx.active.loop import LoopContext
+from specdx.active.loop import LoopContext, run_specdx
 from specdx.eval.matching import MIN_SCORABLE, Prf, gate_verdict
 from specdx.eval.pilot import (
     GateConfig,
@@ -191,6 +191,35 @@ def test_the_report_shows_the_verdict_and_the_literal_comparison(tmp_path) -> No
     assert "| ≥ 0.40 (baselines cannot locate it) |" in report
     assert "typed against typed" in report
     assert set(json.loads(result.to_json())["literal_wins"]) == set(result.wins)
+
+
+def test_the_gate_markdown_shows_non_convergence_per_mutant_and_decides_nothing_on_it(
+        tmp_path, monkeypatch) -> None:
+    mutants = [_mutant("H1-00", "hidden", {"c1"}), _mutant("H1-01", "hidden", {"c1"})]
+    clean = run_gate(_config(tmp_path), _Bench(), mutants)
+    assert clean.converged == {"base": True, "H1-00": True, "H1-01": True}
+    assert "EM converged for all 3 specification(s)" in gate_markdown(clean)
+
+    real = run_specdx
+
+    def unconverged(variant, ctx, cfg, **kwargs):
+        report = real(variant, ctx, cfg, **kwargs)
+        return dataclasses.replace(report, converged=variant.name not in ("H1-01", "base"))
+
+    monkeypatch.setattr("specdx.eval.pilot.run_specdx", unconverged)
+    result = run_gate(_config(tmp_path), _Bench(), mutants)
+    assert result.converged == {"base": False, "H1-00": True, "H1-01": False}
+    report = gate_markdown(result)
+    assert "## Convergence (v3.1 §3.4: reported, never a criterion)" in report
+    assert "EM did not converge for 2 of 3 specification(s)" in report
+    assert "| base | no |" in report and "| H1-01 | no |" in report
+    assert "| H1-00 | no |" not in report
+    assert json.loads(result.to_json())["converged"] == result.converged
+    # it changes no decision
+    assert (result.passed, result.wins, result.headline) == (clean.passed, clean.wins,
+                                                             clean.headline)
+    assert result.primary == clean.primary and result.scores == clean.scores
+    assert result.literal_wins == clean.literal_wins and result.scorable == clean.scorable
 
 
 def test_every_mutant_and_the_base_are_written_one_per_line(tmp_path) -> None:

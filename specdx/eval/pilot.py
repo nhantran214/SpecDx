@@ -152,7 +152,9 @@ class BenchLike(Protocol):
 class GateResult:
     """scores and untyped: the secondary tables, over every mutant that ran. primary and
     primary_untyped: the same over the scorable mutants only, which decide the verdict.
-    touches: per mutant, the base behaviours that touch its observed_at targets."""
+    touches: per mutant, the base behaviours that touch its observed_at targets.
+    converged: whether EM converged on the base ("base") and on each mutant that ran (spec
+    v3.1 §3.4: reported, never a criterion; it enters no verdict)."""
 
     scores: dict[str, dict[str, Prf]]
     untyped: dict[str, dict[str, Prf]]
@@ -164,6 +166,7 @@ class GateResult:
     primary_untyped: dict[str, dict[str, Prf]] = field(default_factory=dict)
     touches: dict[str, int] = field(default_factory=dict)
     types: dict[str, str] = field(default_factory=dict)
+    converged: dict[str, bool] = field(default_factory=dict)
 
     @property
     def scorable(self) -> frozenset[str]:
@@ -192,6 +195,7 @@ class GateResult:
                            "primary": {"typed": table(self.primary),
                                        "untyped": table(self.primary_untyped)},
                            "typed": table(self.scores), "untyped": table(self.untyped),
+                           "converged": self.converged,
                            "touches": self.touches, "scorable": sorted(self.scorable),
                            "scorable_per_type": self.counts(True),
                            "mutants_per_type": self.counts(False)},
@@ -299,6 +303,7 @@ def run_gate(
     reports: dict[str, dict[str, list[Defect]]] = {"specdx": {}, "b2": {}, "b3": {}}
     truths: dict[str, GroundTruth] = {}
     failed: dict[str, str] = {}
+    converged: dict[str, bool] = {"base": base.converged}
     lines = None
     if mutants_out is not None:
         mutants_out.parent.mkdir(parents=True, exist_ok=True)
@@ -336,6 +341,7 @@ def run_gate(
                                    m.id in keep, base))
                 continue
             truths[m.id] = m.truth
+            converged[m.id] = report.converged
             reports["specdx"][m.id] = report.defects
             reports["b2"][m.id], reports["b3"][m.id] = _baselines(
                 report.behaviours, ctx, report.theta, canon_ids
@@ -354,7 +360,7 @@ def run_gate(
 
     result = GateResult(scores, untyped, False, {}, failed, literal_wins(scores),
                         primary_of(True), primary_of(False), touched,
-                        {m.id: m.truth.type for m in mutants})
+                        {m.id: m.truth.type for m in mutants}, converged)
     passed, wins = gate_verdict(result.primary, result.primary_untyped,
                                 scorable=result.counts(True), min_scorable=MIN_SCORABLE)
     return dataclasses.replace(result, passed=passed and not failed, wins=wins)
@@ -423,6 +429,17 @@ def gate_markdown(result: GateResult) -> str:
     lines += [f"| {mid} | {result.types[mid]} | {n} | "
               f"{'yes' if mid in result.scorable else 'no'} |"
               for mid, n in sorted(result.touches.items())]
+    lines += ["", "## Convergence (v3.1 §3.4: reported, never a criterion)", ""]
+    unconverged = sorted(k for k, ok in result.converged.items() if not ok)
+    if unconverged:
+        lines += [f"EM did not converge for {len(unconverged)} of {len(result.converged)} "
+                  "specification(s): the base and each mutant that ran. No gate decision uses "
+                  "this.", "",
+                  "| specification | EM converged |", "|---|---|"]
+        lines += [f"| {k} | no |" for k in unconverged]
+    else:
+        lines += [f"EM converged for all {len(result.converged)} specification(s): the base "
+                  "and each mutant that ran."]
     if result.failed:
         lines += ["", "## Mutants that could not run", ""]
         lines += [f"- `{k}`: {v}" for k, v in sorted(result.failed.items())]

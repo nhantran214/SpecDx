@@ -279,13 +279,14 @@ class StartFit:
 
 @dataclass
 class AnchoredFit:
-    """§3.5's outputs. alpha and theta = σ(α) per model (θ: the accuracy at a cell of
-    median difficulty); family_effect: each family's mean logit θ minus the population's
-    (v2 §3.3); cells: the per-cell posteriors; weights: w_b per run key, the mean faithful
-    probability over the cells the behaviour read; a behaviour that read no cell is absent,
-    and consumers default it to 0. converged is False
-    when EM stopped at max_iter (§3.4: reported, never silent). start: the EM start whose
-    fixed point has the highest log posterior (t3, or a common α such as "alpha=2.0");
+    """§3.5's outputs. alpha and theta = σ(α) per model (θ: the accuracy at β = 0; β's
+    location is fixed only by its N(0, τ²) prior, not by T3's median-β = 0 constraint, so
+    this is not exactly the accuracy at a cell of median difficulty); family_effect: each
+    family's mean logit θ minus the population's (v2 §3.3); cells: the per-cell posteriors;
+    weights: w_b per run key, the mean faithful probability over the cells the behaviour
+    read; a behaviour that read no cell is absent, and consumers default it to 0. converged
+    is False when EM stopped at max_iter (§3.4: reported, never silent). start: the EM start
+    whose fixed point has the highest log posterior (t3, or a common α such as "alpha=2.0");
     starts: each start's StartFit (final log posterior, whether it converged, iterations)."""
 
     alpha: dict[str, float]
@@ -371,10 +372,12 @@ def _error_update(batch: _Batch, post: np.ndarray, r: np.ndarray, eps: np.ndarra
     draws that fell inside A, so besides the expected error counts (a reading outside A, or
     any reading under ∅) the complete data hold the expected rejected draws: under A ≠ ∅,
     each of its N_err,A error readings rejects ε(k)/(1 − ε(A)) draws on each slot k in A,
-    weighted by post(A). Then ε_c is the mode of the Dirichlet κ·u_c posterior over all
-    draws, (counts + rejected + κ·u_c) / (total + κ), which keeps every value's error mass
-    positive (the literal mode of Dirichlet(κ·u) is 0 wherever κ·u + count < 1); the support
-    mask keeps unused slots at zero and OTHER positive."""
+    weighted by post(A). Then ε_c is the posterior mean under Dirichlet(κ·u_c) given all
+    draws, equivalently the mode under Dirichlet(1 + κ·u_c): (counts + rejected + κ·u_c) /
+    (total + κ). Its effective prior is κ pseudo-counts towards u_c (flat over V_c). The
+    spec's literal MAP under Dirichlet(κ·u_c), (counts + rejected + κ·u_c − 1) / (total +
+    κ − K) with K the number of slots, would apply only κ − K pseudo-counts and is not
+    used. The support mask keeps unused slots at zero and OTHER positive."""
     counts = (batch.counts * (1.0 - r)).sum(axis=2)
     reads = batch.counts.sum(axis=2)
     outside = 1.0 - eps @ _IN.T.astype(float)

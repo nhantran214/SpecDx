@@ -21,10 +21,12 @@ out-of-sample report for information only (ruling F22). Non-converged fits are c
 the search and at every criteria point and reported (§3.4, ruling F2).
 
 Usage:
-  python -m specdx.sim.g0 run --calibration PATH --out results/p2-g0
+  python -m specdx.sim.g0 run --calibration PATH --out results/p2-g0 [--params-out PATH]
   python -m specdx.sim.g0 freeze PATH        # rewrite V3Params from G0's chosen values
   python -m specdx.sim.g0 table              # V3Params as the pre-registration's table
-Exit status of run: 0 PASS, 1 FAIL, 2 error.
+Exit status of run: 0 PASS, 1 FAIL, 2 error (an unexpected exception included). While
+PARAMS_FROZEN is true, run refuses to overwrite experiments/p2-g0-params.json: give
+--params-out to reproduce G0 elsewhere.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from specdx.infer.anchored import AnchoredFit, V3Params, fit_anchored
+from specdx.infer.anchored import PARAMS_FROZEN, AnchoredFit, V3Params, fit_anchored
 from specdx.infer.typing import (
     AMBIGUOUS_PICK,
     CellFinding,
@@ -407,6 +409,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     r.add_argument("--calibration", type=Path, required=True)
     r.add_argument("--out", type=Path, required=True)
     r.add_argument("--replicates", type=int, default=REPLICATES)
+    r.add_argument("--params-out", type=Path, default=None,
+                   help="where to write the chosen parameters (required once G0's are frozen)")
     f = sub.add_parser("freeze")
     f.add_argument("params", type=Path)
     sub.add_parser("table")
@@ -417,10 +421,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "table":
         print(params_table(V3Params()))
         return 0
+    if args.params_out is None and PARAMS_FROZEN:
+        print(f"error: G0's parameters are frozen; refusing to overwrite {PARAMS_FILE}. "
+              "Give --params-out PATH to reproduce G0 elsewhere.", file=sys.stderr)
+        return 2
     try:
-        outcome = run(args.calibration, args.out, replicates=args.replicates)
+        outcome = run(args.calibration, args.out, replicates=args.replicates,
+                      params_out=args.params_out or PARAMS_FILE)
     except (OSError, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - a crash must not share FAIL's exit status
+        print(f"error: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     print(outcome)
     return {PASS: 0, FAIL: 1}[outcome]
