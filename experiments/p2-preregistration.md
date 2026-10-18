@@ -2,8 +2,8 @@
 
 - **Spec:** `docs/superpowers/specs/2026-10-14-specdx-v3-design.md` (v3.1), a delta on `2026-10-11-specdx-v2-design.md` (v2), itself a delta on `2026-10-06-specdx-design.md` (v1). The v3.1 amendments and their evidence are in its §13 items 8–15 and `results/p2-spikes.md`.
 - **Plan:** `docs/superpowers/plans/2026-10-14-specdx-p2a.md`, as amended by the author's rulings F1–F26 on the pre-flight scan (2026-10-15).
-- **Rule:** this file is committed after G1 and before G2 (spec v3.1 §9). Nothing in it changes after any P2b result is seen. `tests/test_preregistration_v3.py` pins every named constant below to the code, the values chosen at G0 to §4's table and §8's figures to the committed G0 and G1 records; `tests/test_g0_frozen.py` pins them to `experiments/p2-g0-params.json`.
-- **Integrity (spec §8.3):** every threshold and prior was chosen by simulation and base data only (G0, G1). The development mutants are used once, at gate v3. The test split stays untouched. What was seen before G0 and how it shaped G0 is disclosed in §6, the execution-time rulings in §7, the records in §8 and the vocabulary diagnosis in §9.
+- **Rule:** this file is committed after G1 and before G2 (spec v3.1 §9). Nothing in it changes after any P2b result is seen. Two dated additions were made between the freeze and any G2 or G3 run (2026-10-19): the G3 amendment (§5) and the generator disclosure (§10); corrections of wording and figures are in the git history. `tests/test_preregistration_v3.py` pins every named constant below to the code, the values chosen at G0 to §4's table and §8's figures to the committed G0 and G1 records; `tests/test_g0_frozen.py` pins them to `experiments/p2-g0-params.json`.
+- **Integrity (spec §8.3):** every threshold and prior was chosen by simulation and base data only (G0, G1). The development mutants are used once, at gate v3. The test split stays untouched. What was seen before G0 and how it shaped G0 is disclosed in §6, the execution-time rulings in §7, the records in §8, the vocabulary diagnosis in §9 and what the calibrated simulation exercises in §10.
 
 ## 1. Values unchanged from v1 and v2
 
@@ -50,7 +50,7 @@ These were settled while planning P2a, before G0 ran, or by the author's rulings
 3. **Scope of tables no step drafts.** apr and evt rows are written through tools; their cells are read at the steps whose work-order slice keys the row (`apr=APR-0102`, `evt=SO-0031`). Key and matching columns are row identity, not readings.
 4. **Readings.** A behaviour reads a cell once, if it acted at any in-scope item; several matching rows give the smallest normalised value.
 5. **Difficulty groups.** A value cell's group is its column, pooled over rows and scenarios; an event cell's is its event kind (`evt:DRAFTED`), the event table's analogue of a column; a constraint cell's is its clause.
-6. **The M-step.** α and β: r as fractional successes out of q_c = P(A_c ≠ ∅) trials per reading, summed over each difficulty group. ε_c: the exact EM step of the truncated error model (the Task 5 ruling, which amends this resolution; §3.2 draws an error from ε renormalised over V∖A): the mode of the Dirichlet κ·u_c posterior over all draws, ε_c(k) = (counts_k + rejected_k + κ·u_c(k)) / (total + κ). The counts are the expected error counts (a reading outside A, or any reading under ∅); under A ≠ ∅ each error reading also rejects ε(k)/(1 − ε(A)) draws on each slot k in A, weighted by the posterior of A.
+6. **The M-step.** α and β: r as fractional successes out of q_c = P(A_c ≠ ∅) trials per reading, summed over each difficulty group. ε_c: the exact EM step of the truncated error model (the Task 5 ruling, which amends this resolution; §3.2 draws an error from ε renormalised over V∖A): the posterior mean under Dirichlet(κ·u_c) given all draws (equivalently the mode under Dirichlet(1 + κ·u_c)), ε_c(k) = (counts_k + rejected_k + κ·u_c(k)) / (total + κ). Its effective prior is κ pseudo-counts towards u_c, flat over V_c; the spec's literal MAP under Dirichlet(κ·u_c) would apply κ − K, with K the number of slots, and is not used. The counts are the expected error counts (a reading outside A, or any reading under ∅); under A ≠ ∅ each error reading also rejects ε(k)/(1 − ε(A)) draws on each slot k in A, weighted by the posterior of A.
 7. **Refutation of a pooled candidate.** It runs in the scenario with the most acted readings outside d_c, ties to the smaller scenario id.
 8. **Singleton hitting sets defer to the cell path.** It is the only source of hidden requirements and of contradictions of size 1; hitting sets of two or more clauses feed multi-clause contradictions. `spent` holds the multi-clause candidates that cost a probe run, or would have, and found nothing.
 9. **Defect locations.** Findings reuse v2's location formats, so the matching code is unchanged. A hidden finding's subtype (mis-key, ambiguous-pick, unstated) is informational and never scored.
@@ -85,7 +85,7 @@ G0's criteria are judged on the selection replicates, the same ten seeds per arm
 | τ_W | `tau_w` | 0.9 |
 <!-- G0 table: end -->
 
-G0's report is `results/p2-g0.md`; G1's is `results/p2-g1.md`. Both passed. The simulation study at the frozen parameters (§8.1, every sweep and the regime map) is `results/p2-sim.md`.
+G0's report is `results/p2-g0.md`; G1's is `results/p2-g1.md`. Both passed. The simulation study at the frozen parameters (§8.1, every sweep and the regime map) is `results/p2-sim.md`. The commands that reproduce G0 and G1, and the commits that produced them, are in `docs/RUNNING.md` §12.
 
 ## 5. GO steps and gate v3
 
@@ -94,10 +94,12 @@ G0's report is `results/p2-g0.md`; G1's is `results/p2-g1.md`. Both passed. The 
 | G0 | (i) mean \|θ̂ − θ\| ≤ 0.05; (ii) typed F1 ≥ 0.6 for hidden requirement and ≥ 0.4 for ambiguity; the weak check's ≥ 0.4 is reported for information only and does not gate the verdict (author ruling, option B, 2026-10-15; spec §8.2 and §13 item 15; the gate's own weak rule in §1 is unchanged); (iii) at the calibrated point, under the A3 and A5 arms, and at the population's own M and Δ, v3.1 is never below the best baseline by more than 0.05 on any type, and at the calibrated point it beats the best baseline on ambiguity by more than 0.05. If G0 fails, stop and report |
 | G1 | (i) θ_m ≥ 0.5 for gpt-oss:20b and qwen3:30b-a3b; (ii) R-SO reported as a hidden requirement, judged on the P1b smoke run only (author ruling, 2026-10-14), or "not observable" if no acted behaviour read its cell |
 | G2 | `specdx screen --from results/p1b-screen.json` admits at least 2 families and at least 4 acting models; the population is frozen into `experiments/p2-gate.json` |
-| G3 | the base specification on the 48 GB host, budget 60: every P1b smoke check passes, and θ_m ≥ 0.5 for each population model; convergence is reported, not a criterion (ruling F15) |
+| G3 | the base specification on the 48 GB host, budget 60: every P1b smoke check passes (check (4) is replaced, see the amendment below), and θ_m ≥ 0.5 and at least one reading for each population model; convergence is reported, not a criterion (ruling F15) |
 | Gate v3 | the 20 development mutants under §1's gate rule; B2 uses the interpreter with the highest θ_m |
 
 A failing GO step stops P2 with a report; no parameter is re-tuned.
+
+**G3 amendment (2026-10-19).** The words "and at least one reading for each population model" were added to the G3 row after this file was frozen and before any G2 or G3 run, mirroring ruling 21 for G1 (i). Reason: a population model with no reading keeps α = μ_α, so its θ is σ(1.0) = 0.731, which passes θ ≥ 0.5 vacuously. P1b smoke check (4) was meant to catch a model that never acts, but it tests |θ − 0.75| < 1e-9, v2's Beta(7, 3) mode, and under v3 it can never fire. It is replaced by a v3 check, in `docs/RUNNING.md` §11, that every population model has readings in the smoke run's cells. The amendment is not outcome-informed (no G2 or G3 data exists) and can only make G3 stricter. A model that never acts at G3 would also leave the gate with fewer than the four acting models G2 requires.
 
 ## 6. Population (spec §7) and disclosure
 
@@ -107,9 +109,9 @@ The 0.3 act rate was chosen during design, knowing which cached screen results i
 - F1: on an anchored cell an ambiguity and its hidden requirement co-occur (§3 item 11);
 - F12 (a), (c): the calibration's plurality and dispersion use the population's readings only, and the cell mix is counted per column, a column being anchored if at least half its cells are (§3 item 15).
 
-A second full preview ran on the amended code during the plan's re-check (`results/p2-spikes/amended-preview/g0-preview-amended.md`): FAIL on (ii) weak alone, 0.343 at the calibrated point, with hidden 0.861 and ambiguity 0.837. Sensitivity previews of the same code, full grid each and for information only (`results/p2-spikes/amended-preview/`): F1 alone passes with weak 0.403; F12 (a) alone passes with weak 0.401 per cell; F12 (c) under three rules for a partly anchored column gives weak 0.343 (at least half its cells), 0.306 (the mean anchored fraction) and 0.236 (any cell), so 0.24–0.34 under the per-column rules, each a FAIL. Weak-check F1 differed by 0.084 (amended preview) and 0.089 (G0) between the selection seeds and the next ten, both upward (0.343 to 0.427, then 0.338 to 0.427; spec §13 item 15 rounds this to ±0.08).
+A second full preview ran on the amended code during the plan's re-check (`results/p2-spikes/amended-preview/g0-preview-amended.md`): FAIL on (ii) weak alone, 0.343 at the calibrated point, with hidden 0.861 and ambiguity 0.837. Sensitivity previews of the same code, full grid each and for information only (`results/p2-spikes/amended-preview/`): F1 alone passes with weak 0.403; F12 (a) alone passes with weak 0.401 per cell; F12 (c) under three rules for a partly anchored column gives weak 0.343 (at least half its cells), 0.306 (the mean anchored fraction) and 0.236 (any cell), so 0.24–0.34 under the per-column rules, each a FAIL. Weak-check F1 differed by 0.084 (amended preview) and 0.088 (G0) between the selection seeds and the next ten, both upward (0.343 to 0.427, then 0.338 to 0.427; spec §13 item 15 rounds this to ±0.08).
 
-**G0's weak-check bar is information only (author decision, option B, 2026-10-15; spec §8.2 and §13 item 15).** After seeing those previews the author chose option B of A/B/C/D: G0's weak-check F1 ≥ 0.4 is reported but does not gate the verdict. The decision was made on 2026-10-15, before G0 ran. Criterion (iii), weak included, and the gate's weak rule are unchanged. The real G0 gave weak 0.338 on the selection replicates (information only, below 0.4) and 0.427 out of sample (above it). The bar was relaxed knowing the previews' outcome. Under G0 (ii) as registered before 2026-10-15, G0 fails (weak 0.338 < 0.4) and P2 would have stopped; a reader should weigh G0's PASS accordingly.
+**G0's weak-check bar is information only (author decision, option B, 2026-10-15; spec §8.2 and §13 item 15).** After seeing those previews the author chose option B of A/B/C/D: G0's weak-check F1 ≥ 0.4 is reported but does not gate the verdict. The decision was made on 2026-10-15, before G0 ran. Criterion (iii), weak included, and the gate's weak rule are unchanged. The real G0 gave weak 0.338 on the selection replicates (information only, below 0.4) and 0.427 out of sample (above it). Those out-of-sample seeds are the "next ten" whose amended-preview result (weak 0.427) the author had already seen before choosing option B: out of sample for the selection, but not unseen. The bar was relaxed knowing the previews' outcome. Under G0 (ii) as registered before 2026-10-15, G0 fails (weak 0.338 < 0.4) and P2 would have stopped; a reader should weigh G0's PASS accordingly.
 
 **Every G0-altering change made after the first full preview** (`results/p2-spikes/g0-preview-full.md`), none tuning a grid value. F1 and F12 correct the code to the spec and to the plan's own resolution, and were ruled before the amended preview. Tasks 5, 7 and 8 were ruled after the amended preview's weak failure was known, and the last two change weak typing.
 - F1: ambiguity and hidden co-occur on an anchored cell;
@@ -137,7 +139,7 @@ These rulings were taken while the plan executed, before G0 or G1 produced a res
 
 ## 8. The G0 and G1 records
 
-**G0 (`results/p2-g0.md`): PASS** on the selection replicates. Chosen parameters (§4's table, `experiments/p2-g0-params.json`): π 0.2, shares (0.4, 0.3, 0.3), τ 1.0, (μ_α, σ_α) = (1, 1), τ_H 0.5, τ_A 0.3, τ_W 0.9; objective 0.6330. At the calibrated point v3.1 scores hidden 0.858, ambiguity 0.807, weak 0.338 (information only), against the best baseline's 0.807 (anchor-only), 0.714 (majority) and 0.316 (majority); v3.1's margin over the best baseline is 0.051 on hidden and 0.022 on weak; mean |θ̂ − θ| 0.0112; the ambiguity win over the best baseline is 0.092. The worst (iii) gap is A3's weak check, −0.029 against 0.05 allowed. Out of sample (seeds base + 10…19, information only) the same criteria would pass, weak 0.427.
+**G0 (`results/p2-g0.md`): PASS** on the selection replicates. Chosen parameters (§4's table, `experiments/p2-g0-params.json`): π 0.2, shares (0.4, 0.3, 0.3), τ 1.0, (μ_α, σ_α) = (1, 1), τ_H 0.5, τ_A 0.3, τ_W 0.9; objective 0.6330. At the calibrated point v3.1 scores hidden 0.858, ambiguity 0.807, weak 0.338 (information only), against the best baseline's 0.807 (anchor-only), 0.714 (majority) and 0.316 (majority); v3.1's margin over the best baseline is 0.051 on hidden and 0.022 on weak; mean |θ̂ − θ| 0.0112; the ambiguity win over the best baseline is 0.092. The worst (iii) gap is A3's weak check, −0.029 against 0.05 allowed. Out of sample (seeds base + 10…19, information only; the same "next ten" seeds the amended preview had shown, §6) the same criteria would pass, weak 0.427.
 
 *Non-convergence (§3.4, reported, never a criterion).* 60 of 1080 search fits did not converge. At the chosen setting 2 of 10 A3 fits and 1 of 10 A5 fits did not; the base arm had none.
 
@@ -156,3 +158,23 @@ After G1 the review noted that both models read `draft` at R-SO's cell, not an a
 **The R-SO caveat.** No acted run wrote APR-0102: every reading of its `apr` cells and of `evt:APPROVED:APR-0102` is `absent`, for both models. The approval that R-SO is conditioned on (SO stays "Chờ duyệt" after APR-0102 is approved) never happened in the smoke run. So G1 (ii) passes nominally: the readers follow T's "draft" while C has "Chờ duyệt", and SpecDx flags a T↔C status conflict at that cell. It does not pass because the readers inferred "Đã duyệt" after an approval, and it is not evidence that SpecDx recovers the approval-conditioned defect.
 
 **The gate risk.** Mutants may be masked by the base differential wherever the base specification already reports a hidden finding. That holds for the status columns (10 of the 53) and, more widely, for the structural findings: 18 `apr` cells, 8 absent golden events and 16 violated constraint clauses. This is disclosed before gate v3; the rule and the development split are unchanged, and the risk is reported with the gate's results, never mitigated by re-tuning.
+
+## 10. What the calibrated simulation exercises (disclosure, 2026-10-19)
+
+G0 chose the parameters on synthetic specifications from `specdx/sim/generator.py`, configured by `results/p2-calibration.json`. Calibration measures accuracy, act rates, dispersion, error concentration, the cell mix and |V| (§3 item 15). The following constants are not measured; they are fixed in the generator:
+- `forms` = (0.4, 0.3, 0.3): the shares of mis, amb and empty among the defects planted on anchored columns;
+- `unanchored` = (0.5, 0.2, 0.3): the shares of a determined value, a pair and silence on unanchored columns;
+- `kappa_true` = 30: a cell's ε_c ~ Dirichlet(30 · tendency);
+- the A3 arm draws each model's errors from a flat Dirichlet with concentration 0.3;
+- the defect rate 0.15 (§3 item 14).
+
+The calibrated cell mix is 140 columns, of which 34.3% constraint columns and 36.4% pooled; the anchored share is 0.0326 of the value columns (ruling F12 (c)), so at the calibrated point about 3% of value columns are anchored.
+
+Per specification, over seeds 0–9 of the calibrated configuration (base arm), the planted truths are:
+- **hidden:** 32.5 on constraint cells (V = {satisfied, violated}) and 2.4 on value cells, so about 93% of the hidden truths are binary constraint cells;
+- **ambiguity:** 58.3 on unanchored value cells and 8.1 on anchored cells (7.6 constraint, 0.5 value).
+
+What this means for reading G0:
+- G0 (ii)'s "hidden ≥ 0.6" is evidence mainly about hidden requirements on constraint cells. It barely exercises value cells with multi-valued vocabularies, where 37 of G1's 53 real hidden findings are (53 findings, 16 of them violated constraint clauses, §9).
+- The ambiguity and weak truth counts are set mostly by the uncalibrated `unanchored` constant, not by calibration.
+- The form shares G0 chose (0.4, 0.3, 0.3; §4) equal the generator's planted `forms`. This is not a leak (the shares were selected from a grid of three by simulated F1), but it is a property of selecting a prior by simulation: the selected prior matches the planted one.

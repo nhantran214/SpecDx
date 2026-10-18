@@ -183,9 +183,9 @@ export SPECDX_OLLAMA_URL=http://localhost:11435
 .venv/bin/specdx doctor --profile gpu48                 # digests must equal the cached runs'
 ```
 
-The gate runs for days, so the tunnel must outlive the login shell and must notice a stalled link: the keep-alive options drop a dead link within about 90 s, and a connection failure is not cached as model behaviour, so the gate resumes (§7) once the tunnel is back. `--workers` must never exceed the host's `OLLAMA_NUM_PARALLEL` (here 2), because queued requests can time out and be cached as model behaviour (§4).
+The gate runs for days, so the tunnel must outlive the login shell and must notice a stalled link: the keep-alive options drop a dead link within about 90 s, and a connection failure is not cached as model behaviour, so re-run the same command once the tunnel is back; finished runs come from the cache (§7). `--workers` must never exceed the host's `OLLAMA_NUM_PARALLEL` (here 2), because queued requests can time out and be cached as model behaviour (§4).
 
-**G3, the smoke run (hours).** The base specification at budget 60, then the P1b smoke checks (plan `docs/superpowers/plans/2026-10-11-specdx-p1b.md`, Task 18 Step 5) and θ_m ≥ 0.5 for every population model:
+**G3, the smoke run (hours).** The base specification at budget 60, then the P1b smoke checks (1)–(3) (plan `docs/superpowers/plans/2026-10-11-specdx-p1b.md`, Task 18 Step 5), the v3 reading check that replaces P1b's check (4), and θ_m ≥ 0.5 for every population model. Check (4) tests |θ − 0.75| < 1e-9, v2's prior mode, which v3's θ = σ(μ_α) = 0.731 for a model that never acts can never equal; the pre-registration's G3 amendment (2026-10-19) requires at least one reading for each population model instead:
 
 ```bash
 jq '.budget = 60' experiments/p2-gate.json > work/p2-smoke.json
@@ -193,10 +193,13 @@ SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/specdx run --variant 
   --config work/p2-smoke.json --out results/p2-smoke-base.json --workers 2 2> work/p2-smoke.log
 jq -r '.theta | to_entries[] | "\(.key)\t\(.value)\t"
   + (if .value >= 0.5 then "ok" else "BELOW 0.5" end)' results/p2-smoke-base.json
+jq -r --slurpfile g experiments/p2-gate.json '. as $r | $g[0].models_by_family[][] as $m
+  | ([$r.cells[].readings[$m] // 0] | add // 0) as $n
+  | "\($m)\t\($n) readings\t" + (if $n > 0 then "ok" else "NO READINGS" end)' results/p2-smoke-base.json
 jq '{converged, iterations, fit_start}' results/p2-smoke-base.json
 ```
 
-A model below 0.5 or a failed smoke check stops P2 before the gate (spec v3.1 §8.2, G3). `converged` is reported with the result, never a stop (§3.4; ruling F15). Report the measured seconds per run to the author before launching the gate.
+A model below 0.5, a `NO READINGS` line (a model that never acted, whose θ would otherwise pass vacuously) or a failed smoke check stops P2 before the gate (spec v3.1 §8.2, G3). `converged` is reported with the result, never a stop (§3.4; ruling F15). Report the measured seconds per run to the author before launching the gate.
 
 **Gate v3 (days).** Detached, resumable as in §6 and §7:
 
@@ -206,6 +209,28 @@ SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work setsid nohup .venv/bin/specdx g
   > work/p2-gate.log 2>&1 < /dev/null &
 echo $! > work/p2-gate.pid
 ```
+
+## 12. Reproducing G0 and G1 (P2a, CPU only)
+
+The committed records `results/p2-calibration.json`, `results/p2-g0.*`, `results/p2-sim.*` and `results/p2-g1.md` were produced by the commands below, with these commits:
+- G0 ran on the code of `46beddf` and was recorded in `a97a67c`, together with the calibration, the freeze of `V3Params` into `specdx/infer/anchored.py` and the simulation study. Between `46beddf` and `a97a67c` the only change under `specdx/` is that frozen block, so the simulation and the fit are the same code.
+- G1 ran on the code of `a97a67c` and was recorded in `e9aac9b`. Both read the cached P1 run log, whose `md5sum` must be `db1e1823c66df102648c69eb6a8789b3` before and after.
+
+To reproduce, write to a scratch directory, never over `results/` or `experiments/`. `g0 run` refuses to overwrite the frozen `experiments/p2-g0-params.json` unless `--params-out` is given. The cache is read-only: set `SPECDX_WORK` on the one command that reads it, and never export it.
+
+```bash
+mkdir -p work/repro
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python -m specdx.sim.calibrate \
+  --out work/repro/p2-calibration.json                          # seconds
+.venv/bin/python -m specdx.sim.g0 run --calibration work/repro/p2-calibration.json \
+  --out work/repro/p2-g0 --params-out work/repro/p2-g0-params.json   # ~25 min; exit 0 PASS, 1 FAIL, 2 error
+.venv/bin/specdx simulate --sweep all --config work/repro/p2-calibration.json \
+  --params work/repro/p2-g0-params.json --out work/repro/p2-sim > /dev/null   # ~10 min
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python experiments/p2_replay.py \
+  --out work/repro/p2-g1.md                                     # ~20 s; exit 0 PASS, 1 FAIL, 2 error
+```
+
+Each output should equal the committed file: `cmp work/repro/p2-calibration.json results/p2-calibration.json`; for G0, `diff <(jq -S 'del(.seconds, .calibration)' work/repro/p2-g0.json) <(jq -S 'del(.seconds, .calibration)' results/p2-g0.json)` (the run time and the calibration path differ by construction); `diff work/repro/p2-g1.md results/p2-g1.md`. The G1 replay uses the frozen `V3Params` in the code, so it is the same at any later commit.
 
 ## Bắt đầu nhanh (tiếng Việt)
 

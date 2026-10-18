@@ -21,6 +21,7 @@ from specdx.infer.cells import Cell, Reading
 from specdx.interpreters import executor, harness
 from specdx.scenarios import tguided
 from specdx.sim import calibrate, g0, study
+from specdx.sim import generator as generate_module
 
 ROOT = Path(__file__).parents[1]
 DOC = ROOT / "experiments" / "p2-preregistration.md"
@@ -210,7 +211,31 @@ def test_the_pre_registration_states_each_value() -> None:
                    "No preview ran on the final code", "made on 2026-10-15, before G0 ran",
                    "Under G0 (ii) as registered before 2026-10-15, G0 fails",
                    "weak 0.338 < 0.4", "P2 would have stopped",
-                   "0.084 (amended preview) and 0.089 (G0)", "both upward",
+                   "0.084 (amended preview) and 0.088 (G0)", "both upward",
+                   "kept within 0.25–3",
+                   # final review: M4 (the ε prior), M6 (seen seeds), I1 (G3), I2 (disclosure)
+                   "the posterior mean under Dirichlet(κ·u_c) given all draws",
+                   "equivalently the mode under Dirichlet(1 + κ·u_c)",
+                   "κ pseudo-counts towards u_c", "would apply κ − K",
+                   'the "next ten" whose amended-preview result (weak 0.427) the author had '
+                   "already seen", "out of sample for the selection, but not unseen",
+                   "and at least one reading for each population model",
+                   "**G3 amendment (2026-10-19).**",
+                   "after this file was frozen and before any G2 or G3 run",
+                   "mirroring ruling 21 for G1 (i)", "σ(1.0) = 0.731",
+                   "passes θ ≥ 0.5 vacuously", "v2's Beta(7, 3) mode",
+                   "`docs/RUNNING.md` §11", "`docs/RUNNING.md` §12",
+                   "## 10. What the calibrated simulation exercises",
+                   "`forms` = (0.4, 0.3, 0.3)", "`unanchored` = (0.5, 0.2, 0.3)",
+                   "`kappa_true` = 30", "flat Dirichlet with concentration 0.3",
+                   "the defect rate 0.15", "anchored share is 0.0326 of the value columns",
+                   "seeds 0–9 of the calibrated configuration",
+                   "32.5 on constraint cells", "2.4 on value cells",
+                   "about 93% of the hidden truths are binary constraint cells",
+                   "58.3 on unanchored value cells and 8.1 on anchored cells",
+                   "mainly about hidden requirements on constraint cells",
+                   "37 of G1's 53 real hidden findings",
+                   "the selected prior matches the planted one",
                    "rounds this to ±0.08",
                    "8.06e-5", "`results/p2-g0.json`", "top 8 settings lie within 5.5e-4",
                    "typed without refutation 0/53/19/4",
@@ -255,6 +280,7 @@ def test_section_8_g0_figures_are_those_of_the_committed_record() -> None:
     assert f"mean |θ̂ − θ| {g0_json['criteria']['theta_error']:.4f}" in text
     out = g0_json["out_of_sample"]["f1"]["calibrated"]["v3"]["weak"]
     assert f"weak {out:.3f}" in text
+    assert f"{out - v3['weak']:.3f} (G0)" in text  # §6: the selection-to-out-of-sample gap
     nc = g0_json["nonconverged"]
     assert f"{nc['search']} of {nc['search_fits']} search fits" in text
     assert (f"{nc['chosen']['a3']} of 10 A3 fits and {nc['chosen']['a5']} of 10 A5 fits") in text
@@ -274,6 +300,47 @@ def test_section_8_g1_figures_are_those_of_the_committed_record() -> None:
     assert f"θ_m is {theta[1]} for gpt-oss:20b and {theta[2]} for qwen3:30b-a3b" in text
     assert f"{counts[1]} runs, {counts[2]} cells, {counts[3]} readings" in text
     assert f"typed without refutation {typed[1]}" in text
+
+
+def test_section_10_generator_constants_and_truth_mix_are_the_codes() -> None:
+    text = DOC.read_text(encoding="utf-8")
+    calibration = json.loads((ROOT / "results" / "p2-calibration.json").read_text(encoding="utf-8"))
+    base = g0.load_config(ROOT / "results" / "p2-calibration.json")
+    assert (base.forms, base.unanchored, base.kappa_true, base.defect_rate) == (
+        (0.4, 0.3, 0.3), (0.5, 0.2, 0.3), 30.0, 0.15)
+    assert base.forms == (V3Params().s_mis, V3Params().s_amb, V3Params().s_empty)
+    assert "dirichlet(np.full(len(vocab), 0.3))" in inspect.getsource(generate_module)
+    assert f"{calibration['anchored_share']:.4f} of the value columns" in text
+    assert f"{calibration['constraint_share'] * 100:.1f}% constraint columns" in text
+    assert f"{calibration['pooled_share'] * 100:.1f}% pooled" in text
+    assert text.count(f"{calibration['columns']} columns") >= 1
+    mix: dict[tuple[str, str, bool], int] = {}
+    for seed in range(10):
+        spec = generate_module.generate(dataclasses.replace(base, seed=base.seed + seed))
+        for cid, cell in spec.cells.items():
+            truth = spec.truth[cid]
+            for name, flag in (("hidden", truth.hidden), ("ambiguity", truth.ambiguity)):
+                if flag:
+                    key = (name, cell.kind, cell.anchor is not None)
+                    mix[key] = mix.get(key, 0) + 1
+    per = {k: v / 10 for k, v in mix.items()}
+    assert f"{per['hidden', 'constraint', True]:.1f} on constraint cells" in text
+    assert f"{per['hidden', 'value', True]:.1f} on value cells" in text
+    assert f"{per['ambiguity', 'value', False]:.1f} on unanchored value cells" in text
+    anchored_amb = per["ambiguity", "constraint", True] + per["ambiguity", "value", True]
+    assert f"{anchored_amb:.1f} on anchored cells" in text
+    share = per["hidden", "constraint", True] / (
+        per["hidden", "constraint", True] + per["hidden", "value", True])
+    assert 0.92 < share < 0.94
+
+
+def test_the_anchored_wording_matches_the_corrected_rationale() -> None:
+    source = inspect.getsource(anchored)
+    assert "posterior mean under Dirichlet(κ·u_c)" in source
+    assert "equivalently the mode under Dirichlet(1 + κ·u_c)" in source
+    assert "κ pseudo-counts towards u_c" in source
+    assert "the literal mode of Dirichlet" not in source
+    assert "the accuracy at β = 0" in source
 
 
 def test_the_calibration_and_clip_values_the_document_states_are_in_the_code() -> None:
