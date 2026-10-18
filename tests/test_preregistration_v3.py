@@ -105,7 +105,7 @@ def test_the_committed_g1_record_passed_without_collapse() -> None:
     theta = re.search(r"\(θ: gpt-oss:20b ([0-9.]+) \(\d+ readings\), "
                       r"qwen3:30b-a3b ([0-9.]+) \(\d+ readings\)\)", text)
     assert theta is not None and min(float(theta[1]), float(theta[2])) >= 0.5
-    assert re.search(r"reported as a hidden requirement: (reported|not observable)\.", text)
+    assert re.search(r"reported as a hidden requirement: reported\.", text)
 
 
 def test_the_gate_v3_configuration_is_the_p1_split_and_budgets(monkeypatch, tmp_path) -> None:
@@ -167,12 +167,13 @@ def test_the_pre_registration_states_each_value() -> None:
                    "raises instead of falling back", "every clause of C",
                    # §4 and §6: how G0 is judged, and what was seen before it (F22, F23)
                    "judged on the selection replicates", "for information only",
-                   "results/p2-spikes/g0-preview-full.md", "F1", "F12",
+                   "results/p2-spikes/g0-preview-full.md", "- F1: on an anchored cell an ambiguity",
+                   "- F12 (a), (c): the calibration's plurality",
                    "No grid, threshold or seed was changed after either preview",
                    "results/p2-sim.md",
                    # §6, §7, §8 and §9: what the author decided and what execution ruled
                    "G0's weak-check bar is information only", "option B", "§13 item 15",
-                   "results/p2-spikes/amended-preview/", "0.24–0.34", "about ±0.08",
+                   "results/p2-spikes/amended-preview/", "0.24–0.34",
                    "weak 0.338", "0.427 out of sample",
                    "Every G0-altering change made after the first full preview",
                    "ambiguity and hidden co-occur", "calibration over the population's members",
@@ -190,12 +191,92 @@ def test_the_pre_registration_states_each_value() -> None:
                    "every screened model's readings",
                    "**G0 (`results/p2-g0.md`): PASS**", "**G1 (`results/p2-g1.md`): PASS**",
                    "60 of 1080 search fits", "2 of 10 A3 fits and 1 of 10 A5 fits",
-                   "about 8e-5", "0.989 for gpt-oss:20b and 0.948 for qwen3:30b-a3b",
-                   "results/p2-vocab-diagnosis.md", "43 have nothing to do with vocabulary",
-                   "Only 4 have an out-of-vocabulary MAP value", "T itself writes \"draft\"",
+                   "0.989 for gpt-oss:20b and 0.948 for qwen3:30b-a3b",
+                   "results/p2-vocab-diagnosis.md",
+                   "Only 4 findings have an out-of-vocabulary MAP value",
+                   "T itself writes \"draft\"",
                    "SO-0031, INV-0031 and PAY-0031", "C declares no status domain",
                    "**The R-SO caveat.**", "readers follow T's \"draft\" while C has \"Chờ duyệt\"",
                    "It does not pass because the readers inferred",
                    "**The gate risk.**",
-                   "Status-column mutants may be masked by the base differential"):
+                   "Mutants may be masked by the base differential",
+                   # review round 1: figures, M-step, timeline, diagnosis, caveat
+                   "§13 items 8–15", "option B of A/B/C/D",
+                   "ε_c(k) = (counts_k + rejected_k + κ·u_c(k)) / (total + κ)",
+                   "(0.1, 0.2, 0.5, 1, 2, 5)", "exact EM step of the truncated error model",
+                   "26. **Hidden suppresses weak.**",
+                   "after the amended preview's weak failure was known",
+                   "From the amended preview's weak failure on, every path is outcome-informed",
+                   "No preview ran on the final code", "made on 2026-10-15, before G0 ran",
+                   "Under G0 (ii) as registered before 2026-10-15, G0 fails",
+                   "weak 0.338 < 0.4", "P2 would have stopped",
+                   "0.084 (amended preview) and 0.089 (G0)", "both upward",
+                   "rounds this to ±0.08",
+                   "8.06e-5", "`results/p2-g0.json`", "top 8 settings lie within 5.5e-4",
+                   "typed without refutation 0/53/19/4",
+                   "43 lie outside the status columns", "of the 10 status findings",
+                   "0/54/16/2", "one new hidden finding",
+                   "4 of the 19 reported ambiguity locations and 2 of the 4 weak-check locations",
+                   "absolute 0.4 bar", "18 `apr` cells", "8 absent golden events",
+                   "16 violated constraint clauses",
+                   "No acted run wrote APR-0102", "`evt:APPROVED:APR-0102`",
+                   "G1 (ii) passes nominally", "SpecDx flags a T↔C status conflict"):
         assert needle in text, needle
+
+
+_BASELINES = {"majority": "majority", "anchor_only": "anchor-only", "v2_stage2": "v2 stage 2"}
+
+
+def test_section_8_g0_figures_are_those_of_the_committed_record() -> None:
+    g0_json = json.loads((ROOT / "results" / "p2-g0.json").read_text(encoding="utf-8"))
+    text = DOC.read_text(encoding="utf-8")
+    calibrated = g0_json["criteria"]["f1"]["calibrated"]
+    v3 = calibrated["v3"]
+    best = {}
+    for kind in ("hidden", "ambiguity", "weak"):
+        name = max(_BASELINES, key=lambda b, k=kind: calibrated[b][k])
+        best[kind] = (calibrated[name][kind], _BASELINES[name])
+    assert (f"hidden {v3['hidden']:.3f}, ambiguity {v3['ambiguity']:.3f}, "
+            f"weak {v3['weak']:.3f} (information only)") in text
+    assert ("against the best baseline's "
+            + ", ".join(f"{best[k][0]:.3f} ({best[k][1]})" for k in ("hidden", "ambiguity"))
+            + f" and {best['weak'][0]:.3f} ({best['weak'][1]})") in text
+    assert (f"{v3['hidden'] - best['hidden'][0]:.3f} on hidden and "
+            f"{v3['weak'] - best['weak'][0]:.3f} on weak") in text
+    win = v3["ambiguity"] - best["ambiguity"][0]
+    assert f"the ambiguity win over the best baseline is {win:.3f}" in text
+    gaps = {(arm, kind): g0_json["criteria"]["f1"][arm]["v3"][kind] - max(
+        g0_json["criteria"]["f1"][arm][b][kind] for b in _BASELINES)
+        for arm in g0_json["criteria"]["f1"] for kind in ("hidden", "ambiguity", "weak")}
+    worst = min(gaps, key=gaps.__getitem__)
+    assert worst == ("a3", "weak")
+    assert f"−{-gaps[worst]:.3f} against 0.05 allowed" in text
+    assert f"objective {g0_json['chosen']['objective']:.4f}" in text
+    assert f"mean |θ̂ − θ| {g0_json['criteria']['theta_error']:.4f}" in text
+    out = g0_json["out_of_sample"]["f1"]["calibrated"]["v3"]["weak"]
+    assert f"weak {out:.3f}" in text
+    nc = g0_json["nonconverged"]
+    assert f"{nc['search']} of {nc['search_fits']} search fits" in text
+    assert (f"{nc['chosen']['a3']} of 10 A3 fits and {nc['chosen']['a5']} of 10 A5 fits") in text
+    objectives = sorted((c["objective"] for c in g0_json["candidates"]), reverse=True)
+    assert f"{(objectives[0] - objectives[1]) * 1e5:.2f}e-5" in text
+    assert f"within {(objectives[0] - objectives[7]) * 1e4:.1f}e-4" in text
+
+
+def test_section_8_g1_figures_are_those_of_the_committed_record() -> None:
+    record = (ROOT / "results" / "p2-g1.md").read_text(encoding="utf-8")
+    text = DOC.read_text(encoding="utf-8")
+    theta = re.search(r"\(θ: gpt-oss:20b ([0-9.]+) \(\d+ readings\), "
+                      r"qwen3:30b-a3b ([0-9.]+) \(\d+ readings\)\)", record)
+    counts = re.search(r"(\d+) runs; (\d+) cells .*?; (\d+) readings", record)
+    typed = re.search(r"Typed without refutation \(C/H/A/W\): (\d+/\d+/\d+/\d+)", record)
+    assert theta and counts and typed
+    assert f"θ_m is {theta[1]} for gpt-oss:20b and {theta[2]} for qwen3:30b-a3b" in text
+    assert f"{counts[1]} runs, {counts[2]} cells, {counts[3]} readings" in text
+    assert f"typed without refutation {typed[1]}" in text
+
+
+def test_the_calibration_and_clip_values_the_document_states_are_in_the_code() -> None:
+    assert calibrate.CONCENTRATIONS == (0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
+    assert "min(max(p, 0.51), 0.995)" in inspect.getsource(study)
+    assert "min(max(np.std(cell_logits), 0.25), 3.0)" in inspect.getsource(calibrate)

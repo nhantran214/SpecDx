@@ -177,10 +177,13 @@ Exit status 3 is the G2 stop rule of spec v3.1 §7: fewer than 2 families, or fe
 **The tunnel and the host.** On the GPU host: Ollama 0.30.4 with `OLLAMA_NUM_PARALLEL=2`, `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_KEEP_ALIVE=-1`, and the population's models pulled. Here:
 
 ```bash
-ssh -N -L 11435:localhost:11434 user@gpu-host &        # keep it open for the whole run
+ssh -f -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+  -L 11435:localhost:11434 user@gpu-host               # backgrounds itself; or use autossh -M 0
 export SPECDX_OLLAMA_URL=http://localhost:11435
 .venv/bin/specdx doctor --profile gpu48                 # digests must equal the cached runs'
 ```
+
+The gate runs for days, so the tunnel must outlive the login shell and must notice a stalled link: the keep-alive options drop a dead link within about 90 s, and a connection failure is not cached as model behaviour, so the gate resumes (§7) once the tunnel is back. `--workers` must never exceed the host's `OLLAMA_NUM_PARALLEL` (here 2), because queued requests can time out and be cached as model behaviour (§4).
 
 **G3, the smoke run (hours).** The base specification at budget 60, then the P1b smoke checks (plan `docs/superpowers/plans/2026-10-11-specdx-p1b.md`, Task 18 Step 5) and θ_m ≥ 0.5 for every population model:
 
