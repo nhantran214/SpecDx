@@ -1,0 +1,12 @@
+{
+  "_note": "Gate v3 (spec v3 §8.3): the same 20 development mutants (dev_per_type 5, rng_seed 20261006) under the v2 rule, on the population of spec v3 §7. models_by_family stays empty until G2 re-admits the cached P1b screen under the 0.3 act rate (specdx screen --from results/p1b-screen.json --out results/p2-screen); G2 then freezes that population here, and the gate refuses any other.",
+  "models_by_family": {},
+  "screen": "results/p2-screen.json",
+  "variants": [0, 1, 2],
+  "seeds": [1, 2, 3],
+  "budget": 200,
+  "probe_budget": 100,
+  "localize_budget": 80,
+  "dev_per_type": 5,
+  "rng_seed": 20261006
+}

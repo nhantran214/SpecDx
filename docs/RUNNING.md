@@ -75,7 +75,7 @@ OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve
 
 The examples use `--workers 1`. Use `--workers 2` only on a host where `OLLAMA_NUM_PARALLEL` is at least 2 and both models fit on the GPU together (§4).
 
-Each candidate runs the base specification on scenario `happy`, 3 Tell variants × 3 seeds, through the neutral harness. A model is admitted with act rate ≥ 0.6 and valid-call rate ≥ 0.8. The population keeps at most 2 models per family and 4 in all, and needs at least 2 families. With fewer, the command exits with status 3 and prints STOP: P1b stops and reports, and the thresholds are never lowered.
+Each candidate runs the base specification on scenario `happy`, 3 Tell variants × 3 seeds, through the neutral harness. Under spec v3.1 §7 a model is admitted with act rate ≥ 0.3 and valid-call rate ≥ 0.8. The population keeps at most 2 models per family and 4 in all, and needs at least 2 families and at least 4 acting models. With fewer, the command exits with status 3 and prints STOP: the work stops and reports, and the thresholds are never lowered. (P1b screened under v2's act rate 0.6; P2 re-admits that cached screen, §11.)
 
 Freeze the population into the gate configuration:
 
@@ -159,6 +159,51 @@ The headline is PASSED, NOT PASSED or INCOMPLETE (a mutant could not run). After
 | `nvidia-smi failed: … Driver/library version mismatch` | The NVIDIA driver was updated without a reboot, and Ollama cannot use the GPU. Reboot the GPU host (or reload the `nvidia` kernel modules) before any run. |
 | Runs take many minutes each | Check that `ollama ps` shows `100% GPU` for the loaded model; a model larger than the GPU runs partly on the CPU. |
 
+## 11. P2b: G2, G3 and gate v3 on a 48 GB host
+
+P2a (no GPU) froze the v3.1 parameters at G0 and passed G1; `experiments/p2-preregistration.md` holds every value. P2b runs on a 48 GB GPU reached over an SSH tunnel, with SpecDx and PostgreSQL on this machine.
+
+**G2, the population (no GPU, no run).** Re-admit the cached P1b screen under the 0.3 act rate, which must admit at least 2 families and at least 4 acting models, and freeze its population into the gate configuration:
+
+```bash
+.venv/bin/specdx screen --from results/p1b-screen.json --out results/p2-screen
+jq --slurpfile s results/p2-screen.json '.models_by_family = $s[0].population' \
+  experiments/p2-gate.json > work/p2-gate.json && mv work/p2-gate.json experiments/p2-gate.json
+.venv/bin/python -m pytest tests/test_preregistration_v3.py
+```
+
+Exit status 3 is the G2 stop rule of spec v3.1 §7: fewer than 2 families, or fewer than 4 acting models, were admitted. P2 then stops and reports. Otherwise commit `results/p2-screen.*` and `experiments/p2-gate.json`.
+
+**The tunnel and the host.** On the GPU host: Ollama 0.30.4 with `OLLAMA_NUM_PARALLEL=2`, `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_KEEP_ALIVE=-1`, and the population's models pulled. Here:
+
+```bash
+ssh -N -L 11435:localhost:11434 user@gpu-host &        # keep it open for the whole run
+export SPECDX_OLLAMA_URL=http://localhost:11435
+.venv/bin/specdx doctor --profile gpu48                 # digests must equal the cached runs'
+```
+
+**G3, the smoke run (hours).** The base specification at budget 60, then the P1b smoke checks (plan `docs/superpowers/plans/2026-10-11-specdx-p1b.md`, Task 18 Step 5) and θ_m ≥ 0.5 for every population model:
+
+```bash
+jq '.budget = 60' experiments/p2-gate.json > work/p2-smoke.json
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/specdx run --variant base \
+  --config work/p2-smoke.json --out results/p2-smoke-base.json --workers 2 2> work/p2-smoke.log
+jq -r '.theta | to_entries[] | "\(.key)\t\(.value)\t"
+  + (if .value >= 0.5 then "ok" else "BELOW 0.5" end)' results/p2-smoke-base.json
+jq '{converged, iterations, fit_start}' results/p2-smoke-base.json
+```
+
+A model below 0.5 or a failed smoke check stops P2 before the gate (spec v3.1 §8.2, G3). `converged` is reported with the result, never a stop (§3.4; ruling F15). Report the measured seconds per run to the author before launching the gate.
+
+**Gate v3 (days).** Detached, resumable as in §6 and §7:
+
+```bash
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work setsid nohup .venv/bin/specdx gate \
+  --config experiments/p2-gate.json --out results/p2-gate.json --workers 2 \
+  > work/p2-gate.log 2>&1 < /dev/null &
+echo $! > work/p2-gate.pid
+```
+
 ## Bắt đầu nhanh (tiếng Việt)
 
 1. Cài Python 3.13, Docker, Ollama (0.30 trở lên) và poppler.
@@ -170,7 +215,7 @@ The headline is PASSED, NOT PASSED or INCOMPLETE (a mutant could not run). After
    ```
 3. Kiểm tra máy và chọn cấu hình: `.venv/bin/specdx doctor`. Lệnh này gợi ý một profile (gpu16, gpu24, gpu48, gpu80) và in các lệnh `ollama pull` còn thiếu.
 4. Nếu Ollama chạy ở máy GPU khác: trên máy đó chạy `OLLAMA_HOST=0.0.0.0:11434 OLLAMA_NUM_PARALLEL=2 ollama serve`; trên máy này đặt `export SPECDX_OLLAMA_URL=http://may-gpu:11434` (nhiều máy thì cách nhau bằng dấu phẩy). Lưu ý: `--workers` không được vượt quá `OLLAMA_NUM_PARALLEL` của máy Ollama (mặc định 1), vì yêu cầu phải xếp hàng có thể hết thời gian chờ và bị ghi vĩnh viễn vào cache như hành vi của mô hình; nếu không chắc, dùng `--workers 1`.
-5. Sàng lọc năng lực: `.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 1`. Mã thoát 3 nghĩa là STOP: ít hơn 2 họ mô hình đạt, P1b dừng. Các lệnh ở đây dùng `--workers 1`; chỉ dùng `--workers 2` khi máy Ollama có `OLLAMA_NUM_PARALLEL` ≥ 2 và cả hai mô hình cùng vừa trong GPU (mục 4).
+5. Sàng lọc năng lực: `.venv/bin/specdx screen --profile gpu16 --out results/p1b-screen --workers 1`. Mã thoát 3 nghĩa là STOP: theo spec v3.1 §7 (act rate ≥ 0,3), ít hơn 2 họ mô hình hoặc ít hơn 4 mô hình hành động được nhận, công việc dừng. Các lệnh ở đây dùng `--workers 1`; chỉ dùng `--workers 2` khi máy Ollama có `OLLAMA_NUM_PARALLEL` ≥ 2 và cả hai mô hình cùng vừa trong GPU (mục 4).
 6. Ghi quần thể vào cấu hình gate (lệnh `jq` ở mục 5), rồi chạy gate nền: `setsid nohup .venv/bin/specdx gate --config experiments/p1b-gate.json --out results/p1b-gate.json --workers 1 > work/p1b-gate.log 2>&1 < /dev/null &`.
 7. Tạm dừng: `kill -STOP <pid>`; chạy tiếp: `kill -CONT <pid>`. Không bao giờ chạy hai tiến trình trên cùng một cơ sở dữ liệu. Nếu bị ngắt, chạy lại đúng lệnh cũ: các lần chạy đã xong được lấy từ bộ nhớ đệm.
 8. Kết quả nằm ở `results/p1b-gate.md`.
