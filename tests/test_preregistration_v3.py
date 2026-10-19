@@ -221,6 +221,12 @@ def test_the_pre_registration_states_each_value() -> None:
                    "already seen", "out of sample for the selection, but not unseen",
                    "and at least one reading for each population model",
                    "**G3 amendment (2026-10-19).**",
+                   # G3 amendment 2: check (1) refined to runaway generations
+                   "**G3 amendment 2 (2026-10-19): check (1).**",
+                   "check (4) is replaced and check (1) is refined",
+                   "n_decoded / tg ≥ 0.9 × 180 s", "decoding 12,362 tokens",
+                   "this one relaxes G3", "no G3 run has been made",
+                   "`specdx/eval/ollama_log.py`",
                    "after this file was frozen and before any G2 or G3 run",
                    "mirroring ruling 21 for G1 (i)", "σ(1.0) = 0.731",
                    "passes θ ≥ 0.5 vacuously", "v2's Beta(7, 3) mode",

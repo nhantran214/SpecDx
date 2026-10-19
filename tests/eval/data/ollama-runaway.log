@@ -1,0 +1,13 @@
+slot launch_slot_: id  0 | task 7993 | processing task, is_child = 0
+slot update_slots: id  0 | task 7993 | new prompt, n_ctx_slot = 16384, n_keep = 4, task.n_tokens = 847
+slot update_slots: id  0 | task 7993 | cached n_tokens = 5, memory_seq_rm [5, end)
+slot update_slots: id  0 | task 7993 | cached n_tokens = 517, memory_seq_rm [517, end)
+slot init_sampler: id  0 | task 7993 | init sampler, took 0.10 ms, tokens: text = 847, total = 847
+slot print_timing: id  0 | task 7993 | n_decoded =    100, tg =  77.74 t/s
+slot print_timing: id  0 | task 7993 | n_decoded =    334, tg =  77.89 t/s
+slot print_timing: id  0 | task 7993 | n_decoded =  11986, tg =  69.38 t/s
+slot print_timing: id  0 | task 7993 | n_decoded =  12174, tg =  69.27 t/s
+slot print_timing: id  0 | task 7993 | n_decoded =  12362, tg =  69.15 t/s
+[GIN] 2026/10/19 - 09:48:31 | 500 |          3m0s |       127.0.0.1 | POST     "/api/chat"
+srv          stop: cancel task, id_task = 7993
+slot      release: id  0 | task 7993 | stop processing: n_tokens = 13248, truncated = 0

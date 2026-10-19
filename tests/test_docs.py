@@ -95,3 +95,9 @@ def test_the_reproduce_block_names_the_commits_and_the_commands() -> None:
     g0_seconds = json.loads((RUNNING.parents[1] / "results" / "p2-g0.json")
                             .read_text(encoding="utf-8"))["seconds"]
     assert round(g0_seconds) == 3354
+
+
+def test_g3_check_1_follows_amendment_2() -> None:
+    text = RUNNING.read_text(encoding="utf-8")
+    assert "G3 amendment 2" in text
+    assert "python -m specdx.eval.ollama_log --timeouts N" in text
