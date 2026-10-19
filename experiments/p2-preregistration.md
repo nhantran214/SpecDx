@@ -175,6 +175,6 @@ Per specification, over seeds 0–9 of the calibrated configuration (base arm), 
 - **ambiguity:** 58.3 on unanchored value cells and 8.1 on anchored cells (7.6 constraint, 0.5 value).
 
 What this means for reading G0:
-- G0 (ii)'s "hidden ≥ 0.6" is evidence mainly about hidden requirements on constraint cells. It barely exercises value cells with multi-valued vocabularies, where 37 of G1's 53 real hidden findings are (53 findings, 16 of them violated constraint clauses, §9).
+- G0 (ii)'s "hidden ≥ 0.6" is evidence mainly about hidden requirements on constraint cells. It barely exercises value and event cells, where 37 of G1's 53 real hidden findings are (53 findings, 16 of them violated constraint clauses, §9; the 37 are 29 value cells and 8 event cells, present or absent). Only the value cells among them have multi-valued vocabularies.
 - The ambiguity and weak truth counts are set mostly by the uncalibrated `unanchored` constant, not by calibration.
 - The form shares G0 chose (0.4, 0.3, 0.3; §4) equal the generator's planted `forms`. This is not a leak (the shares were selected from a grid of three by simulated F1), but it is a property of selecting a prior by simulation: the selected prior matches the planted one.

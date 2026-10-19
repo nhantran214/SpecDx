@@ -84,3 +84,14 @@ def test_the_reproduce_block_names_the_commits_and_the_commands() -> None:
                    "--params-out", "specdx simulate --sweep all", "experiments/p2_replay.py",
                    "db1e1823c66df102648c69eb6a8789b3"):
         assert needle in section, needle
+    # the scratch directory lies outside work/, the run cache p2_replay refuses to write to
+    assert "out=$(mktemp -d)" in section and "work/repro" not in section
+    commands = section.split("```bash\n", 1)[1].split("```", 1)[0]
+    assert "--out work/" not in commands and "--out \"work/" not in commands
+    assert commands.count('"$out/') >= 8
+    # the recorded run times (results/p2-g0.json seconds 3354; progress ledger: study 1195 s)
+    assert "about 56 min (3354 s recorded)" in section
+    assert "about 20 min (1195 s recorded)" in section
+    g0_seconds = json.loads((RUNNING.parents[1] / "results" / "p2-g0.json")
+                            .read_text(encoding="utf-8"))["seconds"]
+    assert round(g0_seconds) == 3354

@@ -216,21 +216,21 @@ The committed records `results/p2-calibration.json`, `results/p2-g0.*`, `results
 - G0 ran on the code of `46beddf` and was recorded in `a97a67c`, together with the calibration, the freeze of `V3Params` into `specdx/infer/anchored.py` and the simulation study. Between `46beddf` and `a97a67c` the only change under `specdx/` is that frozen block, so the simulation and the fit are the same code.
 - G1 ran on the code of `a97a67c` and was recorded in `e9aac9b`. Both read the cached P1 run log, whose `md5sum` must be `db1e1823c66df102648c69eb6a8789b3` before and after.
 
-To reproduce, write to a scratch directory, never over `results/` or `experiments/`. `g0 run` refuses to overwrite the frozen `experiments/p2-g0-params.json` unless `--params-out` is given. The cache is read-only: set `SPECDX_WORK` on the one command that reads it, and never export it.
+To reproduce, write to a scratch directory outside the repository's `work/` (the run cache; `p2_replay` refuses `--out` under it) and outside `results/` and `experiments/`; the block below makes one with `mktemp -d`, so run it as one block from the repository root. `g0 run` refuses to overwrite the frozen `experiments/p2-g0-params.json` unless `--params-out` is given. The cache is read-only: set `SPECDX_WORK` on the one command that reads it, and never export it.
 
 ```bash
-mkdir -p work/repro
+out=$(mktemp -d); echo "$out"
 SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python -m specdx.sim.calibrate \
-  --out work/repro/p2-calibration.json                          # seconds
-.venv/bin/python -m specdx.sim.g0 run --calibration work/repro/p2-calibration.json \
-  --out work/repro/p2-g0 --params-out work/repro/p2-g0-params.json   # ~25 min; exit 0 PASS, 1 FAIL, 2 error
-.venv/bin/specdx simulate --sweep all --config work/repro/p2-calibration.json \
-  --params work/repro/p2-g0-params.json --out work/repro/p2-sim > /dev/null   # ~10 min
+  --out "$out/p2-calibration.json"                              # seconds
+.venv/bin/python -m specdx.sim.g0 run --calibration "$out/p2-calibration.json" \
+  --out "$out/p2-g0" --params-out "$out/p2-g0-params.json"      # about 56 min (3354 s recorded); exit 0 PASS, 1 FAIL, 2 error
+.venv/bin/specdx simulate --sweep all --config "$out/p2-calibration.json" \
+  --params "$out/p2-g0-params.json" --out "$out/p2-sim" > /dev/null   # about 20 min (1195 s recorded)
 SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python experiments/p2_replay.py \
-  --out work/repro/p2-g1.md                                     # ~20 s; exit 0 PASS, 1 FAIL, 2 error
+  --out "$out/p2-g1.md"                                         # about 20 s; exit 0 PASS, 1 FAIL, 2 error
 ```
 
-Each output should equal the committed file: `cmp work/repro/p2-calibration.json results/p2-calibration.json`; for G0, `diff <(jq -S 'del(.seconds, .calibration)' work/repro/p2-g0.json) <(jq -S 'del(.seconds, .calibration)' results/p2-g0.json)` (the run time and the calibration path differ by construction); `diff work/repro/p2-g1.md results/p2-g1.md`. The G1 replay uses the frozen `V3Params` in the code, so it is the same at any later commit.
+Each output should equal the committed file: `cmp "$out/p2-calibration.json" results/p2-calibration.json`; for G0, `diff <(jq -S 'del(.seconds, .calibration)' "$out/p2-g0.json") <(jq -S 'del(.seconds, .calibration)' results/p2-g0.json)` (the run time and the calibration path differ by construction); `diff "$out/p2-g1.md" results/p2-g1.md`. The G1 replay uses the frozen `V3Params` in the code, so it is the same at any later commit.
 
 ## Bắt đầu nhanh (tiếng Việt)
 

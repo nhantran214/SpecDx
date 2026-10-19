@@ -235,6 +235,8 @@ def test_the_pre_registration_states_each_value() -> None:
                    "58.3 on unanchored value cells and 8.1 on anchored cells",
                    "mainly about hidden requirements on constraint cells",
                    "37 of G1's 53 real hidden findings",
+                   "the 37 are 29 value cells and 8 event cells",
+                   "Only the value cells among them have multi-valued vocabularies",
                    "the selected prior matches the planted one",
                    "rounds this to ±0.08",
                    "8.06e-5", "`results/p2-g0.json`", "top 8 settings lie within 5.5e-4",
