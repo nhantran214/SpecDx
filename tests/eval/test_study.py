@@ -248,6 +248,23 @@ def test_arms_that_read_specdx_runs_are_charged_those_runs_only(monkeypatch, tmp
     assert r.costs["benchguard"]["H1"]["requests"] == 2
 
 
+def test_run_split_totals_the_calls_near_the_context_window_per_arm(monkeypatch,
+                                                                    tmp_path) -> None:
+    from specdx.baselines.api import BaselineOutput
+
+    def near(inp, **k):
+        return BaselineOutput([], extra={"near_ctx": 2 if inp == "V1" else 0})
+
+    def silent(inp, **k):
+        return BaselineOutput([], extra={"near_ctx": 0})
+
+    r = _fake_split(monkeypatch, {"whowhen": near, "benchguard": silent, "jest": _empty})(
+        tmp_path / "out.jsonl")
+    assert r.near_ctx == {"whowhen": 2, "benchguard": 0}
+    back = SplitResult.from_json(r.to_json())
+    assert back.near_ctx == r.near_ctx and json.loads(r.to_json())["near_ctx"]["whowhen"] == 2
+
+
 def test_equal_cost_reaches_specdx_final_report(monkeypatch, tmp_path) -> None:
     from specdx.baselines.api import BaselineOutput
     from specdx.cost import Cost

@@ -249,6 +249,8 @@ Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to 
 
 `study` exits 4 unless the gate PASSED (`results/p2-gate.json`), `experiments/p3-baselines-prereg.json` is committed, the working tree has no uncommitted changes (spec §3.7), and `experiments/p2-gate.json` and `results/p2-gate.json` still have the sha256 the freeze recorded (spec §9.8). Before launching it checks that the first 6505 lines of `work/runs.jsonl` and the baseline cache lines recorded at the freeze are unchanged. `./run_all.sh all [--yes]` runs g2, preflight, G3, the gate and the steps above one after another in the foreground (`FOREGROUND=1`; run it inside tmux). Before the gate it reports the measured seconds per run and asks; `--yes` skips the question, and answering no stops `all` with exit 0. When the gate is NOT PASSED, `all` runs `baselines-dev` and the dev report, freezes nothing, and exits 4. In the foreground each long step still writes its pid to `work/<step>.pid` while it runs, so `./run_all.sh status` (the gate, baselines-dev and study processes, and the size of both caches) and the guard against a second process see it. `./run_all.sh s2` exits 2: S2 (τ²-bench) is not built yet.
 
+Before any GPU time, `./run_all.sh local` also runs every baseline arm on its smoke base with one model, and fails when an LLM call's prompt plus output budget reached `num_ctx` (16384): each result counts those calls per arm in `near_ctx`.
+
 The commands `run_all.sh` runs, for reference (`study` accepts only these two files):
 
 ```bash

@@ -29,7 +29,7 @@ from specdx.baselines.api import (
     scenario_text,
     tell_excerpt,
 )
-from specdx.baselines.llm import DigestMismatch
+from specdx.baselines.llm import DigestMismatch, near_ctx
 from specdx.cost import Cost
 from specdx.spec.clauses import describe
 from specdx.types import Defect, InfrastructureError
@@ -151,6 +151,7 @@ class GatewayClient(LLMClient):
                                    max_tokens=MAX_TOKENS))
         self.gateway, self.model, self.cost = gateway, model, Cost()
         self.fatal: Exception | None = None
+        self.near_ctx = 0  # calls whose prompt plus output budget reached num_ctx
 
     def complete(self, prompt, system_prompt="", temperature=None, max_tokens=None):
         if self.fatal is not None:
@@ -158,13 +159,15 @@ class GatewayClient(LLMClient):
         msgs = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + [
             {"role": "user", "content": prompt}]
         t = self.config.resolved_temperature() if temperature is None else temperature
+        budget = max_tokens or self.config.max_tokens
         try:
             r = self.gateway.chat(self.model, msgs, options={"temperature": t, "seed": 1},
-                                  max_tokens=max_tokens or self.config.max_tokens)
+                                  max_tokens=budget)
         except (InfrastructureError, DigestMismatch) as exc:
             self.fatal = exc
             raise
         self.cost = self.cost + r.cost
+        self.near_ctx += near_ctx(r, budget)
         if r.status != "ok":
             raise RuntimeError(f"gateway error: {r.error}")
         return LLMResponse(content=r.text, model=self.model, tokens_prompt=r.cost.prompt_tokens,
@@ -198,7 +201,8 @@ class BenchGuard:
         except Exception as exc:  # noqa: BLE001 - a broken audit fails this spec only
             if client.fatal is not None:
                 raise client.fatal from exc
-            return BaselineOutput([], client.cost, failure=f"{type(exc).__name__}: {exc}")
+            return BaselineOutput([], client.cost, failure=f"{type(exc).__name__}: {exc}",
+                                  extra={"near_ctx": client.near_ctx})
         if client.fatal is not None:
             raise client.fatal
         ids = set(inp.variant.corpus.sentence_ids())
@@ -207,7 +211,8 @@ class BenchGuard:
             for d in map_finding(f, files, ids):
                 if d.key not in merged or d.score > merged[d.key].score:
                     merged[d.key] = d
-        extra: dict[str, object] = {"findings": len(report.findings)}
+        extra: dict[str, object] = {"findings": len(report.findings),
+                                    "near_ctx": client.near_ctx}
         if not getattr(inp, "golden_materialised", True):
             extra["golden"] = "unmaterialised"  # the solution has no derived values
         return BaselineOutput(sorted(merged.values(), key=lambda d: (-d.score, d.location)),

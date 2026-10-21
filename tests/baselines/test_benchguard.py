@@ -158,3 +158,21 @@ def test_an_outage_or_digest_mismatch_stops_the_run(tmp_path, tell_corpus, pack,
     with pytest.raises(type(exc)):
         REGISTRY["benchguard"].run(_input(G(), tell_corpus, pack, golden), model="m")
     assert G.calls == 1  # later tasks fail fast in the client, never reach the gateway
+
+
+def test_the_client_counts_calls_near_the_context_window() -> None:
+    from specdx.baselines.benchguard import GatewayClient
+    from specdx.baselines.llm import Reply
+    from specdx.cost import Cost
+
+    class G:
+        prompt = 0
+
+        def chat(self, model, messages, **kw):
+            assert kw["max_tokens"] == 4096
+            return Reply("{}", Cost(1, G.prompt), "ok")
+
+    client = GatewayClient(G(), "m")
+    for G.prompt in (12_000, 12_288, 13_000):  # + 4096: 16096, 16384, 17096
+        client.complete("p")
+    assert client.near_ctx == 2

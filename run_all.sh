@@ -331,6 +331,12 @@ stage_local() {
     jq -r '.failures | to_entries[] | select(.value | length > 0)
       | "  \(.key) failed on: \(.value | keys | join(", "))"' "$smoke/baselines-base.json"
     ok "baselines ran on the base: $(jq '.defects | length' "$smoke/baselines-base.json") arms"
+    # A call whose prompt plus output budget reaches num_ctx may have been cut (spec §9.8).
+    local near
+    near=$(jq -r '(.near_ctx // {}) | to_entries[] | select(.value > 0) | "\(.key) (\(.value) calls)"' \
+      "$smoke/baselines-base.json" | paste -sd, -)
+    [[ -z $near ]] || fail "LLM calls reached num_ctx 16384 (prompt + output budget) for: $near"
+    ok "no baseline call reached num_ctx"
   fi
 
   check_cache

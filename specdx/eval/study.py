@@ -85,6 +85,8 @@ class SplitResult:
     checkpoints: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     prereg_sha256: str | None = None
     taus: dict[str, float] | None = None
+    # Per arm label, the LLM calls whose prompt plus output budget reached num_ctx (§9.8).
+    near_ctx: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> str:
         frozen: dict[str, Any] = {}
@@ -92,6 +94,8 @@ class SplitResult:
             frozen["prereg_sha256"] = self.prereg_sha256
         if self.taus is not None:
             frozen["taus"] = dict(sorted(self.taus.items()))
+        if self.near_ctx:
+            frozen["near_ctx"] = dict(sorted(self.near_ctx.items()))
         return json.dumps({
             **frozen,
             "split": self.split,
@@ -116,7 +120,7 @@ class SplitResult:
                    {a: {s: [_defect(d) for d in ds] for s, ds in by.items()}
                     for a, by in raw["defects"].items()},
                    raw["costs"], raw["failures"], raw.get("checkpoints", {}),
-                   raw.get("prereg_sha256"), raw.get("taus"))
+                   raw.get("prereg_sha256"), raw.get("taus"), raw.get("near_ctx", {}))
 
 
 def _reports(result: SplitResult, arm: str, tau: float, primary: bool):
@@ -285,5 +289,8 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
                     out = BaselineOutput([], failure=f"{type(exc).__name__}: {exc}")
                 cost = read + out.cost if arm.name in CONSUMES_RUNS else out.cost
                 record(arm.label, spec, out.defects, cost, out.failure)
+                if "near_ctx" in out.extra:
+                    result.near_ctx[arm.label] = (result.near_ctx.get(arm.label, 0)
+                                                  + int(out.extra["near_ctx"]))
             done(spec)
     return result

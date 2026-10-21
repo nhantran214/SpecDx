@@ -30,6 +30,7 @@ from specdx.baselines.api import (
     scenario_text,
     tell_excerpt,
 )
+from specdx.baselines.llm import near_ctx
 from specdx.cost import Cost
 from specdx.spec.clauses import describe
 from specdx.types import Behaviour, Defect
@@ -214,14 +215,15 @@ class WhoWhen:
         runs = {b.run_key: b for b in inp.report.behaviours}
         picked = sample_runs(inp.violated, ok)
         excerpt = "\n".join(f"[T:{sid}] {t}" for sid, t in tell_excerpt(inp))
-        cost, verdicts, unparsed = Cost(), {}, 0
+        cost, verdicts, unparsed, near = Cost(), {}, 0, 0
 
         def ask(system: str, prompt: str) -> str | None:
-            nonlocal cost
+            nonlocal cost, near
             r = gateway.chat(model, [{"role": "system", "content": system},
                                      {"role": "user", "content": prompt}],
                              options=OPTIONS, max_tokens=MAX_TOKENS)
             cost = cost + r.cost
+            near += near_ctx(r, MAX_TOKENS)
             return r.text if r.status == "ok" else None
 
         for key in sorted({r for rs in picked.values() for r in rs}, key=_h):
@@ -256,7 +258,8 @@ class WhoWhen:
                                   tuple(sorted({runs[k].scenario.id for k in hits})),
                                   tuple(hits), len(hits) / len(keys)))
         return BaselineOutput(sorted(out, key=lambda d: (-d.score, d.location)), cost,
-                              extra={"judged": len(verdicts), "unparsed": unparsed})
+                              extra={"judged": len(verdicts), "unparsed": unparsed,
+                                     "near_ctx": near})
 
     @staticmethod
     def _localise(strategy: str | None, log: list[dict[str, str]], problem: str, answer: str,

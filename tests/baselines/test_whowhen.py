@@ -125,3 +125,21 @@ def test_a_specification_with_no_failing_runs_yields_an_empty_output() -> None:
     inp.violated = {}
     out = whowhen.REGISTRY["whowhen"].run(inp, model="m", strategy="all_at_once")
     assert out.defects == [] and out.failure is None and out.cost.requests == 0
+
+
+def test_calls_near_the_context_window_are_counted() -> None:
+    from specdx.baselines import whowhen
+    from specdx.baselines.llm import Reply
+    from specdx.cost import Cost
+
+    class Big(_Scripted):
+        def chat(self, model, messages, **kw):
+            self.calls.append((messages, kw))
+            tokens = 16384 - 1024 if "Verdict:" in messages[-1]["content"] else 15000
+            return Reply(self.answer(messages[-1]["content"]), Cost(1, tokens), "ok")
+
+    out = whowhen.REGISTRY["whowhen"].run(whowhen._toy_input(Big(
+        lambda p: "Verdict: agent_error" if "Verdict:" in p else "Step Number: 0")),
+        model="m", strategy="all_at_once")
+    assert out.extra["near_ctx"] == 1  # 15000 + 1024 < 16384; 15360 + 1024 reaches it
+    assert _run(_Scripted(lambda p: "Step Number: 0"), "all_at_once").extra["near_ctx"] == 0

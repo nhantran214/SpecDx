@@ -41,6 +41,12 @@ class Reply:
     cached: bool = False
 
 
+def near_ctx(reply: Reply, max_tokens: int | None) -> bool:
+    """The prompt plus the output budget reaches num_ctx: Ollama may have cut the prompt or
+    the reply (spec §9.8). An error reply carries no prompt count and is never flagged."""
+    return reply.cost.prompt_tokens + (max_tokens or 0) >= NUM_CTX
+
+
 class Gateway:
     def __init__(self, base_url: str, cache_path: Path,
                  pinned: Mapping[str, str] | None = None, *,
