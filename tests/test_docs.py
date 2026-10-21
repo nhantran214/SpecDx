@@ -9,7 +9,8 @@ import pytest
 
 from specdx.cli import main
 
-RUNNING = Path(__file__).parents[1] / "docs" / "RUNNING.md"
+ROOT = Path(__file__).parents[1]
+RUNNING = ROOT / "docs" / "RUNNING.md"
 
 
 def _subcommands(capsys) -> set[str]:
@@ -101,3 +102,21 @@ def test_g3_check_1_follows_amendment_2() -> None:
     text = RUNNING.read_text(encoding="utf-8")
     assert "G3 amendment 2" in text
     assert "python -m specdx.eval.ollama_log --timeouts N" in text
+
+
+def test_run_all_offers_the_comparison_steps() -> None:
+    import subprocess
+
+    text = (ROOT / "run_all.sh").read_text(encoding="utf-8")
+    for step in ("baselines-dev)", "freeze-baselines)", "study)", "report)", "s2)"):
+        assert step in text
+    assert "exit 4" in text and "FOREGROUND" in text
+    usage = subprocess.run(["bash", str(ROOT / "run_all.sh")], capture_output=True, text=True)
+    assert usage.returncode == 2 and "baselines-dev" in usage.stdout + usage.stderr
+
+
+def test_s2_says_it_is_not_built_and_exits_2() -> None:
+    import subprocess
+
+    r = subprocess.run(["bash", str(ROOT / "run_all.sh"), "s2"], capture_output=True, text=True)
+    assert r.returncode == 2 and "τ²" in (r.stdout + r.stderr)

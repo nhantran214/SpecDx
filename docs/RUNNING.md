@@ -232,6 +232,40 @@ SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python experiments/p2
 
 Each output should equal the committed file: `cmp "$out/p2-calibration.json" results/p2-calibration.json`; for G0, `diff <(jq -S 'del(.seconds, .calibration)' "$out/p2-g0.json") <(jq -S 'del(.seconds, .calibration)' results/p2-g0.json)` (the run time and the calibration path differ by construction); `diff "$out/p2-g1.md" results/p2-g1.md`. The G1 replay uses the frozen `V3Params` in the code, so it is the same at any later commit.
 
+## 13. The comparison study (baselines)
+
+Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to B5, the truth-inference arms and JEST). `run_all.sh` drives it; each step checks the one before it.
+
+**Setup.** Install the baselines' dependencies once: `.venv/bin/python -m pip install -e ".[baselines]"` (crowd-kit, python-sat, and BenchGuard pinned at commit `7d6a52e`). The LLM arms reuse the population models frozen in `experiments/p2-gate.json`, through the same `SPECDX_OLLAMA_URL` tunnel, so nothing extra needs to be pulled; a model that is missing, or has another digest than the population runs, stops the run before any call. The clones under `baseline/` are reference copies only: nothing is imported from them.
+
+**The steps, in order:**
+
+| Step | Writes | Notes |
+|---|---|---|
+| `./run_all.sh baselines-dev` | `results/p3-baselines-dev.json` | every arm, every population model, on the dev split; detached (pid and log `work/p3-baselines-dev.*`) |
+| `./run_all.sh freeze-baselines` | `experiments/p3-baselines-prereg.{json,md}` | chooses each baseline's arm and τ on dev only, records the line count and md5 of `work/baseline-llm.jsonl`, and commits both files with `results/p3-baselines-dev.json`; a committed pre-registration is never replaced |
+| `./run_all.sh study` | `results/p3-study.json` | SpecDx and the frozen baselines on the test split (days); detached (`work/p3-study.*`) |
+| `./run_all.sh report` | `results/p3-report.md` | tables A and B and the statistics, for dev, and for test once `results/p3-study.json` exists |
+
+`study` exits 4 unless the gate PASSED (`results/p2-gate.json`), `experiments/p3-baselines-prereg.json` is committed and the working tree has no uncommitted changes (spec §3.7). Before launching it checks that the first 6505 lines of `work/runs.jsonl` and the baseline cache lines recorded at the freeze are unchanged. `./run_all.sh all` runs g2, preflight, G3, the gate and the steps above one after another in the foreground (`FOREGROUND=1`; run it inside tmux); when the gate is NOT PASSED it still produces the dev comparison and its report, then exits 4. `./run_all.sh status` shows the gate, baselines-dev and study processes and the size of both caches. `./run_all.sh s2` exits 2: S2 (τ²-bench) is not built yet.
+
+The commands `run_all.sh` runs, for reference (`study` accepts only these two files):
+
+```bash
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localhost:11435 \
+  .venv/bin/specdx baselines --split dev --config experiments/p2-gate.json \
+  --out results/p3-baselines-dev.json --workers 2
+.venv/bin/specdx freeze-baselines --from results/p3-baselines-dev.json \
+  --out experiments/p3-baselines-prereg --cache work/baseline-llm.jsonl
+SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localhost:11435 \
+  .venv/bin/specdx study --split test --config experiments/p2-gate.json \
+  --baselines experiments/p3-baselines-prereg.json --out results/p3-study.json --workers 2
+.venv/bin/specdx report --dev results/p3-baselines-dev.json --test results/p3-study.json \
+  --out results/p3-report.md
+```
+
+**Pause and resume.** Pause and resume a detached step as in §7 (`kill -STOP` / `kill -CONT` on the pid in `work/p3-*.pid`), and never start a second process on the same database. If a step stops (the tunnel drops, the machine restarts), re-run the same step: SpecDx's runs come from `work/runs.jsonl` and the baselines' LLM calls from `work/baseline-llm.jsonl`, so the finished work is served from both caches and the rerun writes the same result file. Both caches are append-only.
+
 ## Bắt đầu nhanh (tiếng Việt)
 
 1. Cài Python 3.13, Docker, Ollama (0.30 trở lên) và poppler.
