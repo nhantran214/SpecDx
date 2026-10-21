@@ -473,9 +473,35 @@ def test_an_outage_during_a_nudge_round_trip_is_flagged_and_keeps_the_counts(db,
     assert len(calls) == 6  # the answer, then the nudge's five attempts
     assert executor.infra_failure is not None and "ConnectError" in executor.infra_failure
     assert envelope.status is ResultStatus.ERROR
+    # Every attempt is a request, the five failed ones too.
     assert envelope.usage["harness"] == {"nudges": 1, "parsed_from_text": 0, "tool_calls": 0,
-                                         "valid_calls": 0, "requests": 1, "prompt_tokens": 0,
+                                         "valid_calls": 0, "requests": 6, "prompt_tokens": 0,
                                          "eval_tokens": 0, "duration_ms": 0}
+
+
+def test_retried_and_failed_attempts_are_requests_with_usage_only_on_success(run_de) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) <= 2:
+            return httpx.Response(500, json={"error": "CUDA error: out of memory"})
+        return httpx.Response(200, json={"message": _say("Xong."), "prompt_eval_count": 120,
+                                         "eval_count": 30, "total_duration": 2_500_000_000})
+
+    envelope, _ = run_de(httpx.MockTransport(handle), sleep=lambda s: None)
+    h = envelope.usage["harness"]
+    assert len(calls) == 3
+    assert (h["requests"], h["prompt_tokens"], h["eval_tokens"], h["duration_ms"]) == (
+        3, 120, 30, 2500)
+
+
+def test_a_read_timeout_is_a_request(run_de) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    envelope, _ = run_de(httpx.MockTransport(handle))
+    assert envelope.usage["harness"]["requests"] == 1
 
 
 def test_each_request_records_its_usage(run_de) -> None:

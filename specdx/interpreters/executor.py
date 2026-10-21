@@ -219,11 +219,11 @@ class SpecInterpreterExecutor:
         attempts = len(RETRY_PAUSES) + 1
         for attempt in range(1, attempts + 1):
             self._calls += 1
+            counts["requests"] += 1  # every attempt is a request, a failed or retried one too
             try:
                 response = client.post(f"{self.base_url}/api/chat", json=body)
                 response.raise_for_status()
                 data = response.json()
-                counts["requests"] += 1
                 counts["prompt_tokens"] += int(data.get("prompt_eval_count") or 0)
                 counts["eval_tokens"] += int(data.get("eval_count") or 0)
                 counts["duration_ms"] += int(data.get("total_duration") or 0) // 1_000_000
