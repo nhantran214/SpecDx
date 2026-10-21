@@ -205,8 +205,11 @@ class BenchGuard:
             for d in map_finding(f, files, ids):
                 if d.key not in merged or d.score > merged[d.key].score:
                     merged[d.key] = d
+        extra: dict[str, object] = {"findings": len(report.findings)}
+        if not getattr(inp, "golden_materialised", True):
+            extra["golden"] = "unmaterialised"  # the solution has no derived values
         return BaselineOutput(sorted(merged.values(), key=lambda d: (-d.score, d.location)),
-                              client.cost, extra={"findings": len(report.findings)})
+                              client.cost, extra=extra)
 
 
 register(BenchGuard())

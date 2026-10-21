@@ -3,7 +3,11 @@
 From the canon's golden end state (materialised by PostgreSQL), explore up to two rounds
 of single-clause repairs (`propose`), at most 200 clause-set evaluations. Each explored
 state's violation set is a correction set; the minimal hitting sets of size ≤ 3 of those
-sets (PySAT Hitman, smallest first) are the MUS candidates, reported as contradictions."""
+sets (PySAT Hitman, smallest first) are the MUS candidates, reported as contradictions.
+
+Only the anchor scenario is explored: the golden state is defined there alone (spec §9.8).
+A golden state PostgreSQL refused arrives unmaterialised (no derived values); B5 runs on it
+and records extra["golden"] = "unmaterialised"."""
 
 from __future__ import annotations
 
@@ -77,8 +81,11 @@ class MusOnC:
         sets = explore(inp.golden, lambda s: clauses.violations(s, scenario),
                        lambda s, cid: propose(clauses[cid], s, scenario), _key)
         hs = minimal_hitting_sets(sets)
+        extra: dict[str, object] = {"explored": len(sets)}
+        if not getattr(inp, "golden_materialised", True):
+            extra["golden"] = "unmaterialised"
         return BaselineOutput([Defect("contradiction", h, (scenario.id,), (), 1.0 / len(h))
-                               for h in hs], extra={"explored": len(sets)})
+                               for h in hs], extra=extra)
 
 
 register(MusOnC())

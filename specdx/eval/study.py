@@ -16,6 +16,7 @@ from specdx.active.loop import SpecDxConfig, run_specdx  # noqa: F401 - SpecDxCo
 from specdx.baselines.api import REGISTRY, BaselineInput, BaselineOutput, above, load_all
 from specdx.baselines.llm import DigestMismatch
 from specdx.cost import Cost, behaviours_cost
+from specdx.db import golden_tables
 from specdx.eval.matching import Prf, evaluate_reports, match_findings
 from specdx.eval.observability import scorable as scorable_ids
 from specdx.eval.observability import touch_counts
@@ -23,7 +24,7 @@ from specdx.eval.pilot import INFRASTRUCTURE_ERRORS
 from specdx.infer.cells import draft_tables
 from specdx.mutate.operators import GroundTruth
 from specdx.spec.clauses import ClauseSet
-from specdx.types import DEFECT_TYPES, Defect
+from specdx.types import DEFECT_TYPES, Defect, State
 
 CHECKPOINTS: tuple[int, ...] = (25, 50, 100, 150, 200)
 # Outages stop the step (spec §5.3); a rerun resumes from the run and baseline caches.
@@ -156,23 +157,26 @@ def equal_cost(result: SplitResult, arm: str) -> dict[str, list[Defect]]:
 
 def make_input(bench, variant, report, ctx, cfg, gateway) -> BaselineInput:
     """The variant's pack is loaded first, so golden_state is that variant's own (B5). A
-    golden state the database refuses is None: B5 then reports its own failure."""
+    golden state the database refuses (the C2 mutants forbid a golden status by design) is
+    replaced by the canon's unmaterialised golden tables, with no derived values, and
+    golden_materialised is False (spec §9.8); B1 and B5 run on it and say so."""
     from tonomyx.canon.pack import CanonPack
 
     pack = CanonPack(variant.pack)
     bench.db.use(variant.pack)
+    materialised = True
     try:
         golden = bench.db.golden_state()
     except STOPS:
         raise
     except Exception:  # noqa: BLE001 - the database refuses this variant's golden state
-        golden = None
+        golden, materialised = State(golden_tables(pack)), False
     return BaselineInput(
         variant=variant, report=report, data=ctx.cells.extract(report.behaviours),
         violated={b.run_key: ctx.lens.violations(b) for b in report.behaviours},
         clauses=ClauseSet.from_pack(pack, bench.steps), ctx=ctx, config=cfg, steps=bench.steps,
         statements=bench.variants.statements, drafts=draft_tables(pack),
-        golden=golden, gateway=gateway)
+        golden=golden, gateway=gateway, golden_materialised=materialised)
 
 
 def _specdx_failure(report) -> str | None:

@@ -40,6 +40,9 @@ class BaselineInput:
     drafts: Mapping[str, frozenset[str]]
     golden: State | None = None
     gateway: Gateway | None = None
+    # False when PostgreSQL refused the golden state and `golden` holds the canon's tables
+    # without derived values (spec §9.8: the C2 mutants forbid a golden status by design).
+    golden_materialised: bool = True
 
 
 @dataclass

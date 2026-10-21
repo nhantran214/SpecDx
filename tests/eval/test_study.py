@@ -306,12 +306,14 @@ def test_make_input_loads_the_variants_pack_before_its_golden_state() -> None:
     assert len(inp.clauses) > 0 and inp.gateway == "gw" and inp.config == "cfg"
 
 
-def test_make_input_passes_no_golden_state_when_the_database_refuses_it() -> None:
+def _refusing_input(variant):
     from types import SimpleNamespace
 
-    from specdx.config import BASE_PACK
+    from tonomyx.canon.pack import CanonPack
+
     from specdx.eval.study import make_input
     from specdx.orchestrate.work_orders import load_work_orders
+    from specdx.scenarios.space import canon_scenarios
 
     def refuse():
         raise RuntimeError("the database refuses the canon's own golden state")
@@ -320,10 +322,49 @@ def test_make_input_passes_no_golden_state_when_the_database_refuses_it() -> Non
     bench = SimpleNamespace(db=db, steps=load_work_orders(),
                             variants=SimpleNamespace(statements={}))
     ctx = SimpleNamespace(cells=SimpleNamespace(extract=lambda bs: None),
-                          lens=SimpleNamespace(violations=lambda b: frozenset()))
-    inp = make_input(bench, SimpleNamespace(pack=BASE_PACK), SimpleNamespace(behaviours=[]),
-                     ctx, "cfg", None)
-    assert inp.golden is None
+                          lens=SimpleNamespace(violations=lambda b: frozenset()),
+                          canon=canon_scenarios(CanonPack(variant.pack)))
+    return make_input(bench, variant, SimpleNamespace(behaviours=[]), ctx, "cfg", None)
+
+
+def test_a_refused_golden_state_falls_back_to_the_unmaterialised_tables() -> None:
+    from types import SimpleNamespace
+
+    from tonomyx.canon.pack import CanonPack
+
+    from specdx.config import BASE_PACK
+    from specdx.db import golden_tables
+    from specdx.types import State
+
+    inp = _refusing_input(SimpleNamespace(pack=BASE_PACK))
+    assert inp.golden == State(golden_tables(CanonPack(BASE_PACK)))
+    assert inp.golden.derived == {} and inp.golden_materialised is False
+
+
+def test_b5_and_b1_run_on_the_unmaterialised_golden_state(tmp_path, tell_corpus) -> None:
+    import dataclasses
+
+    from specdx.baselines.api import REGISTRY
+    from specdx.baselines.llm import Reply
+    from specdx.config import BASE_PACK
+    from specdx.cost import Cost
+    from specdx.variant import SpecVariant
+
+    inp = _refusing_input(SpecVariant("base", BASE_PACK, tell_corpus))
+    b5 = REGISTRY["b5_mus"].run(inp)
+    assert b5.failure is None and b5.extra["golden"] == "unmaterialised"
+
+    class G:
+        cache_path = tmp_path / "c.jsonl"
+
+        def chat(self, model, messages, **kw):
+            return Reply("not json", Cost(1), "ok")
+
+    b1 = REGISTRY["benchguard"].run(dataclasses.replace(inp, gateway=G()), model="m")
+    assert b1.failure is None and b1.extra["golden"] == "unmaterialised"
+    solution = tmp_path / "baselines" / "benchguard" / "base" / "m" / inp.clauses.anchor.id
+    written = json.loads((solution / "solution" / "golden_state.json").read_text())
+    assert written == inp.golden.tables
 
 
 def test_the_report_renders_both_tables() -> None:
