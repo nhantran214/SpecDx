@@ -34,14 +34,21 @@ class TruthInference:
         rows = [(c, w, lab) for c, by in anchored.items() for w, lab in by.items()]
         if not rows:
             return BaselineOutput([])
-        proba = self._proba(pd.DataFrame(rows, columns=["task", "worker", "label"]))
+        df = pd.DataFrame(rows, columns=["task", "worker", "label"])
+        if df["label"].nunique() == 1:  # nothing to infer: the posterior is that label
+            proba = pd.DataFrame(1.0, index=sorted(anchored), columns=[df["label"].iloc[0]])
+        else:
+            proba = self._proba(df)
         by_cell = inp.data.by_cell()
         out: list[Defect] = []
         for cid in sorted(anchored):
             cell = inp.data.cells[cid]
-            p_anchor = float(proba.loc[cid].get(cell.anchor, 0.0)) if cid in proba.index else 0.0
-            score = 1.0 - p_anchor
-            if score > 0:
+            if cid not in proba.index:
+                continue
+            row = proba.loc[cid]
+            aggregate = min(row.index, key=lambda label: (-row[label], label))
+            if aggregate != cell.anchor:  # §2.9: reported when the aggregate differs from d_c
+                score = 1.0 - float(row.get(cell.anchor, 0.0))
                 out.append(hidden_defect(cell, by_cell[cid], score))
         return BaselineOutput(merge_max(out))
 

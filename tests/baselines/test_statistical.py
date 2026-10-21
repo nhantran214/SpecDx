@@ -55,3 +55,37 @@ def test_truth_inference_flags_a_miskeyed_cell_only() -> None:
 def test_nothing_to_judge_gives_an_empty_output() -> None:
     for name in ("jest", "glad", "dawid_skene"):
         assert REGISTRY[name].run(_inp({})).defects == []
+
+
+def _fixed_posterior(monkeypatch, rows: dict[str, dict[str, float]]) -> None:
+    import pandas as pd
+
+    from specdx.baselines.truth_inference import TruthInference
+
+    monkeypatch.setattr(TruthInference, "_proba", lambda self, df: pd.DataFrame(rows).T)
+
+
+def test_truth_inference_reports_only_when_the_aggregate_differs_from_the_anchor(
+        monkeypatch) -> None:
+    spec = {c: ("d", {"m1": ["d"], "m2": ["x"], "m3": ["y"]}) for c in ("plural", "other")}
+    _fixed_posterior(monkeypatch, {
+        "plural": {"d": 0.4, "x": 0.35, "y": 0.25},  # plurality below 0.5 but it is the anchor
+        "other": {"d": 0.3, "x": 0.45, "y": 0.25},  # the argmax is not the anchor
+    })
+    out = REGISTRY["dawid_skene"].run(_inp(spec))
+    assert [(d.location, d.score) for d in out.defects] == [(("golden:other",), 0.7)]
+
+
+def test_truth_inference_breaks_a_posterior_tie_by_label(monkeypatch) -> None:
+    spec = {"c": ("x", {"m1": ["d"], "m2": ["x"]})}
+    _fixed_posterior(monkeypatch, {"c": {"d": 0.5, "x": 0.5}})
+    out = REGISTRY["glad"].run(_inp(spec))  # 'd' < 'x', so the aggregate is d, not the anchor x
+    assert [d.location for d in out.defects] == [("golden:c",)]
+
+
+def test_a_single_label_is_not_modelled(recwarn) -> None:
+    spec = {"c1": ("d", {"m1": ["x"], "m2": ["x"]}), "c2": ("x", {"m1": ["x"], "m2": ["x"]})}
+    for name in ("glad", "dawid_skene"):
+        out = REGISTRY[name].run(_inp(spec))
+        assert [(d.location, d.score) for d in out.defects] == [(("golden:c1",), 1.0)], name
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
