@@ -394,3 +394,12 @@ These were found while the plan was being written against the code. Where a rule
    - **Why no traces.** The results-verification mode needs agent trials in Harbor's trial format. SpecDx runs cannot fill it without inventing fields, so the "with traces" arm is dropped.
    - **How the gateway is wired.** It is injected by replacing the pipeline's `ProtocolRunner` with one built on a `LLMClient` subclass whose `complete` and `acomplete` call the gateway. BenchGuard's code is not modified.
    - **Generation settings.** Temperature follows BenchGuard's default (0.0); `max_tokens` is 4096.
+5. **B2's sampling reuses runs across clauses (refines §2.5).**
+   - **The rule.** Clauses are taken in sorted order. For each clause, B2 picks at most k = 5 failing runs that violate it: first the runs already chosen for earlier clauses, then fresh runs, both in ascending `sha256(run_key)` order.
+   - **The bound is unchanged:** at most 5 runs per (specification, clause).
+   - **Why.** It keeps the judged set small. Weak runs violate many clauses, so the union would otherwise be about 5 × the number of violated clauses.
+   - **Strategies.** All three strategies judge the same sampled runs.
+6. **The T excerpt given to the LLM baselines is capped at `TELL_CHARS = 8000` characters (new, fixed now).**
+   - **Retrieval.** The sentences come from the same BM25 query as the localiser (v3 §5.3): a step's statement plus its tables, top 5 chunks per step.
+   - **Order.** The excerpt keeps the sentences in step order, then in sentence-id order, until the cap is reached.
+   - **Context window.** Every baseline call sets `num_ctx` to the interpreters' `NUM_CTX` (16384).
