@@ -4,10 +4,10 @@
 #   ./run_all.sh local          smoke tests on this machine, before any GPU time.
 #                               Writes only to a scratch directory: never to work/, results/
 #                               or experiments/.
-#   ./run_all.sh all            the 48 GB run, every step below in order.
-#   ./run_all.sh g2 | preflight | g3 | gate [--yes] | status    one step at a time. Before
-#                               launching the gate, `gate` reports the measured seconds per
-#                               run and asks; --yes skips the question.
+#   ./run_all.sh all [--yes]    the 48 GB run, every step below in order. Before the gate it
+#                               reports the measured seconds per run and asks; --yes skips
+#                               the question, and answering no stops `all` (exit 0).
+#   ./run_all.sh g2 | preflight | g3 | gate [--yes] | status    one step at a time.
 #   ./run_all.sh baselines-dev       every baseline arm on the dev split (after the gate)
 #   ./run_all.sh freeze-baselines    choose each baseline's arm and τ on dev; commit the pre-registration
 #   ./run_all.sh study               SpecDx and the frozen baselines on the test split (gate PASSED only)
@@ -15,7 +15,7 @@
 #   ./run_all.sh s2                  S2 (τ²-bench) is not built yet
 # `all` now runs g2 -> preflight -> g3 -> gate -> baselines-dev -> freeze-baselines -> study ->
 # report in the foreground (run it inside tmux). Exit 4: the gate is NOT PASSED, so the test
-# study is locked (the dev comparison is still produced).
+# study is locked (baselines-dev and the dev report are still produced; nothing is frozen).
 #
 # The 48 GB steps run SpecDx and PostgreSQL here, and Ollama on the GPU host through an SSH
 # tunnel:
@@ -27,7 +27,8 @@
 # G3 takes hours: run `all` (or `g3`) inside tmux or screen so a dropped login does not kill
 # it. If a step stops, run the same command again: finished runs come from the cache. Run as
 # single steps, the gate, baselines-dev and study are detached (setsid nohup, with a pid and
-# a log in work/); under `all` (FOREGROUND=1) they run in the foreground, one after another.
+# a log in work/); under `all` (FOREGROUND=1) they run in the foreground, one after another,
+# still with a pid file while they run, so `status` and the second-process guards see them.
 #
 # Exit status: 0 done; 1 a check failed (P2 stops, report it); 2 a usage or environment error;
 # 3 the G2 stop rule (spec v3.1 §7); 4 the test study is locked: the gate is NOT PASSED, the
@@ -126,9 +127,19 @@ running() { [[ -f work/$1.pid ]] && kill -0 "$(cat "work/$1.pid")" 2> /dev/null;
 
 # launch NAME CMD...: foreground under `all` (FOREGROUND=1), else detached with a pid file.
 launch() {
-  local name=$1 rc=0; shift
+  local name=$1 rc=0 pid; shift
   if [[ $FOREGROUND == 1 ]]; then
-    "$@" 2>&1 | tee -a "work/$name.log" || rc=$?
+    # The child itself (not a pipeline subshell) gets the pid file, so kill -STOP/-CONT,
+    # `status` and the second-process guards act on it while `all` waits.
+    "$@" > >(tee -a "work/$name.log") 2>&1 < /dev/null &
+    pid=$!
+    echo "$pid" > "work/$name.pid"
+    # An async child ignores SIGINT in a script: pass ^C (and TERM) on, then reap it.
+    trap 'kill "$pid" 2> /dev/null' INT TERM
+    wait "$pid" || rc=$?
+    if kill -0 "$pid" 2> /dev/null; then wait "$pid" 2> /dev/null || true; fi
+    trap - INT TERM
+    rm -f "work/$name.pid"
     ((rc == 0)) || fail "$name exited $rc (log work/$name.log); re-run the same step to resume"
     ok "$name finished; log work/$name.log"
     return
@@ -144,11 +155,11 @@ gate_passed() { [[ -f results/p2-gate.json ]] && jq -e '.passed == true' results
 locked() { printf 'locked: %s\n' "$*" >&2; exit 4; }
 
 check_baseline_cache() {
-  [[ -f $PREREG.json ]] || return 0
   local md5 want_lines want_md5
-  read -r want_lines want_md5 < <(jq -r '.baseline_cache | "\(.lines) \(.md5)"' "$PREREG.json" 2> /dev/null || echo "null null")
-  [[ $want_lines == null ]] && return 0
   step "Baseline cache $BASELINE_CACHE (append-only)"
+  read -r want_lines want_md5 < <(jq -r '.baseline_cache | "\(.lines) \(.md5)"' "$PREREG.json" 2> /dev/null || echo "null null")
+  [[ $want_lines =~ ^[0-9]+$ && $want_md5 =~ ^[0-9a-f]{32}$ ]] \
+    || fail "$PREREG.json records no baseline_cache {lines, md5} (freeze-baselines --cache writes it)"
   [[ -f $BASELINE_CACHE ]] || fail "$BASELINE_CACHE is missing; the freeze recorded $want_lines lines"
   md5=$(head -n "$want_lines" "$BASELINE_CACHE" | md5sum | cut -d' ' -f1)
   [[ $md5 == "$want_md5" ]] || fail "the first $want_lines lines of $BASELINE_CACHE changed since the freeze"
@@ -329,6 +340,10 @@ stage_local() {
 }
 
 # ---------------------------------------------------------------------------- 48 GB steps
+# Set by stage_gate when the operator answers no; `all` then stops with exit 0. A flag, not
+# a return status: a function called as `f || ...` runs with `set -e` suspended.
+GATE_DECLINED=0
+
 need_remote() {
   [[ -n ${SPECDX_OLLAMA_URL:-} ]] || die "set SPECDX_OLLAMA_URL to the tunnel, e.g. http://localhost:11435"
 }
@@ -424,7 +439,11 @@ stage_gate() {
   estimate_gate
   if [[ $yes != 1 ]]; then
     read -r -p "  Launch the gate now? [y/N] " answer
-    [[ $answer == [yY]* ]] || { echo "  Not launched. Re-run ./run_all.sh gate when ready."; return; }
+    if [[ $answer != [yY]* ]]; then
+      echo "  Not launched. Re-run ./run_all.sh gate (or all) when ready."
+      GATE_DECLINED=1
+      return
+    fi
   fi
   launch p2-gate env SPECDX_WORK="$CACHE_DIR" SPECDX_OLLAMA_URL="$SPECDX_OLLAMA_URL" \
     "$SPECDX" gate --config "$GATE_CONFIG" --out results/p2-gate.json --workers "$WORKERS"
@@ -457,7 +476,10 @@ stage_freeze() {
     && die "$PREREG.json exists but is not committed: check it, then commit it or remove it and re-run"
   "$SPECDX" freeze-baselines --from results/p3-baselines-dev.json --out "$PREREG" \
     --cache "$BASELINE_CACHE" || fail "freeze-baselines failed (a failed dev specification?)"
-  "$PY" -m pytest -q -o addopts="" tests/test_preregistration_baselines.py | tail -1
+  local pin
+  pin=$("$PY" -m pytest -q -o addopts="" tests/test_preregistration_baselines.py 2>&1) \
+    || { tail -20 <<< "$pin"; fail "the pre-registration pin test failed; nothing committed"; }
+  tail -1 <<< "$pin"
   git add "$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json
   git commit -q -m "experiments: baseline pre-registration — arms and thresholds frozen on the dev split" \
     -- "$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json
@@ -466,10 +488,7 @@ stage_freeze() {
 
 stage_study() {
   need_remote
-  if ! gate_passed; then
-    echo "The gate is NOT PASSED (results/p2-gate.json): the test study stays locked (spec §3.7)."
-    exit 4
-  fi
+  gate_passed || locked "the gate is NOT PASSED (results/p2-gate.json): the test study stays locked (spec §3.7)"
   git ls-files --error-unmatch "$PREREG.json" > /dev/null 2>&1 \
     || locked "$PREREG.json is not committed: run ./run_all.sh freeze-baselines first"
   [[ -z $(git status --porcelain --untracked-files=no) ]] \
@@ -529,10 +548,14 @@ case "${1:-}" in
     stage_g2
     stage_preflight
     stage_g3
-    stage_gate 1
+    stage_gate "$([[ ${2:-} == --yes ]] && echo 1 || echo 0)"
+    [[ $GATE_DECLINED == 1 ]] && exit 0
     stage_baselines_dev
+    if ! gate_passed; then
+      stage_report   # the dev comparison only; nothing is frozen
+      locked "the gate is NOT PASSED: the test study stays locked; dev comparison in results/p3-report.md"
+    fi
     stage_freeze
-    if ! gate_passed; then stage_report; echo "Gate NOT PASSED: test study locked."; exit 4; fi
     stage_study
     stage_report
     ;;
