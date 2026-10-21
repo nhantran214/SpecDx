@@ -33,7 +33,7 @@ STOPS: tuple[type[BaseException], ...] = (*INFRASTRUCTURE_ERRORS, DigestMismatch
 # the population runs they read (behaviours_cost(report.behaviours), not SpecDx's probes or
 # ddmin) plus their own calls. The others pay their own only.
 CONSUMES_RUNS: frozenset[str] = frozenset({"whowhen", "irt_audit", "semantic_entropy", "glad",
-                                           "dawid_skene", "jest"})
+                                           "dawid_skene", "jest", "b2_naive", "b3_2pl"})
 load_all()  # every baseline registers before arms are listed
 
 

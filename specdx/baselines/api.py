@@ -72,7 +72,8 @@ def register(b: Baseline) -> Baseline:
 
 
 BASELINE_MODULES: tuple[str, ...] = ("jest_rule", "truth_inference", "irt_audit",
-                                     "semantic_entropy", "mus_c", "whowhen", "benchguard")
+                                     "semantic_entropy", "mus_c", "whowhen", "benchguard",
+                                     "secondary")
 
 
 def load_all() -> dict[str, Baseline]:

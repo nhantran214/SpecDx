@@ -234,7 +234,7 @@ Each output should equal the committed file: `cmp "$out/p2-calibration.json" res
 
 ## 13. The comparison study (baselines)
 
-Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to B5, the truth-inference arms and JEST). `run_all.sh` drives it; each step checks the one before it.
+Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to B5, the truth-inference arms and JEST, and the gate's secondary arms B2-naive and B3-2PL, untuned). `run_all.sh` drives it; each step checks the one before it.
 
 **Setup.** Install the baselines' dependencies once: `.venv/bin/python -m pip install -e ".[baselines]"` (crowd-kit, python-sat, and BenchGuard pinned at commit `7d6a52e`). The LLM arms reuse the population models frozen in `experiments/p2-gate.json`, through the same `SPECDX_OLLAMA_URL` tunnel, so nothing extra needs to be pulled; a model that is missing, or has another digest than the population runs, stops the run before any call. The clones under `baseline/` are reference copies only: nothing is imported from them.
 

@@ -20,8 +20,9 @@ from specdx.baselines.whowhen import K_RUNS
 from specdx.eval.stats import RESAMPLES, SEED
 from specdx.eval.study import CHECKPOINTS, Arm, SplitResult, score
 
-# No threshold beyond the aggregate itself (spec §2.9; B5 has none): τ is 0.0 for these.
-UNTUNED: frozenset[str] = frozenset({"glad", "dawid_skene", "b5_mus"})
+# No threshold beyond the aggregate itself (spec §2.9; B5 has none), and the gate's own
+# secondary arms at the gate's rule (spec §9.8): τ is 0.0 for these.
+UNTUNED: frozenset[str] = frozenset({"glad", "dawid_skene", "b5_mus", "b2_naive", "b3_2pl"})
 
 FIXED: dict[str, Any] = {
     "k_failing_runs": K_RUNS, "tell_chars": TELL_CHARS, "checkpoints": list(CHECKPOINTS),
