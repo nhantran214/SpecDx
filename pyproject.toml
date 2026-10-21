@@ -29,6 +29,7 @@ specdx = ["orchestrate/*.json", "interpreters/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = ["ignore:The copy keyword is deprecated:Warning:crowdkit"]
 markers = ["db: needs the SpecDx PostgreSQL on port 55434 (docker compose up -d)"]
 
 [tool.ruff]
