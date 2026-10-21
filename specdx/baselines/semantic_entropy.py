@@ -8,6 +8,7 @@ passes while the re-runs still read the cell two or more ways."""
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections import Counter
 from collections.abc import Sequence
@@ -38,6 +39,27 @@ def cell_score(readings: Sequence[Reading]) -> float:
     return max([pooled, *(entropy(v) for v in fams.values())])
 
 
+def _merge_localised(defects: Sequence[Defect]) -> list[Defect]:
+    """Defects localised to the same sentences are one finding, as in SpecDx's loop: the
+    highest score wins and scenarios and witnesses are united. Unlocalised defects (an empty
+    location) stay apart, one per cell. Input is in descending score order, which is kept."""
+    merged: dict[tuple[str, ...], Defect] = {}
+    out: list[Defect] = []
+    for d in defects:
+        if not d.location:
+            out.append(d)
+        elif d.location not in merged:
+            merged[d.location] = d
+            out.append(d)
+        else:
+            first = merged[d.location]
+            joined = dataclasses.replace(
+                first, scenarios=tuple(sorted({*first.scenarios, *d.scenarios})),
+                witnesses=tuple(sorted({*first.witnesses, *d.witnesses})))
+            out[out.index(first)] = merged[d.location] = joined
+    return out
+
+
 @dataclass(frozen=True)
 class SemanticEntropy:
     name: str = "semantic_entropy"
@@ -61,6 +83,8 @@ class SemanticEntropy:
         budget = RunBudget(0, cfg.localize_budget)
         acted = {r.model for r in inp.data.readings}
         interps = oracle_interpreters(cfg.models_by_family, inp.report.theta, cfg.variants, acted)
+        if scored and inp.ctx.localizer is not None and inp.ctx.cells is None:
+            raise ValueError("B4 localisation needs the cell lens")
         spent: list[Cost] = []
         out: list[Defect] = []
         for _, cid, d in scored:
@@ -74,7 +98,8 @@ class SemanticEntropy:
                 where = inp.ctx.localizer(inp.variant, d, interps, budget, persists)
             out.append(Defect(d.type, tuple(where or ()), d.scenarios, d.witnesses, d.score,
                               d.note))
-        return BaselineOutput(out, sum(spent, Cost()), extra={"ddmin_runs": budget.ddmin})
+        return BaselineOutput(_merge_localised(out), sum(spent, Cost()),
+                              extra={"ddmin_runs": budget.ddmin})
 
 
 register(SemanticEntropy())
