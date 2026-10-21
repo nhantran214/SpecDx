@@ -103,3 +103,18 @@ def test_a_truncated_last_cache_line_is_skipped_but_an_earlier_one_raises(tmp_pa
     cache.write_text('{"key": "abc", "te\n' + good)
     with pytest.raises(ValueError, match="c.jsonl"):
         Gateway("http://x", cache, transport=t)
+
+
+def test_a_reply_with_unicode_line_separators_survives_a_reload(tmp_path) -> None:
+    text = "a\u2028b\u2029c\x85d"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "m:7b", "digest": "d1"}]})
+        return httpx.Response(200, json={"message": {"content": text}})
+
+    t = httpx.MockTransport(handle)
+    cache = tmp_path / "c.jsonl"
+    assert Gateway("http://x", cache, transport=t).chat("m:7b", []).text == text
+    again = Gateway("http://x", cache, transport=t).chat("m:7b", [])
+    assert again.cached and again.text == text
