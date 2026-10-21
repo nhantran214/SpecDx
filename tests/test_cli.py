@@ -262,19 +262,104 @@ def _no_workbench(monkeypatch) -> None:
     monkeypatch.setattr("specdx.workbench.Workbench.open", refuse)
 
 
-def test_study_exits_4_before_opening_the_workbench_when_refused(
-        monkeypatch, tmp_path, capsys) -> None:
+def _frozen_repo(root: Path, *, track_config: bool = True, gate: str = '{"passed": true}'):
+    """A git repository holding the frozen study files, all committed (the configuration
+    only when track_config). Returns (config, prereg, doc)."""
+    import json
+    import subprocess
+
+    from specdx.eval.freeze import canonical_json, prereg
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    (root / "experiments").mkdir()
+    (root / "results").mkdir()
+    config = root / "experiments" / "p2-gate.json"
+    config.write_text(json.dumps({"models_by_family": {"a": ["m"]}, "variants": [0],
+                                  "seeds": [1], "budget": 1, "dev_per_type": 1,
+                                  "rng_seed": 1}))
+    src = root / "dev.json"
+    src.write_text(_dev_result().to_json(), encoding="utf-8")
+    doc = prereg(_dev_result(), src)
+    pre = root / "experiments" / "p3-baselines-prereg.json"
+    pre.write_text(canonical_json(doc), encoding="utf-8")
+    (root / "results" / "p2-gate.json").write_text(gate)
+    files = ["dev.json", "experiments/p3-baselines-prereg.json", "results/p2-gate.json"]
+    git("add", *files, *(["experiments/p2-gate.json"] if track_config else []))
+    git("commit", "-q", "-m", "frozen")
+    return config, pre, doc
+
+
+def _study(tmp_path, config: Path, pre: Path) -> int:
+    return main(["study", "--split", "test", "--config", str(config), "--baselines", str(pre),
+                 "--out", str(tmp_path / "out" / "t.json")])
+
+
+@pytest.mark.parametrize("gate", ['{"passed": false}', "{not json", "[true]", '{"passed": "yes"}'])
+def test_study_exits_4_before_opening_the_workbench_without_a_passed_gate(
+        monkeypatch, tmp_path, capsys, gate) -> None:
     import specdx.cli
 
     _no_workbench(monkeypatch)
-    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)  # no results/p2-gate.json there
-    pre = tmp_path / "p.json"
-    pre.write_text("{}")
-    code = main(["study", "--split", "test", "--config", str(tmp_path / "c.json"),
-                 "--baselines", str(pre), "--out", str(tmp_path / "t.json")])
-    assert code == 4
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path, gate=gate)
+    assert _study(tmp_path, config, pre) == 4
     assert "gate has not PASSED" in capsys.readouterr().err
-    assert not (tmp_path / "t.json").exists()
+    assert not (tmp_path / "out").exists()
+
+
+def test_study_exits_4_without_a_gate_file(monkeypatch, tmp_path, capsys) -> None:
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path)
+    (tmp_path / "results" / "p2-gate.json").unlink()
+    assert _study(tmp_path, config, pre) == 4
+    assert "gate has not PASSED" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("which", ["config", "baselines"])
+def test_study_exits_4_on_any_file_but_the_frozen_one(
+        monkeypatch, tmp_path, capsys, which) -> None:
+    import shutil
+
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path)
+    frozen = config if which == "config" else pre
+    other = tmp_path / "experiments" / f"other-{frozen.name}"
+    shutil.copy(frozen, other)  # the same contents under another name are still refused
+    args = (other, pre) if which == "config" else (config, other)
+    assert _study(tmp_path, *args) == 4
+    err = capsys.readouterr().err
+    assert f"frozen {frozen}" in err and str(other) in err
+
+
+def test_study_exits_4_on_an_untracked_frozen_config(monkeypatch, tmp_path, capsys) -> None:
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path, track_config=False)
+    assert _study(tmp_path, config, pre) == 4
+    assert "experiments/p2-gate.json is not committed" in capsys.readouterr().err
+
+
+def test_study_exits_4_on_an_edited_frozen_config(monkeypatch, tmp_path, capsys) -> None:
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path)
+    config.write_text(config.read_text().replace('"budget": 1', '"budget": 2'))
+    assert _study(tmp_path, config, pre) == 4
+    assert "uncommitted changes" in capsys.readouterr().err
 
 
 def _dev_result():
@@ -405,17 +490,27 @@ def test_baselines_runs_the_dev_arms_on_the_dev_split_with_the_cache_digests(
 
 def test_study_runs_the_frozen_arms_on_the_mutants_outside_the_dev_split(
         monkeypatch, tmp_path) -> None:
-    from specdx.eval.freeze import canonical_json, prereg, study_arms
+    import specdx.cli
+    from specdx.eval.freeze import study_arms
 
     seen = _wired(monkeypatch, tmp_path)
-    monkeypatch.setattr("specdx.cli.study_guard", lambda *a: None)
-    src = tmp_path / "dev.json"
-    src.write_text(_dev_result().to_json(), encoding="utf-8")
-    doc = prereg(_dev_result(), src)
-    pre = tmp_path / "prereg.json"
-    pre.write_text(canonical_json(doc), encoding="utf-8")
-    out = tmp_path / "test.json"
-    assert main(["study", "--split", "test", "--config", str(_run_config(tmp_path, {"a": ["m"]})),
-                 "--baselines", str(pre), "--out", str(out)]) == 0
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, doc = _frozen_repo(tmp_path)
+    assert _study(tmp_path, config, pre) == 0
     assert seen["mutants"] == ["T1", "T2"] and seen["split"] == "test"
     assert seen["arms"] == [a.label for a, _ in study_arms(doc)]
+
+
+def test_freeze_baselines_refuses_to_replace_a_frozen_preregistration_without_force(
+        monkeypatch, tmp_path, capsys) -> None:
+    _no_workbench(monkeypatch)
+    src = tmp_path / "dev.json"
+    src.write_text(_dev_result().to_json(), encoding="utf-8")
+    out = tmp_path / "prereg"
+    out.with_suffix(".json").write_text("frozen")
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out)]) == 1
+    assert "--force" in capsys.readouterr().err
+    assert out.with_suffix(".json").read_text() == "frozen"
+    assert not out.with_suffix(".md").exists()
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out), "--force"]) == 0
+    assert out.with_suffix(".json").read_text() != "frozen" and out.with_suffix(".md").exists()

@@ -44,23 +44,44 @@ def _log_progress() -> None:
         logger.addHandler(handler)
 
 
-def study_guard(root: Path, gate_json: Path, prereg_json: Path) -> str | None:
+# The only configuration and pre-registration the test split runs with (spec §3.7).
+STUDY_CONFIG = Path("experiments") / "p2-gate.json"
+STUDY_PREREG = Path("experiments") / "p3-baselines-prereg.json"
+
+
+def study_paths(root: Path, config: Path, prereg_json: Path) -> str | None:
+    """Why --config or --baselines is not the frozen file under root, or None."""
+    for given, frozen in ((config, root / STUDY_CONFIG), (prereg_json, root / STUDY_PREREG)):
+        if given.resolve() != frozen.resolve():
+            return f"the study runs only with the frozen {frozen}, not {given}"
+    return None
+
+
+def study_guard(root: Path, gate_json: Path, prereg_json: Path,
+                config: Path | None = None) -> str | None:
     """Why the test split must stay locked (spec §3.7), or None: the gate PASSED, the
-    pre-registration is committed and the working tree has no uncommitted changes."""
+    pre-registration (and the configuration, when given) is committed, and the working
+    tree has no uncommitted changes, so the committed contents are the ones used."""
     import subprocess
 
-    if not gate_json.exists() or not json.loads(gate_json.read_text()).get("passed"):
+    try:
+        passed = json.loads(gate_json.read_text(encoding="utf-8")).get("passed") is True
+    except (OSError, ValueError, AttributeError):  # missing, malformed or not an object
+        passed = False
+    if not passed:
         return f"the gate has not PASSED ({gate_json}); the test split stays locked"
 
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
 
-    try:
-        rel = str(prereg_json.resolve().relative_to(root.resolve()))
-    except ValueError:
-        return f"{prereg_json} is outside {root}, so it cannot be committed there"
-    if git("ls-files", "--error-unmatch", rel).returncode != 0:
-        return f"{rel} is not committed: run ./run_all.sh freeze-baselines"
+    for path in (prereg_json,) if config is None else (prereg_json, config):
+        try:
+            rel = str(path.resolve().relative_to(root.resolve()))
+        except ValueError:
+            return f"{path} is outside {root}, so it cannot be committed there"
+        if git("ls-files", "--error-unmatch", rel).returncode != 0:
+            hint = ": run ./run_all.sh freeze-baselines" if path == prereg_json else ""
+            return f"{rel} is not committed{hint}"
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
         return "the working tree has uncommitted changes"
     return None
@@ -135,6 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
     fr.add_argument("--out", type=Path, required=True)
     fr.add_argument("--cache", type=Path, default=None,
                     help="the baseline LLM cache to fingerprint")
+    fr.add_argument("--force", action="store_true",
+                    help="replace an existing pre-registration (it is frozen otherwise)")
     st = sub.add_parser("study", help="the test split, once the gate PASSED (spec §3.7)")
     st.add_argument("--split", choices=("test",), required=True)
     st.add_argument("--config", type=Path, required=True)
@@ -270,6 +293,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from specdx.eval.freeze import canonical_json, prereg, prereg_markdown
         from specdx.eval.study import SplitResult
 
+        if args.out.with_suffix(".json").exists() and not args.force:
+            print(f"error: {args.out.with_suffix('.json')} already exists and is frozen; "
+                  "pass --force to replace it", file=sys.stderr)
+            return 1
         result = SplitResult.from_json(args.source.read_text(encoding="utf-8"))
         bad = {a: f for a, f in result.failures.items() if f}
         if bad:
@@ -294,8 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         text = study_markdown(dev, {"specdx": 0.0, **{a: 0.0 for a in dev.defects
                                                       if a != "specdx"}})
         if args.test is not None and args.test.exists():
-            pre = json.loads((REPO_ROOT / "experiments" / "p3-baselines-prereg.json")
-                             .read_text(encoding="utf-8"))
+            pre = json.loads((REPO_ROOT / STUDY_PREREG).read_text(encoding="utf-8"))
             test = SplitResult.from_json(args.test.read_text(encoding="utf-8"))
             taus = {c["arm"]: c["tau"] for c in pre["chosen"].values()}
             text += "\n" + study_markdown(test, {"specdx": 0.0, **taus})
@@ -305,7 +331,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "study":  # refused before any configuration, pack or lock (exit 4)
-        reason = study_guard(REPO_ROOT, REPO_ROOT / "results" / "p2-gate.json", args.baselines)
+        reason = (study_paths(REPO_ROOT, args.config, args.baselines)
+                  or study_guard(REPO_ROOT, REPO_ROOT / "results" / "p2-gate.json",
+                                 args.baselines, args.config))
         if reason:
             print(f"error: {reason}", file=sys.stderr)
             return 4
