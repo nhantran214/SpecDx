@@ -409,3 +409,13 @@ These were found while the plan was being written against the code. Where a rule
      - The bounds are a ∈ [1/15, 15], b ∈ [−2, 2] and c ∈ [0, 1], with c free. Appendix B.1 reports that fixing c at chance degrades results the most.
      - The score is Δℓ = ℓ(d = 0) − ℓ(d = 1) in average per-response log-likelihood. It is signed, and only items with Δℓ > 0 are reported.
    - **Disclosed simplification.** θ is the standardised logit of overall accuracy, instead of the paper's two-stage preliminary fit on items with r > 0.2.
+8. **Final-review rulings (2026-10-21).**
+   - **Unreachable golden state.** When PostgreSQL refuses a variant's golden state (the C2 mutants forbid a golden status by design), B1 and B5 receive the unmaterialised golden tables instead of failing.
+   - **Anchor scenario only.** B1 packages only the anchor canon scenario, and B5 explores only from the anchor's golden state; the golden state is defined only there. This replaces "each canon scenario" in §9.3.
+   - **Cost of run-consuming arms.** Arms that read SpecDx's runs are charged those population runs plus their own calls, not SpecDx's probes or ddmin (§3.5).
+   - **Binding the test split to the freeze.** The pre-registration records the sha256 of `experiments/p2-gate.json` and `results/p2-gate.json`, and the freeze commits the gate result. `study` refuses on a mismatch and embeds the τ it used in its result; the test report uses those embedded τ.
+   - **Dev report.** It shows two tables: τ selected on dev (in-sample), and τ = 0.
+   - **Secondary arms.** B2-naive and B3-2PL are run and reported, untuned.
+   - **B2 generation settings.** These are the reference's open-model settings.
+   - **Context overflow.** Calls whose prompt plus output budget reaches `num_ctx` are counted per arm, and the local smoke fails if there are any.
+   - **Gateway outages.** A 5xx outage, and a ReadTimeout before any successful reply from that host, raise InfrastructureError and are never cached.
