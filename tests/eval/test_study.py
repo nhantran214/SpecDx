@@ -416,6 +416,34 @@ def test_the_dev_report_shows_table_a_in_sample_then_at_tau_zero() -> None:
     assert "native protocol" not in md
 
 
+def test_table_a_has_untyped_f1_ap_per_type_detection_at_k_and_usage() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    r = _result()
+    r.defects["u"] = {"base": [], "H1": [Defect("contradiction", ("c1",), (), (), 0.9)],
+                      "H2": []}
+    r.costs["u"] = {"base": {"requests": 1, "prompt_tokens": 100, "eval_tokens": 10,
+                             "duration_ms": 1500, "exact": True},
+                    "H1": {"requests": 2, "prompt_tokens": 200, "eval_tokens": 20,
+                           "duration_ms": 2500, "exact": True},
+                    "H2": {"requests": 4, "prompt_tokens": 400, "eval_tokens": 40,
+                           "duration_ms": 9000, "exact": True}}
+    r.costs["jest"]["H1"].update(prompt_tokens=7, eval_tokens=3, exact=False)
+    r.failures = {"u": {"H2": "boom"}}
+    md = study_markdown(r, {"specdx": 0.0, "jest": 0.6, "u": 0.0})
+    u = _table_a(md, "u")
+    # The wrongly typed finding at the right clause counts untyped only.
+    assert u["hidden F1"] == "0.00" and u["hidden F1 untyped"] == "1.00"
+    assert u["requests"] == "3" and u["tokens (prompt + eval)"] == "300 + 30"
+    assert u["duration (s)"] == "4" and u["contradiction AP"] == "–"
+    jest = _table_a(md, "jest")
+    # F1 at τ 0.6 drops jest's only hit; AP and Detection@k stay threshold-free (τ 0).
+    assert jest["hidden F1"] == "0.00" and jest["hidden AP"] == "0.25"
+    assert (jest["Detection@1"], jest["Detection@3"], jest["Detection@5"]) == (
+        "0.00", "0.50", "0.50")
+    assert jest["tokens (prompt + eval)"] == "7 + 3 (bound)" and "(bound)" in jest["requests"]
+
+
 def test_table_a_means_are_dashes_when_no_type_has_truths() -> None:
     from specdx.eval.study_report import study_markdown
 
@@ -504,4 +532,5 @@ def test_table_b_row_carries_the_scores_the_mutant_count_and_the_incomplete_mark
     r = _result()
     r.failures = {"llm@m": {"H2": "boom"}}
     md = study_markdown(r, arms)
-    assert "| llm@m (INCOMPLETE) | 60 | 1 | 0.00 | 1.00 | 0.00 | 0.00 |" in md
+    # The failed H2 (10 requests) is left out of the arm's total.
+    assert "| llm@m (INCOMPLETE) | 50 | 1 | 0.00 | 1.00 | 0.00 | 0.00 |" in md

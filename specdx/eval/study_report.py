@@ -9,12 +9,31 @@ from specdx.eval.stats import bootstrap_ci, holm, paired, paired_bootstrap_ci
 from specdx.eval.study import equal_cost, rank_metrics, score
 from specdx.types import DEFECT_TYPES
 
+KS: tuple[int, ...] = (1, 3, 5)
+
+
+def _spent(result, arm: str) -> list[dict]:
+    """The arm's cost per specification, leaving out the specifications it failed on."""
+    failed = result.failures.get(arm, {})
+    return [v for k, v in result.costs.get(arm, {}).items() if k not in failed]
+
 
 def _cost(result, arm: str) -> str:
-    c = result.costs.get(arm, {})
-    req = sum(int(v.get("requests", 0)) for v in c.values())
-    exact = all(v.get("exact", True) for v in c.values())
+    c = _spent(result, arm)
+    req = sum(int(v.get("requests", 0)) for v in c)
+    exact = all(v.get("exact", True) for v in c)
     return f"{req}" + ("" if exact else " (bound)")
+
+
+def _usage(result, arm: str) -> tuple[str, str]:
+    """Prompt + eval tokens and duration in seconds; "(bound)" when some runs predate the
+    counters (those runs record neither, so both are then lower bounds)."""
+    c = _spent(result, arm)
+    mark = "" if all(v.get("exact", True) for v in c) else " (bound)"
+    prompt = sum(int(v.get("prompt_tokens", 0)) for v in c)
+    evals = sum(int(v.get("eval_tokens", 0)) for v in c)
+    secs = sum(int(v.get("duration_ms", 0)) for v in c) / 1000
+    return f"{prompt} + {evals}{mark}", f"{secs:.0f}{mark}"
 
 
 def _mean_over_truths(rows: Mapping[str, Mapping[str, float]], key: str) -> str:
@@ -24,20 +43,32 @@ def _mean_over_truths(rows: Mapping[str, Mapping[str, float]], key: str) -> str:
 
 
 def _table_a(result, arms: Mapping[str, float], heading: str) -> list[str]:
+    head = ([f"{t} F1" for t in DEFECT_TYPES] + [f"{t} F1 untyped" for t in DEFECT_TYPES]
+            + [f"{t} AP" for t in DEFECT_TYPES] + ["AP (mean)"]
+            + [f"Detection@{k}" for k in KS]
+            + ["requests", "tokens (prompt + eval)", "duration (s)", "detection 95% CI",
+               "failed specs"])
     lines = [f"## Table A: {heading}", "",
-             "AP (mean) and Detection@1 average over the defect types that have truths in "
-             "this split.", "",
-             "| arm | τ | " + " | ".join(f"{t} F1" for t in DEFECT_TYPES)
-             + " | AP (mean) | Detection@1 | requests | detection 95% CI | failed specs |",
-             "|---|---:|" + "---:|" * (len(DEFECT_TYPES) + 5)]
+             "F1 is at the arm's τ. AP and Detection@k are threshold-free (τ = 0); their means "
+             "average over the defect types that have truths in this split. Costs leave out "
+             "the specifications an arm failed on; \"(bound)\": some runs predate the "
+             "counters, so requests are an upper bound and tokens and duration a lower one.",
+             "", "| arm | τ | " + " | ".join(head) + " |",
+             "|---|---:|" + "---:|" * len(head)]
     for arm, tau in arms.items():
-        s, r = score(result, arm, tau), rank_metrics(result, arm, tau)
+        s, u = score(result, arm, tau), score(result, arm, tau, typed=False)
+        r = rank_metrics(result, arm, 0.0, ks=KS)
         lo, hi = bootstrap_ci(result, arm, tau)
         failed = len(result.failures.get(arm, {}))
-        lines.append(f"| {arm} | {tau:.3g} | " + " | ".join(f"{s[t].f1:.2f}" for t in DEFECT_TYPES)
-                     + f" | {_mean_over_truths(r, 'ap')} | {_mean_over_truths(r, 'detect@1')}"
-                     f" | {_cost(result, arm)} | [{lo:.2f}, {hi:.2f}] | "
-                     + (f"{failed} (INCOMPLETE)" if failed else "0") + " |")
+        tokens, secs = _usage(result, arm)
+        cells = ([f"{s[t].f1:.2f}" for t in DEFECT_TYPES]
+                 + [f"{u[t].f1:.2f}" for t in DEFECT_TYPES]
+                 + [f"{r[t]['ap']:.2f}" if r[t]["n"] else "–" for t in DEFECT_TYPES]
+                 + [_mean_over_truths(r, "ap")]
+                 + [_mean_over_truths(r, f"detect@{k}") for k in KS]
+                 + [_cost(result, arm), tokens, secs, f"[{lo:.2f}, {hi:.2f}]",
+                    f"{failed} (INCOMPLETE)" if failed else "0"])
+        lines.append(f"| {arm} | {tau:.3g} | " + " | ".join(cells) + " |")
     return lines
 
 
