@@ -51,6 +51,14 @@ def test_incomplete_instructions_map_to_cited_sentences() -> None:
     assert [(d.type, d.location) for d in ds] == [("ambiguity", ("KB:KB-0003:02",))]
 
 
+def test_sentences_cited_only_in_evidence_snippets_count() -> None:
+    f = _f("INST-INCOMPLETE", ErrorCategory.INST, text="the cap is unclear")
+    f.evidence.primary_source = Location(file="instruction.md", snippet="[T:KB:KB-0003:02] cap")
+    f.evidence.conflicting_source = Location(file="instruction.md", snippet="[T:BA:01] other")
+    ds = map_finding(f, {}, {"KB:KB-0003:02", "BA:01"})
+    assert [(d.type, d.location) for d in ds] == [("ambiguity", ("BA:01", "KB:KB-0003:02"))]
+
+
 def test_env_findings_are_dropped() -> None:
     assert map_finding(_f("ENV-DEP", ErrorCategory.ENV), FILES, set()) == []
 

@@ -120,7 +120,9 @@ def map_finding(f: Finding, files: Mapping[str, str], corpus_ids: set[str]) -> l
     if rule is None:
         return []
     score = float(SEVERITY[f.severity.value] * CONFIDENCE[f.confidence_level.value])
-    text = " ".join([f.title, f.description, f.evidence.description])
+    snippets = [src.snippet for src in (f.evidence.primary_source,
+                                         f.evidence.conflicting_source) if src is not None]
+    text = " ".join([f.title, f.description, f.evidence.description, *snippets])
     clauses = _cited(f, files)
     out: list[Defect] = []
     if rule == "ambiguity":
