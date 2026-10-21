@@ -467,6 +467,8 @@ stage_baselines_dev() {
   running p2-gate && die "the gate is still running"
   running p3-baselines-dev && { ok "baselines-dev is already running"; return; }
   check_baseline_deps
+  check_cache
+  check_ollama "$SPECDX_OLLAMA_URL" "$(jq -c .models_by_family "$GATE_CONFIG")"
   step "Baselines on the dev split (every arm, every population model)"
   launch p3-baselines-dev env SPECDX_WORK="$CACHE_DIR" SPECDX_OLLAMA_URL="$SPECDX_OLLAMA_URL" \
     "$SPECDX" baselines --split dev --config "$GATE_CONFIG" --out results/p3-baselines-dev.json \
