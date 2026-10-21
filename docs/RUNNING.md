@@ -243,11 +243,11 @@ Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to 
 | Step | Writes | Notes |
 |---|---|---|
 | `./run_all.sh baselines-dev` | `results/p3-baselines-dev.json` | every arm, every population model, on the dev split; detached (pid and log `work/p3-baselines-dev.*`) |
-| `./run_all.sh freeze-baselines` | `experiments/p3-baselines-prereg.{json,md}` | chooses each baseline's arm and τ on dev only, records the line count and md5 of `work/baseline-llm.jsonl`, and commits both files with `results/p3-baselines-dev.json`; a committed pre-registration is never replaced |
-| `./run_all.sh study` | `results/p3-study.json` | SpecDx and the frozen baselines on the test split (days); detached (`work/p3-study.*`) |
-| `./run_all.sh report` | `results/p3-report.md` | tables A and B and the statistics, for dev, and for test once `results/p3-study.json` exists |
+| `./run_all.sh freeze-baselines` | `experiments/p3-baselines-prereg.{json,md}` | chooses each baseline's arm and τ on dev only, records the line count and md5 of `work/baseline-llm.jsonl` and the sha256 of `experiments/p2-gate.json` and `results/p2-gate.json`, and commits both files with `results/p3-baselines-dev.json` and the gate result (`results/p2-gate.{json,md}`); a committed pre-registration is never replaced |
+| `./run_all.sh study` | `results/p3-study.json` | SpecDx and the frozen baselines on the test split (days); detached (`work/p3-study.*`); the result embeds the pre-registration's sha256 and the τ it used per arm |
+| `./run_all.sh report` | `results/p3-report.md` | tables A and B and the statistics, for dev, and for test once `results/p3-study.json` exists (with the τ the study embedded) |
 
-`study` exits 4 unless the gate PASSED (`results/p2-gate.json`), `experiments/p3-baselines-prereg.json` is committed and the working tree has no uncommitted changes (spec §3.7). Before launching it checks that the first 6505 lines of `work/runs.jsonl` and the baseline cache lines recorded at the freeze are unchanged. `./run_all.sh all [--yes]` runs g2, preflight, G3, the gate and the steps above one after another in the foreground (`FOREGROUND=1`; run it inside tmux). Before the gate it reports the measured seconds per run and asks; `--yes` skips the question, and answering no stops `all` with exit 0. When the gate is NOT PASSED, `all` runs `baselines-dev` and the dev report, freezes nothing, and exits 4. In the foreground each long step still writes its pid to `work/<step>.pid` while it runs, so `./run_all.sh status` (the gate, baselines-dev and study processes, and the size of both caches) and the guard against a second process see it. `./run_all.sh s2` exits 2: S2 (τ²-bench) is not built yet.
+`study` exits 4 unless the gate PASSED (`results/p2-gate.json`), `experiments/p3-baselines-prereg.json` is committed, the working tree has no uncommitted changes (spec §3.7), and `experiments/p2-gate.json` and `results/p2-gate.json` still have the sha256 the freeze recorded (spec §9.8). Before launching it checks that the first 6505 lines of `work/runs.jsonl` and the baseline cache lines recorded at the freeze are unchanged. `./run_all.sh all [--yes]` runs g2, preflight, G3, the gate and the steps above one after another in the foreground (`FOREGROUND=1`; run it inside tmux). Before the gate it reports the measured seconds per run and asks; `--yes` skips the question, and answering no stops `all` with exit 0. When the gate is NOT PASSED, `all` runs `baselines-dev` and the dev report, freezes nothing, and exits 4. In the foreground each long step still writes its pid to `work/<step>.pid` while it runs, so `./run_all.sh status` (the gate, baselines-dev and study processes, and the size of both caches) and the guard against a second process see it. `./run_all.sh s2` exits 2: S2 (τ²-bench) is not built yet.
 
 The commands `run_all.sh` runs, for reference (`study` accepts only these two files):
 
@@ -256,7 +256,8 @@ SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localh
   .venv/bin/specdx baselines --split dev --config experiments/p2-gate.json \
   --out results/p3-baselines-dev.json --workers 2
 .venv/bin/specdx freeze-baselines --from results/p3-baselines-dev.json \
-  --out experiments/p3-baselines-prereg --cache work/baseline-llm.jsonl
+  --out experiments/p3-baselines-prereg --cache work/baseline-llm.jsonl \
+  --gate-config experiments/p2-gate.json --gate-result results/p2-gate.json
 SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localhost:11435 \
   .venv/bin/specdx study --split test --config experiments/p2-gate.json \
   --baselines experiments/p3-baselines-prereg.json --out results/p3-study.json --workers 2

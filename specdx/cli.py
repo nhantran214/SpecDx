@@ -47,6 +47,7 @@ def _log_progress() -> None:
 # The only configuration and pre-registration the test split runs with (spec §3.7).
 STUDY_CONFIG = Path("experiments") / "p2-gate.json"
 STUDY_PREREG = Path("experiments") / "p3-baselines-prereg.json"
+STUDY_GATE = Path("results") / "p2-gate.json"
 
 
 def study_paths(root: Path, config: Path, prereg_json: Path) -> str | None:
@@ -158,6 +159,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the baseline LLM cache to fingerprint")
     fr.add_argument("--force", action="store_true",
                     help="replace an existing pre-registration (it is frozen otherwise)")
+    fr.add_argument("--gate-config", type=Path, default=None,
+                    help=f"the gate configuration to fingerprint (default {STUDY_CONFIG})")
+    fr.add_argument("--gate-result", type=Path, default=None,
+                    help=f"the gate result to fingerprint (default {STUDY_GATE})")
     st = sub.add_parser("study", help="the test split, once the gate PASSED (spec §3.7)")
     st.add_argument("--split", choices=("test",), required=True)
     st.add_argument("--config", type=Path, required=True)
@@ -302,8 +307,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if bad:
             print(f"error: failed specifications {bad}; re-run baselines-dev", file=sys.stderr)
             return 1
+        gate_config = args.gate_config or REPO_ROOT / STUDY_CONFIG
+        gate_result = args.gate_result or REPO_ROOT / STUDY_GATE
+        for path in (gate_config, gate_result):
+            if not path.exists():
+                print(f"error: {path} is missing; the pre-registration records its sha256",
+                      file=sys.stderr)
+                return 1
         try:
-            doc = prereg(result, args.source, args.cache)
+            doc = prereg(result, args.source, args.cache, gate_config, gate_result)
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -321,9 +333,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         text = study_markdown(dev, {"specdx": 0.0, **{a: 0.0 for a in dev.defects
                                                       if a != "specdx"}})
         if args.test is not None and args.test.exists():
-            pre = json.loads((REPO_ROOT / STUDY_PREREG).read_text(encoding="utf-8"))
             test = SplitResult.from_json(args.test.read_text(encoding="utf-8"))
-            taus = {c["arm"]: c["tau"] for c in pre["chosen"].values()}
+            taus = test.taus
+            if taus is None:  # a result written before the study embedded its τ
+                pre = json.loads((REPO_ROOT / STUDY_PREREG).read_text(encoding="utf-8"))
+                taus = {c["arm"]: c["tau"] for c in pre["chosen"].values()}
+                warning = (f"warning: {args.test} embeds no τ; the test section uses the "
+                           f"pre-registration's ({STUDY_PREREG})")
+                print(warning, file=sys.stderr)
+                text += f"\n> {warning}\n"
             text += "\n" + study_markdown(test, {"specdx": 0.0, **taus})
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")
@@ -331,9 +349,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "study":  # refused before any configuration, pack or lock (exit 4)
+        from specdx.eval.freeze import bound_mismatch
+
         reason = (study_paths(REPO_ROOT, args.config, args.baselines)
-                  or study_guard(REPO_ROOT, REPO_ROOT / "results" / "p2-gate.json",
-                                 args.baselines, args.config))
+                  or study_guard(REPO_ROOT, REPO_ROOT / STUDY_GATE, args.baselines, args.config))
+        if not reason:
+            try:
+                frozen = json.loads(args.baselines.read_text(encoding="utf-8"))
+                reason = bound_mismatch(frozen, REPO_ROOT / STUDY_CONFIG, REPO_ROOT / STUDY_GATE)
+            except (OSError, ValueError, TypeError) as exc:
+                reason = f"cannot read the pre-registration {args.baselines}: {exc}"
         if reason:
             print(f"error: {reason}", file=sys.stderr)
             return 4
@@ -397,6 +422,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         result = run_split(bench, config, mutants, arms, gateway,
                            args.out.with_suffix(".progress.jsonl"), args.split)
+        if args.command == "study":  # the test report uses exactly these (spec §9.8)
+            import hashlib
+
+            result.prereg_sha256 = hashlib.sha256(args.baselines.read_bytes()).hexdigest()
+            result.taus = {a.label: tau for a, tau in study_arms(doc)}
         args.out.write_text(result.to_json(), encoding="utf-8")
         print(f"{len(result.defects)} arms on {len(mutants) + 1} specifications -> {args.out}")
         return 0

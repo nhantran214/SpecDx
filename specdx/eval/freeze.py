@@ -78,20 +78,46 @@ def canonical_json(doc: dict[str, Any]) -> str:
     return json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True)
 
 
-def prereg(result: SplitResult, source: Path, cache: Path | None = None) -> dict[str, Any]:
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# The files the test split is bound to (spec §9.8): `study` refuses when either changed.
+BOUND: tuple[str, ...] = ("gate_config_sha256", "gate_result_sha256")
+
+
+def prereg(result: SplitResult, source: Path, cache: Path | None = None,
+           gate_config: Path | None = None, gate_result: Path | None = None) -> dict[str, Any]:
+    """gate_config / gate_result: experiments/p2-gate.json and results/p2-gate.json, whose
+    sha256 the pre-registration records so that the test split runs on exactly them."""
     chosen = choose(result)
     if missing := sorted(set(REGISTRY) - set(chosen)):
         raise ValueError("no dev arm for baseline(s) " + ", ".join(missing)
                          + ": an incomplete pre-registration is never written")
     doc: dict[str, Any] = {"schema": 1, "source": str(source),
-                           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                           "source_sha256": sha256_file(source),
                            "chosen": chosen, "fixed": FIXED}
+    for key, path in zip(BOUND, (gate_config, gate_result), strict=True):
+        if path is not None:
+            doc[key] = sha256_file(path)
     if cache is not None and cache.exists():
         data = cache.read_bytes()
         lines = data.splitlines(keepends=True)
         doc["baseline_cache"] = {"lines": len(lines),
                                  "md5": hashlib.md5(b"".join(lines)).hexdigest()}
     return doc
+
+
+def bound_mismatch(doc: dict[str, Any], gate_config: Path, gate_result: Path) -> str | None:
+    """Why the current gate configuration or result is not the one the freeze recorded."""
+    for key, path in zip(BOUND, (gate_config, gate_result), strict=True):
+        if key not in doc:
+            return f"the pre-registration records no {key}: re-run freeze-baselines"
+        if not path.exists():
+            return f"{path} is missing; the freeze recorded its sha256"
+        if sha256_file(path) != doc[key]:
+            return f"{path} changed since the freeze (sha256 differs from the recorded {key})"
+    return None
 
 
 def prereg_markdown(doc: dict[str, Any]) -> str:

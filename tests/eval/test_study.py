@@ -56,7 +56,11 @@ def test_round_trip_is_byte_stable() -> None:
     r = _result()
     text = r.to_json()
     assert SplitResult.from_json(text).to_json() == text
-    assert json.loads(text)["split"] == "dev"
+    assert json.loads(text)["split"] == "dev" and "taus" not in json.loads(text)
+    r.prereg_sha256, r.taus = "ab" * 32, {"jest": 0.5, "b5_mus": 0.0}
+    text = r.to_json()
+    back = SplitResult.from_json(text)
+    assert back.to_json() == text and (back.prereg_sha256, back.taus) == (r.prereg_sha256, r.taus)
 
 
 def test_an_arm_with_no_findings_scores_all_fn() -> None:

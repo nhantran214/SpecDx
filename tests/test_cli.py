@@ -283,10 +283,11 @@ def _frozen_repo(root: Path, *, track_config: bool = True, gate: str = '{"passed
                                   "rng_seed": 1}))
     src = root / "dev.json"
     src.write_text(_dev_result().to_json(), encoding="utf-8")
-    doc = prereg(_dev_result(), src)
+    (root / "results" / "p2-gate.json").write_text(gate)
+    doc = prereg(_dev_result(), src, gate_config=config,
+                 gate_result=root / "results" / "p2-gate.json")
     pre = root / "experiments" / "p3-baselines-prereg.json"
     pre.write_text(canonical_json(doc), encoding="utf-8")
-    (root / "results" / "p2-gate.json").write_text(gate)
     files = ["dev.json", "experiments/p3-baselines-prereg.json", "results/p2-gate.json"]
     git("add", *files, *(["experiments/p2-gate.json"] if track_config else []))
     git("commit", "-q", "-m", "frozen")
@@ -376,11 +377,25 @@ def _dev_result():
     return SplitResult("dev", truths, {"H1"}, defects, {}, {}, {})
 
 
+def _gate_files(monkeypatch, root: Path) -> tuple[Path, Path]:
+    """The gate configuration and result freeze-baselines fingerprints, under root."""
+    import specdx.cli
+
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", root)
+    (root / "experiments").mkdir(exist_ok=True)
+    (root / "results").mkdir(exist_ok=True)
+    config, gate = root / "experiments" / "p2-gate.json", root / "results" / "p2-gate.json"
+    config.write_text('{"budget": 1}')
+    gate.write_text('{"passed": true}')
+    return config, gate
+
+
 def test_freeze_baselines_writes_canonical_json_whose_hash_the_markdown_prints(
         monkeypatch, tmp_path) -> None:
     import hashlib
 
     _no_workbench(monkeypatch)
+    config, gate = _gate_files(monkeypatch, tmp_path)
     src = tmp_path / "dev.json"
     src.write_text(_dev_result().to_json(), encoding="utf-8")
     cache = tmp_path / "baseline-llm.jsonl"
@@ -394,11 +409,26 @@ def test_freeze_baselines_writes_canonical_json_whose_hash_the_markdown_prints(
 
     doc = json.loads(body)
     assert doc["baseline_cache"]["lines"] == 1 and set(doc["chosen"]) >= {"jest"}
+    assert doc["gate_config_sha256"] == hashlib.sha256(config.read_bytes()).hexdigest()
+    assert doc["gate_result_sha256"] == hashlib.sha256(gate.read_bytes()).hexdigest()
+
+
+def test_freeze_baselines_refuses_without_the_gate_result(monkeypatch, tmp_path, capsys) -> None:
+    _no_workbench(monkeypatch)
+    _, gate = _gate_files(monkeypatch, tmp_path)
+    gate.unlink()
+    src = tmp_path / "dev.json"
+    src.write_text(_dev_result().to_json(), encoding="utf-8")
+    out = tmp_path / "prereg"
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out)]) == 1
+    assert "p2-gate.json is missing" in capsys.readouterr().err
+    assert not out.with_suffix(".json").exists()
 
 
 def test_freeze_baselines_refuses_failed_specifications_and_incomplete_choices(
         monkeypatch, tmp_path, capsys) -> None:
     _no_workbench(monkeypatch)
+    _gate_files(monkeypatch, tmp_path)
     failed = _dev_result()
     failed.failures = {"jest": {"H1": "boom"}}
     src = tmp_path / "dev.json"
@@ -440,7 +470,15 @@ def test_report_uses_tau_zero_on_dev_and_the_frozen_tau_on_test(
     assert main(["report", "--dev", str(dev), "--test", str(test_json), "--out", str(out)]) == 0
     tail = out.read_text().split("test split", 1)[1]
     assert "| jest | 0.5 |" in tail and "| specdx | 0 |" in tail
-    assert capsys.readouterr().out.startswith("# Comparison study: dev split")
+    captured = capsys.readouterr()
+    assert captured.out.startswith("# Comparison study: dev split")
+    assert "embeds no τ" in captured.err and "embeds no τ" in out.read_text()
+    # The τ the study embedded wins over the pre-registration's.
+    test.taus = {"jest": 0.25}
+    test_json.write_text(test.to_json(), encoding="utf-8")
+    assert main(["report", "--dev", str(dev), "--test", str(test_json), "--out", str(out)]) == 0
+    tail = out.read_text().split("test split", 1)[1]
+    assert "| jest | 0.25 |" in tail and "embeds no τ" not in out.read_text()
 
 
 def _wired(monkeypatch, tmp_path):
@@ -499,11 +537,55 @@ def test_study_runs_the_frozen_arms_on_the_mutants_outside_the_dev_split(
     assert _study(tmp_path, config, pre) == 0
     assert seen["mutants"] == ["T1", "T2"] and seen["split"] == "test"
     assert seen["arms"] == [a.label for a, _ in study_arms(doc)]
+    import hashlib
+    import json
+
+    out = json.loads((tmp_path / "out" / "t.json").read_text())
+    assert out["prereg_sha256"] == hashlib.sha256(pre.read_bytes()).hexdigest()
+    assert out["taus"] == {a.label: tau for a, tau in study_arms(doc)}
+
+
+@pytest.mark.parametrize("which", ["experiments/p2-gate.json", "results/p2-gate.json"])
+def test_study_exits_4_when_a_bound_gate_file_changed_since_the_freeze(
+        monkeypatch, tmp_path, capsys, which) -> None:
+    import subprocess
+
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, _ = _frozen_repo(tmp_path)
+    path = tmp_path / which
+    path.write_text(path.read_text().replace("}", ', "edited": 1}', 1))
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "-am", "edit"], check=True)  # committed: the tree is clean
+    assert _study(tmp_path, config, pre) == 4
+    assert f"{path} changed since the freeze" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_study_exits_4_on_a_preregistration_without_the_gate_hashes(
+        monkeypatch, tmp_path, capsys) -> None:
+    import json
+    import subprocess
+
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    config, pre, doc = _frozen_repo(tmp_path)
+    del doc["gate_result_sha256"]
+    pre.write_text(json.dumps(doc))
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "-am", "old"], check=True)
+    assert _study(tmp_path, config, pre) == 4
+    assert "records no gate_result_sha256" in capsys.readouterr().err
 
 
 def test_freeze_baselines_refuses_to_replace_a_frozen_preregistration_without_force(
         monkeypatch, tmp_path, capsys) -> None:
     _no_workbench(monkeypatch)
+    _gate_files(monkeypatch, tmp_path)
     src = tmp_path / "dev.json"
     src.write_text(_dev_result().to_json(), encoding="utf-8")
     out = tmp_path / "prereg"

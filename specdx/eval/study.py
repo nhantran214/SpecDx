@@ -72,7 +72,9 @@ def _defect(raw: Mapping[str, Any]) -> Defect:
 class SplitResult:
     """failures: per arm label, the specifications it could not report on, with the reason.
     A failed (arm, specification) is left out of that arm's scores. checkpoints: SpecDx's
-    anytime checkpoints per specification, ending with its final report ("at": "end")."""
+    anytime checkpoints per specification, ending with its final report ("at": "end").
+    prereg_sha256 / taus: on the test split, the pre-registration it ran under and the τ per
+    arm label it froze, so the test report uses exactly those (spec §9.8)."""
 
     split: str
     truths: dict[str, GroundTruth]
@@ -81,9 +83,17 @@ class SplitResult:
     costs: dict[str, dict[str, dict[str, Any]]]
     failures: dict[str, dict[str, str]]
     checkpoints: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    prereg_sha256: str | None = None
+    taus: dict[str, float] | None = None
 
     def to_json(self) -> str:
+        frozen: dict[str, Any] = {}
+        if self.prereg_sha256 is not None:
+            frozen["prereg_sha256"] = self.prereg_sha256
+        if self.taus is not None:
+            frozen["taus"] = dict(sorted(self.taus.items()))
         return json.dumps({
+            **frozen,
             "split": self.split,
             "truths": {k: {"type": t.type, "location": sorted(t.location),
                            "kind": t.location_kind} for k, t in sorted(self.truths.items())},
@@ -105,7 +115,8 @@ class SplitResult:
                    set(raw["scorable"]),
                    {a: {s: [_defect(d) for d in ds] for s, ds in by.items()}
                     for a, by in raw["defects"].items()},
-                   raw["costs"], raw["failures"], raw.get("checkpoints", {}))
+                   raw["costs"], raw["failures"], raw.get("checkpoints", {}),
+                   raw.get("prereg_sha256"), raw.get("taus"))
 
 
 def _reports(result: SplitResult, arm: str, tau: float, primary: bool):

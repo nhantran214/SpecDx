@@ -474,15 +474,20 @@ stage_freeze() {
   fi
   [[ -f $PREREG.json ]] \
     && die "$PREREG.json exists but is not committed: check it, then commit it or remove it and re-run"
+  [[ -f results/p2-gate.json ]] || die "results/p2-gate.json is missing: the freeze records its sha256"
   "$SPECDX" freeze-baselines --from results/p3-baselines-dev.json --out "$PREREG" \
-    --cache "$BASELINE_CACHE" || fail "freeze-baselines failed (a failed dev specification?)"
-  local pin
+    --cache "$BASELINE_CACHE" --gate-config "$GATE_CONFIG" --gate-result results/p2-gate.json \
+    || fail "freeze-baselines failed (a failed dev specification?)"
+  local pin files
   pin=$("$PY" -m pytest -q -o addopts="" tests/test_preregistration_baselines.py 2>&1) \
     || { tail -20 <<< "$pin"; fail "the pre-registration pin test failed; nothing committed"; }
   tail -1 <<< "$pin"
-  git add "$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json
+  # The gate result is committed with the pre-registration that records its sha256 (§9.8).
+  files=("$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json results/p2-gate.json)
+  [[ -f results/p2-gate.md ]] && files+=(results/p2-gate.md)
+  git add "${files[@]}"
   git commit -q -m "experiments: baseline pre-registration — arms and thresholds frozen on the dev split" \
-    -- "$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json
+    -- "${files[@]}"
   ok "frozen and committed $(git rev-parse --short HEAD)"
 }
 
