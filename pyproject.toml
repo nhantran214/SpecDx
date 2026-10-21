@@ -7,6 +7,11 @@ dependencies = ["numpy>=2.1", "httpx>=0.27", "psycopg[binary]>=3.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "ruff>=0.7"]
+baselines = [
+    "crowd-kit>=1.4",
+    "python-sat>=1.8.dev13",
+    "benchguard @ git+https://github.com/XinmingTu/BenchGuard@7d6a52e5627a1a734ecd895e0c73778ab54aca63",
+]
 
 [project.scripts]
 specdx = "specdx.cli:main"
@@ -29,7 +34,7 @@ markers = ["db: needs the SpecDx PostgreSQL on port 55434 (docker compose up -d)
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["vendor/"]
+exclude = ["vendor/", "baseline/", "related_work/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
