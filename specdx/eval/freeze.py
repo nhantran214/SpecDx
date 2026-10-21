@@ -73,10 +73,19 @@ def choose(result: SplitResult) -> dict[str, dict[str, Any]]:
     return out
 
 
+def canonical_json(doc: dict[str, Any]) -> str:
+    """The one serialization the pre-registration is hashed and written in."""
+    return json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True)
+
+
 def prereg(result: SplitResult, source: Path, cache: Path | None = None) -> dict[str, Any]:
+    chosen = choose(result)
+    if missing := sorted(set(REGISTRY) - set(chosen)):
+        raise ValueError("no dev arm for baseline(s) " + ", ".join(missing)
+                         + ": an incomplete pre-registration is never written")
     doc: dict[str, Any] = {"schema": 1, "source": str(source),
                            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                           "chosen": choose(result), "fixed": FIXED}
+                           "chosen": chosen, "fixed": FIXED}
     if cache is not None and cache.exists():
         data = cache.read_bytes()
         lines = data.splitlines(keepends=True)
@@ -86,7 +95,7 @@ def prereg(result: SplitResult, source: Path, cache: Path | None = None) -> dict
 
 
 def prereg_markdown(doc: dict[str, Any]) -> str:
-    body = json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True)
+    body = canonical_json(doc)
     lines = ["# Baseline pre-registration (baselines spec §3.3)", "",
              f"Chosen on the dev split from `{doc['source']}` (sha256 `{doc['source_sha256']}`).",
              f"JSON sha256: `{hashlib.sha256(body.encode()).hexdigest()}`.", "",

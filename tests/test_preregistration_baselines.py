@@ -29,7 +29,7 @@ def test_values_fixed_by_the_spec() -> None:
 @pytest.mark.skipif(not DOC.exists(), reason="frozen by `run_all.sh freeze-baselines`")
 def test_the_frozen_choices_match_their_markdown_and_the_fixed_values() -> None:
     doc = json.loads(DOC.read_text(encoding="utf-8"))
-    body = json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True)
+    body = freeze.canonical_json(doc)
     md = DOC.with_suffix(".md").read_text(encoding="utf-8")
     assert hashlib.sha256(body.encode()).hexdigest() in md
     assert doc["fixed"] == freeze.FIXED
