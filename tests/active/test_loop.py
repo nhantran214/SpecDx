@@ -570,3 +570,16 @@ def test_a_checkpoint_drops_the_base_ambiguities_like_the_final_report() -> None
                         _config(budget=60, checkpoints=(10,)), base=base)
     kept = mutant.checkpoints[0]["defects"]
     assert not [d for d in kept if d["type"] == "ambiguity"]
+
+
+def test_a_checkpoint_cost_includes_the_probe_runs_spent_so_far() -> None:
+    def refuter(interps, budget):
+        return NeverRefute(budget)
+
+    report = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan), refuter=refuter),
+                        _config(budget=100, checkpoints=(9, 10)))
+    early, later = report.checkpoints
+    # The fake spends one request per population run; a probe run is charged at the mean.
+    # The first batches ask no probe, a later iteration asks one.
+    assert early["cost"]["requests"] == early["runs"]
+    assert report.probe_runs == 1 and later["cost"]["requests"] == later["runs"] + 1

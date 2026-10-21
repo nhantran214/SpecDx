@@ -327,7 +327,7 @@ def run_specdx(
                 kept = [d for d in defects if d.type != "ambiguity" or base is None
                         or ambiguity_key(d) not in base.ambiguity_keys]
                 checkpoints.append({"at": at, "runs": runs,
-                                    "cost": behaviours_cost(behaviours).as_dict(),
+                                    "cost": behaviours_cost(behaviours, budget.probe).as_dict(),
                                     "defects": [asdict(d) for d in kept]})
         scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))
