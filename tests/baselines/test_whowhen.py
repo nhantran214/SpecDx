@@ -42,6 +42,13 @@ def test_verdict_parsing() -> None:
     assert parse_verdict("I think the agent was wrong", v) is None
 
 
+def test_verdict_parsing_strips_quotes_brackets_and_trailing_punctuation() -> None:
+    v = frozenset({"inv:po-15"})
+    for written in ("`inv:po-15`", "`inv:po-15`.", "<inv:po-15>", '"inv:po-15",', "'inv:po-15';",
+                    "inv:po-15.", "inv:po-15:", "inv:po-15)", "`inv:po-15`)."):
+        assert parse_verdict(f"Verdict: spec_defect {written}", v) == "inv:po-15", written
+
+
 class _Scripted:
     """A gateway answering from a function of the user prompt; records every call."""
 
@@ -84,8 +91,25 @@ def test_a_spec_defect_verdict_scores_the_clause_for_every_strategy() -> None:
         assert [(d.type, d.location, d.score) for d in out.defects] == \
             [("hidden", ("inv:x",), 1.0)], strategy
         assert out.cost.requests == len(gw.calls) >= 2
-        assert all(kw["max_tokens"] == 1024 and kw["options"] == {"seed": 1}
+        # The reference's open-model generation settings (Lib/local_model.py), seed 1.
+        assert all(kw["max_tokens"] == 1024
+                   and kw["options"] == {"temperature": 0.6, "top_p": 0.95, "seed": 1}
                    for _, kw in gw.calls)
+
+
+def test_step_by_step_with_no_flagged_step_makes_no_prediction() -> None:
+    gw = _Scripted(lambda p: "Verdict: spec_defect inv:x" if "Verdict:" in p
+                   else "1. No.\n2. Reason: fine")
+    out = _run(gw, "step_by_step")
+    assert out.defects == [] and out.extra["unparsed"] == 1 and out.extra["judged"] == 0
+    assert len(gw.calls) == 2  # one per step, and no verdict call
+
+
+def test_the_verdict_prompt_shows_the_clamped_step() -> None:
+    gw = _Scripted(lambda p: "Verdict: agent_error" if "Verdict:" in p else "Step Number: 7")
+    _run(gw, "all_at_once")
+    verdict = gw.calls[-1][0][-1]["content"]
+    assert "Decisive step 1 by 'S2'" in verdict and "step 7" not in verdict
 
 
 def test_an_agent_error_verdict_is_not_a_defect() -> None:

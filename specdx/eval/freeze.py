@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from specdx.baselines.api import REGISTRY, TELL_CHARS
-from specdx.baselines.whowhen import K_RUNS
+from specdx.baselines.whowhen import K_RUNS, OPTIONS
 from specdx.eval.stats import RESAMPLES, SEED
 from specdx.eval.study import CHECKPOINTS, Arm, SplitResult, score
 
@@ -30,6 +30,7 @@ FIXED: dict[str, Any] = {
     "untuned": sorted(UNTUNED),
     "benchguard_commit": "7d6a52e5627a1a734ecd895e0c73778ab54aca63",
     "whowhen_commit": "b2bae5c5b06d681d04ea5e9b63b7a30525c04925",
+    "whowhen_options": dict(OPTIONS),
 }
 
 

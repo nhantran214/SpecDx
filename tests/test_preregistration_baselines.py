@@ -23,6 +23,8 @@ def test_values_fixed_by_the_spec() -> None:
     assert benchguard.CONFIDENCE == {"CONFIRMED": 3, "LIKELY": 2, "POSSIBLE": 1}
     assert benchguard.MAX_TOKENS == 4096 and whowhen.MAX_TOKENS == 1024
     assert freeze.FIXED["benchguard_commit"].startswith("7d6a52e")
+    assert whowhen.OPTIONS == {"temperature": 0.6, "top_p": 0.95, "seed": 1}
+    assert freeze.FIXED["whowhen_options"] == whowhen.OPTIONS
     assert freeze.FIXED["untuned"] == ["b2_naive", "b3_2pl", "b5_mus", "dawid_skene", "glad"]
 
 

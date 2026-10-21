@@ -38,6 +38,9 @@ __all__ = ["REGISTRY", "failure_log", "parse_verdict", "sample_runs"]
 
 K_RUNS = 5
 MAX_TOKENS = 1024
+# The reference's open-model generation (Lib/local_model.py, _run_local_generation:
+# do_sample, temperature 0.6, top_p 0.95, max_new_tokens 1024), seeded (spec §9.8).
+OPTIONS: dict[str, float | int] = {"temperature": 0.6, "top_p": 0.95, "seed": 1}
 ROW_CHARS = 1200
 
 
@@ -85,13 +88,19 @@ def failure_log(b: Behaviour, steps: Sequence[Any],
 _VERDICT = re.compile(r"Verdict:\s*(agent_error|spec_defect\s+(\S+))", re.I)
 
 
+_TRAILING, _QUOTES = ".,;:)", "`'\"<>"
+
+
 def parse_verdict(text: str, violated: frozenset[str]) -> str | None:
+    """agent_error, a failed check's id, or None (off-format, or not a failed check). The
+    id may be wrapped in backticks, quotes or angle brackets and followed by .,;:)"""
     m = _VERDICT.search(text or "")
     if not m:
         return None
     if m.group(1).lower() == "agent_error":
         return "agent_error"
-    return m.group(2) if m.group(2) in violated else None
+    cid = m.group(2).rstrip(_TRAILING).strip(_QUOTES).rstrip(_TRAILING)
+    return cid if cid in violated else None
 
 
 # --- prompts: verbatim from Lib/utils.py (b2bae5c) --------------------------------------
@@ -211,7 +220,7 @@ class WhoWhen:
             nonlocal cost
             r = gateway.chat(model, [{"role": "system", "content": system},
                                      {"role": "user", "content": prompt}],
-                             options={"seed": 1}, max_tokens=MAX_TOKENS)
+                             options=OPTIONS, max_tokens=MAX_TOKENS)
             cost = cost + r.cost
             return r.text if r.status == "ok" else None
 
@@ -230,7 +239,8 @@ class WhoWhen:
             if step is None:
                 unparsed += 1
                 continue
-            entry = log[min(step, len(log) - 1)]
+            step = min(step, len(log) - 1)
+            entry = log[step]
             text = ask(_SYSTEM["all_at_once"], VERDICT_PROMPT.format(
                 problem=problem, answer=answer, step=step, agent=entry["name"],
                 content=entry["content"], checks=checks))
@@ -251,7 +261,8 @@ class WhoWhen:
     @staticmethod
     def _localise(strategy: str | None, log: list[dict[str, str]], problem: str, answer: str,
                   ask: Ask, key: str) -> int | None:
-        """The decisive step index, or None when the model errored or answered off-format."""
+        """The decisive step index, or None when the model errored, answered off-format or
+        (step_by_step) flagged no step."""
         chat = "\n".join(f"{e['name']}: {e['content']}" for e in log)
         if strategy == "all_at_once":
             reply = ask(_SYSTEM[strategy], _all_at_once_prompt(problem, answer, chat))
@@ -267,7 +278,7 @@ class WhoWhen:
                     return None
                 if reply.lower().strip().startswith("1. yes"):
                     return idx
-            return len(log) - 1  # no step flagged: the last one carries the failure
+            return None  # no step flagged: the original makes no prediction
         rng = random.Random(_h(key))
         lo, hi = 0, len(log) - 1
         while lo < hi:
