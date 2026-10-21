@@ -76,8 +76,8 @@ def test_run_split_is_deterministic(monkeypatch, tmp_path) -> None:
     from specdx.baselines.api import BaselineOutput
     from specdx.cost import Cost
 
-    rep = SimpleNamespace(defects=[_d("hidden", "c1", 0.9)], behaviours=[], probe_runs=0,
-                          ddmin_runs=0, checkpoints=[])
+    rep = SimpleNamespace(defects=[_d("hidden", "c1", 0.9)], behaviours=[], runs=0,
+                          probe_runs=0, ddmin_runs=0, checkpoints=[])
     monkeypatch.setattr(st, "run_specdx", lambda *a, **k: rep)
     monkeypatch.setattr(st, "make_input", lambda *a, **k: None)
     monkeypatch.setattr(st, "touch_counts", lambda *a, **k: {"H1": 3})
@@ -93,32 +93,50 @@ def test_run_split_is_deterministic(monkeypatch, tmp_path) -> None:
     assert a.to_json() == b.to_json()
 
 
-def _fake_split(monkeypatch, run, specdx=None):
-    """run_split on base + one mutant H1, with SpecDx faked and one fake arm `run`."""
+def _behaviour(requests):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(status="ok", harness={"s1": {"requests": requests}})
+
+
+def _fake_split(monkeypatch, runs, specdx=None, make_input=None, requests=3):
+    """run_split on base B + mutants H1 (variant V1) and H2 (V2), SpecDx faked with one run
+    of `requests` requests per spec, and one fake arm per entry of runs (name -> run).
+    specdx / make_input, if given, replace SpecDx on the mutants / the input builder; the
+    fake input is the variant name."""
     from types import SimpleNamespace
 
     import specdx.eval.study as st
 
-    rep = SimpleNamespace(defects=[_d("hidden", "c1", 0.9)], behaviours=[], probe_runs=0,
-                          ddmin_runs=0, checkpoints=[])
-    base_report = SimpleNamespace(defects=[], behaviours=[], probe_runs=0, ddmin_runs=0,
-                                  checkpoints=[])
+    def report(defects):
+        return SimpleNamespace(defects=defects, behaviours=[_behaviour(requests)], runs=1,
+                               probe_runs=0, ddmin_runs=0, checkpoints=[])
 
     def fake_specdx(variant, ctx, cfg, base=None):
         if variant == "B":
-            return base_report
-        return rep if specdx is None else specdx()
+            return report([])
+        if specdx is not None:
+            return specdx(variant)
+        return report([_d("hidden", "c" + variant[1:], 0.9)])
 
     monkeypatch.setattr(st, "run_specdx", fake_specdx)
-    monkeypatch.setattr(st, "make_input", lambda *a, **k: None)
-    monkeypatch.setattr(st, "touch_counts", lambda *a, **k: {"H1": 3})
-    monkeypatch.setattr(st, "scorable_ids", lambda t: {"H1"})
-    monkeypatch.setattr(st, "REGISTRY", {"x": SimpleNamespace(uses_llm=False, strategies=(None,),
-                                                               run=run)})
+    monkeypatch.setattr(st, "make_input", make_input or (lambda bench, v, *a, **k: v))
+    monkeypatch.setattr(st, "touch_counts", lambda *a, **k: {"H1": 3, "H2": 3})
+    monkeypatch.setattr(st, "scorable_ids", lambda t: {"H1", "H2"})
+    monkeypatch.setattr(st, "REGISTRY", {
+        n: SimpleNamespace(uses_llm=False, strategies=(None,), run=r) for n, r in runs.items()})
     cfg = SimpleNamespace(specdx=lambda: st.SpecDxConfig({"f": ("m",)}))
     bench = SimpleNamespace(base="B", loop_context=lambda v, c: SimpleNamespace(lens=None))
-    mut = SimpleNamespace(id="H1", variant="V", truth=_t("hidden", "c1", "clause", "H1"))
-    return lambda path: st.run_split(bench, cfg, [mut], [st.Arm("x")], None, path, "dev")
+    muts = [SimpleNamespace(id=f"H{i}", variant=f"V{i}",
+                            truth=_t("hidden", f"c{i}", "clause", f"H{i}")) for i in (1, 2)]
+    arms = [st.Arm(n) for n in runs]
+    return lambda path: st.run_split(bench, cfg, muts, arms, None, path, "dev")
+
+
+def _empty(inp, **k):
+    from specdx.baselines.api import BaselineOutput
+
+    return BaselineOutput([])
 
 
 def test_an_infrastructure_error_in_an_arm_stops_the_split(monkeypatch, tmp_path) -> None:
@@ -131,40 +149,127 @@ def test_an_infrastructure_error_in_an_arm_stops_the_split(monkeypatch, tmp_path
         def run(inp, exc=exc, **k):
             raise exc
 
+        def build(*a, exc=exc, **k):
+            raise exc
+
         with pytest.raises(type(exc)):
-            _fake_split(monkeypatch, run)(tmp_path / "out.jsonl")
+            _fake_split(monkeypatch, {"x": run})(tmp_path / "out.jsonl")
+        with pytest.raises(type(exc)):
+            _fake_split(monkeypatch, {"x": _empty}, make_input=build)(tmp_path / "out.jsonl")
 
 
 def test_another_arm_error_fails_that_spec_only(monkeypatch, tmp_path) -> None:
+    from specdx.baselines.api import BaselineOutput
+
     def run(inp, **k):
-        raise ValueError("bad reply")
+        if inp == "V1":
+            raise ValueError("bad reply")
+        return BaselineOutput([])
 
     out = tmp_path / "out.jsonl"
-    r = _fake_split(monkeypatch, run)(out)
-    assert r.failures == {"x": {"base": "ValueError: bad reply", "H1": "ValueError: bad reply"}}
-    assert r.defects["x"] == {"base": [], "H1": []}
-    assert score(r, "specdx")["hidden"].tp == 1
-    assert [json.loads(line)["spec"] for line in out.read_text().splitlines()] == ["base", "H1"]
+    r = _fake_split(monkeypatch, {"x": run})(out)
+    assert r.failures == {"x": {"H1": "ValueError: bad reply"}}
+    assert r.defects["x"] == {"base": [], "H1": [], "H2": []}
+    assert score(r, "specdx")["hidden"].tp == 2
+    assert (score(r, "x")["hidden"].fn, score(r, "x")["hidden"].tp) == (1, 0)
+    assert [json.loads(line)["spec"] for line in out.read_text().splitlines()] == [
+        "base", "H1", "H2"]
+
+
+def test_an_arm_that_fails_on_the_base_fails_everywhere(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def run(inp, **k):
+        calls.append(inp)
+        if inp == "B":
+            raise ValueError("no base")
+        return _empty(inp)
+
+    r = _fake_split(monkeypatch, {"x": run, "y": _empty})(tmp_path / "out.jsonl")
+    assert calls == ["B"]
+    assert r.failures == {"x": {"base": "ValueError: no base",
+                                "H1": "base failed: ValueError: no base",
+                                "H2": "base failed: ValueError: no base"}}
+    s = score(r, "x")["hidden"]
+    assert (s.tp, s.fn, s.fp) == (0, 0, 0)
+    assert score(r, "y")["hidden"].fn == 2
 
 
 def test_a_mutant_specdx_cannot_run_fails_every_arm_on_it(monkeypatch, tmp_path) -> None:
-    from specdx.baselines.api import BaselineOutput
-
     calls: list[object] = []
 
     def run(inp, **k):
         calls.append(inp)
-        return BaselineOutput([])
+        return _empty(inp)
 
-    def broken():
+    def broken(variant):
         raise KeyError("no such step")
 
-    r = _fake_split(monkeypatch, run, specdx=broken)(tmp_path / "out.jsonl")
-    assert len(calls) == 1  # the base only
-    assert set(r.failures) == {"specdx", "x"} and set(r.failures["x"]) == {"H1"}
+    r = _fake_split(monkeypatch, {"x": run}, specdx=broken)(tmp_path / "out.jsonl")
+    assert calls == ["B"]
+    assert set(r.failures) == {"specdx", "x"} and set(r.failures["x"]) == {"H1", "H2"}
     assert r.failures["x"]["H1"].startswith("no SpecDx report: KeyError")
     assert (score(r, "specdx")["hidden"].fn, score(r, "x")["hidden"].fn) == (0, 0)
     assert SplitResult.from_json(r.to_json()).to_json() == r.to_json()
+
+
+def test_an_input_that_cannot_be_built_fails_every_arm_on_that_spec(monkeypatch,
+                                                                    tmp_path) -> None:
+    def build(bench, variant, *a, **k):
+        if variant == "V2":
+            raise RuntimeError("the database refuses it")
+        return variant
+
+    out = tmp_path / "out.jsonl"
+    r = _fake_split(monkeypatch, {"x": _empty, "y": _empty}, make_input=build)(out)
+    reason = "no baseline input: RuntimeError: the database refuses it"
+    assert r.failures == {"x": {"H2": reason}, "y": {"H2": reason}}
+    assert "H2" in r.defects["specdx"] and len(out.read_text().splitlines()) == 3
+
+
+def test_arms_that_read_specdx_runs_are_charged_them(monkeypatch, tmp_path) -> None:
+    from specdx.baselines.api import BaselineOutput
+    from specdx.cost import Cost
+
+    def own(inp, **k):
+        return BaselineOutput([], Cost(requests=2, exact=False))
+
+    r = _fake_split(monkeypatch, {"jest": own, "benchguard": own}, requests=3)(
+        tmp_path / "out.jsonl")
+    assert r.costs["specdx"]["H1"]["requests"] == 3 and r.costs["specdx"]["H1"]["exact"]
+    assert (r.costs["jest"]["H1"]["requests"], r.costs["jest"]["H1"]["exact"]) == (5, False)
+    assert r.costs["benchguard"]["H1"]["requests"] == 2
+
+
+def test_equal_cost_reaches_specdx_final_report(monkeypatch, tmp_path) -> None:
+    from specdx.baselines.api import BaselineOutput
+    from specdx.cost import Cost
+
+    def rich(inp, **k):
+        return BaselineOutput([], Cost(requests=3))
+
+    def poor(inp, **k):
+        return BaselineOutput([], Cost(requests=2))
+
+    r = _fake_split(monkeypatch, {"benchguard": rich, "b5_mus": poor}, requests=3)(
+        tmp_path / "out.jsonl")
+    assert r.checkpoints["H1"][-1]["at"] == "end"
+    eq = equal_cost(r, "benchguard")
+    assert eq == {"H1": r.defects["specdx"]["H1"], "H2": r.defects["specdx"]["H2"]}
+    assert eq["H1"] and equal_cost(r, "b5_mus") == {"H1": [], "H2": []}
+
+
+def test_equal_cost_skips_the_base_and_failed_specs() -> None:
+    r = _result()
+    r.checkpoints["base"] = r.checkpoints["H1"]
+    assert set(equal_cost(r, "llm@m")) == {"H1", "H2"}
+    r.failures = {"specdx": {"H1": "KeyError"}, "llm@m": {"H2": "ValueError"}}
+    assert equal_cost(r, "llm@m") == {}
+
+
+def test_rank_metrics_count_the_truths_of_each_type() -> None:
+    m = rank_metrics(_result(), "jest")
+    assert m["hidden"]["n"] == 2 and m["contradiction"]["n"] == 0
 
 
 def test_dev_arms_cross_llm_baselines_with_every_model_and_strategy() -> None:
@@ -199,3 +304,23 @@ def test_make_input_loads_the_variants_pack_before_its_golden_state() -> None:
     assert calls == [("use", BASE_PACK), "golden"] and inp.golden == "G"
     assert inp.violated == {"k1": frozenset({"k1"})} and inp.data == ("data", 1)
     assert len(inp.clauses) > 0 and inp.gateway == "gw" and inp.config == "cfg"
+
+
+def test_make_input_passes_no_golden_state_when_the_database_refuses_it() -> None:
+    from types import SimpleNamespace
+
+    from specdx.config import BASE_PACK
+    from specdx.eval.study import make_input
+    from specdx.orchestrate.work_orders import load_work_orders
+
+    def refuse():
+        raise RuntimeError("the database refuses the canon's own golden state")
+
+    db = SimpleNamespace(use=lambda p: None, golden_state=refuse)
+    bench = SimpleNamespace(db=db, steps=load_work_orders(),
+                            variants=SimpleNamespace(statements={}))
+    ctx = SimpleNamespace(cells=SimpleNamespace(extract=lambda bs: None),
+                          lens=SimpleNamespace(violations=lambda b: frozenset()))
+    inp = make_input(bench, SimpleNamespace(pack=BASE_PACK), SimpleNamespace(behaviours=[]),
+                     ctx, "cfg", None)
+    assert inp.golden is None

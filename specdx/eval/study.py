@@ -28,6 +28,10 @@ from specdx.types import DEFECT_TYPES, Defect
 CHECKPOINTS: tuple[int, ...] = (25, 50, 100, 150, 200)
 # Outages stop the step (spec §5.3); a rerun resumes from the run and baseline caches.
 STOPS: tuple[type[BaseException], ...] = (*INFRASTRUCTURE_ERRORS, DigestMismatch)
+# Arms that read SpecDx's runs are charged those runs too (spec §3.5): their cost is
+# SpecDx's cost on the specification plus their own calls. The others pay their own only.
+CONSUMES_RUNS: frozenset[str] = frozenset({"whowhen", "irt_audit", "semantic_entropy", "glad",
+                                           "dawid_skene", "jest"})
 load_all()  # every baseline registers before arms are listed
 
 
@@ -65,7 +69,8 @@ def _defect(raw: Mapping[str, Any]) -> Defect:
 @dataclass
 class SplitResult:
     """failures: per arm label, the specifications it could not report on, with the reason.
-    A failed (arm, specification) is left out of that arm's scores."""
+    A failed (arm, specification) is left out of that arm's scores. checkpoints: SpecDx's
+    anytime checkpoints per specification, ending with its final report ("at": "end")."""
 
     split: str
     truths: dict[str, GroundTruth]
@@ -117,7 +122,8 @@ def score(result: SplitResult, arm: str, tau: float = 0.0, primary: bool = True,
 
 def rank_metrics(result: SplitResult, arm: str, tau: float = 0.0,
                  ks: Sequence[int] = (1, 3, 5)) -> dict[str, dict[str, float]]:
-    """One truth per mutant, so AP is the reciprocal rank of the first typed hit."""
+    """One truth per mutant, so AP is the reciprocal rank of the first typed hit. n: the
+    truths of the type scored, so a report can average over the types with n > 0."""
     reports, base = _reports(result, arm, tau, primary=True)
     per: dict[str, list[int | None]] = {t: [] for t in DEFECT_TYPES}
     for k, ds in reports.items():
@@ -128,16 +134,20 @@ def rank_metrics(result: SplitResult, arm: str, tau: float = 0.0,
     out = {}
     for t, ranks in per.items():
         n = len(ranks) or 1
-        row = {"ap": sum(1 / r for r in ranks if r) / n}
+        row = {"ap": sum(1 / r for r in ranks if r) / n, "n": len(ranks)}
         row.update({f"detect@{k}": sum(1 for r in ranks if r and r <= k) / n for k in ks})
         out[t] = row
     return out
 
 
 def equal_cost(result: SplitResult, arm: str) -> dict[str, list[Defect]]:
-    """Per specification, SpecDx at its last checkpoint within the arm's requests there."""
+    """Per mutant, SpecDx at its last checkpoint within the arm's requests there; mutants
+    SpecDx or the arm failed on are left out, as is the base."""
     out: dict[str, list[Defect]] = {}
+    skip = {"base", *result.failures.get("specdx", {}), *result.failures.get(arm, {})}
     for spec, cps in result.checkpoints.items():
+        if spec in skip:
+            continue
         budget = int(result.costs.get(arm, {}).get(spec, {}).get("requests", 0))
         fit = [c for c in cps if int(c["cost"]["requests"]) <= budget]
         out[spec] = [_defect(d) for d in fit[-1]["defects"]] if fit else []
@@ -145,17 +155,24 @@ def equal_cost(result: SplitResult, arm: str) -> dict[str, list[Defect]]:
 
 
 def make_input(bench, variant, report, ctx, cfg, gateway) -> BaselineInput:
-    """The variant's pack is loaded first, so golden_state is that variant's own (B5)."""
+    """The variant's pack is loaded first, so golden_state is that variant's own (B5). A
+    golden state the database refuses is None: B5 then reports its own failure."""
     from tonomyx.canon.pack import CanonPack
 
     pack = CanonPack(variant.pack)
     bench.db.use(variant.pack)
+    try:
+        golden = bench.db.golden_state()
+    except STOPS:
+        raise
+    except Exception:  # noqa: BLE001 - the database refuses this variant's golden state
+        golden = None
     return BaselineInput(
         variant=variant, report=report, data=ctx.cells.extract(report.behaviours),
         violated={b.run_key: ctx.lens.violations(b) for b in report.behaviours},
         clauses=ClauseSet.from_pack(pack, bench.steps), ctx=ctx, config=cfg, steps=bench.steps,
         statements=bench.variants.statements, drafts=draft_tables(pack),
-        golden=bench.db.golden_state(), gateway=gateway)
+        golden=golden, gateway=gateway)
 
 
 def _specdx_failure(report) -> str | None:
@@ -170,8 +187,10 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
     One JSON line per specification is written to out_lines as it finishes.
 
     Infrastructure errors and digest mismatches propagate (spec §5.3). Any other error
-    fails that (arm, specification) only; a mutant SpecDx cannot run fails every arm on it,
-    since the baselines read SpecDx's runs."""
+    fails that (arm, specification) only. A specification SpecDx cannot run, or whose
+    baseline input cannot be built, fails every arm on it, since the baselines read
+    SpecDx's runs. An arm that fails on the base has no differential reference, so it
+    fails on every specification of the split."""
     cfg = dataclasses.replace(config.specdx(), checkpoints=CHECKPOINTS)
     base_cfg = dataclasses.replace(cfg, localize=False)
     base_ctx = bench.loop_context(bench.base, cfg)
@@ -181,11 +200,27 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
     result = SplitResult(split, {m.id: m.truth for m in mutants}, set(scorable_ids(touched)),
                          {"specdx": {}}, {"specdx": {}}, {}, {})
 
-    def fail(label: str, spec: str, reason: str) -> None:
-        result.failures.setdefault(label, {})[spec] = reason
+    def record(label: str, spec: str, defects: list[Defect], cost: Cost,
+               failure: str | None) -> None:
+        result.defects.setdefault(label, {})[spec] = defects
+        result.costs.setdefault(label, {})[spec] = cost.as_dict()
+        if failure:
+            result.failures.setdefault(label, {})[spec] = failure
+
+    def fail_arms(spec: str, reason: str) -> None:
+        for arm in arms:
+            record(arm.label, spec, [], Cost(), reason)
 
     out_lines.parent.mkdir(parents=True, exist_ok=True)
     with out_lines.open("w", encoding="utf-8") as fh:
+
+        def done(spec: str, failed: bool = False) -> None:
+            line: dict[str, Any] = {"spec": spec, "done": True}
+            if failed:
+                line["failed"] = True
+            fh.write(json.dumps(line) + "\n")
+            fh.flush()
+
         for spec, variant, report, ctx in [("base", bench.base, base, base_ctx)] + [
                 (m.id, m.variant, None, None) for m in mutants]:
             failure = None
@@ -199,24 +234,31 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
                 except Exception as exc:  # noqa: BLE001 - one broken mutant, as in the gate
                     failure = f"{type(exc).__name__}: {exc}"
             if failure is not None:
-                result.defects["specdx"][spec] = []
-                result.costs["specdx"][spec] = (Cost() if report is None else behaviours_cost(
-                    report.behaviours, report.probe_runs + report.ddmin_runs)).as_dict()
+                record("specdx", spec, [], Cost() if report is None else behaviours_cost(
+                    report.behaviours, report.probe_runs + report.ddmin_runs), failure)
                 result.checkpoints[spec] = []
-                fail("specdx", spec, failure)
-                for arm in arms:
-                    result.defects.setdefault(arm.label, {})[spec] = []
-                    result.costs.setdefault(arm.label, {})[spec] = Cost().as_dict()
-                    fail(arm.label, spec, f"no SpecDx report: {failure}")
-                fh.write(json.dumps({"spec": spec, "done": True, "failed": True}) + "\n")
-                fh.flush()
+                fail_arms(spec, f"no SpecDx report: {failure}")
+                done(spec, failed=True)
                 continue
-            result.defects["specdx"][spec] = list(report.defects)
-            result.costs["specdx"][spec] = behaviours_cost(
-                report.behaviours, report.probe_runs + report.ddmin_runs).as_dict()
-            result.checkpoints[spec] = report.checkpoints
-            inp = make_input(bench, variant, report, ctx, cfg, gateway)
+            spent = behaviours_cost(report.behaviours, report.probe_runs + report.ddmin_runs)
+            record("specdx", spec, list(report.defects), spent, None)
+            # Table B must reach SpecDx's final report, not only its intermediate checkpoints.
+            result.checkpoints[spec] = [*report.checkpoints, {
+                "at": "end", "runs": report.runs, "cost": spent.as_dict(),
+                "defects": [asdict(d) for d in report.defects]}]
+            try:
+                inp = make_input(bench, variant, report, ctx, cfg, gateway)
+            except STOPS:
+                raise
+            except Exception as exc:  # noqa: BLE001 - no input, no arm on this spec
+                fail_arms(spec, f"no baseline input: {type(exc).__name__}: {exc}")
+                done(spec, failed=True)
+                continue
             for arm in arms:
+                base_failure = result.failures.get(arm.label, {}).get("base")
+                if spec != "base" and base_failure is not None:
+                    record(arm.label, spec, [], Cost(), f"base failed: {base_failure}")
+                    continue
                 b = REGISTRY[arm.name]
                 try:
                     out: BaselineOutput = b.run(inp, model=arm.model, strategy=arm.strategy)
@@ -224,10 +266,7 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
                     raise
                 except Exception as exc:  # noqa: BLE001 - one arm, one spec
                     out = BaselineOutput([], failure=f"{type(exc).__name__}: {exc}")
-                result.defects.setdefault(arm.label, {})[spec] = out.defects
-                result.costs.setdefault(arm.label, {})[spec] = out.cost.as_dict()
-                if out.failure:
-                    fail(arm.label, spec, out.failure)
-            fh.write(json.dumps({"spec": spec, "done": True}) + "\n")
-            fh.flush()
+                cost = spent + out.cost if arm.name in CONSUMES_RUNS else out.cost
+                record(arm.label, spec, out.defects, cost, out.failure)
+            done(spec)
     return result
