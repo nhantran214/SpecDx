@@ -326,12 +326,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "report":
+        from specdx.eval.freeze import choose
         from specdx.eval.study import SplitResult
         from specdx.eval.study_report import study_markdown
 
         dev = SplitResult.from_json(args.dev.read_text(encoding="utf-8"))
+        chosen = choose(dev)
         text = study_markdown(dev, {"specdx": 0.0, **{a: 0.0 for a in dev.defects
-                                                      if a != "specdx"}})
+                                                      if a != "specdx"}},
+                              in_sample={"specdx": 0.0, **{c["arm"]: c["tau"]
+                                                           for c in chosen.values()}})
         if args.test is not None and args.test.exists():
             test = SplitResult.from_json(args.test.read_text(encoding="utf-8"))
             taus = test.taus

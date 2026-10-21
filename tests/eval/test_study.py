@@ -402,6 +402,20 @@ def test_table_a_means_skip_types_without_truths_and_marks_incomplete() -> None:
     assert _table_a(md, "jest")["failed specs"] == "1 (INCOMPLETE)"
 
 
+def test_the_dev_report_shows_table_a_in_sample_then_at_tau_zero() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    md = study_markdown(_result(), {"specdx": 0.0, "jest": 0.0, "llm@m": 0.0},
+                        in_sample={"specdx": 0.0, "jest": 0.6})
+    first, second = md.split("## Table A: τ selected on dev (in-sample)")[1].split(
+        "## Table A: τ = 0 (all candidates)")
+    assert "| jest | 0.6 |" in first and "| llm@m |" not in first
+    assert "| jest | 0 |" in second.split("## Paired")[0] and "| llm@m | 0 |" in second
+    # jest's only hit scores 0.5, below τ 0.6: hidden F1 0 in-sample, 0.5 at τ 0.
+    assert _table_a(md, "jest")["hidden F1"] == "0.00"
+    assert "native protocol" not in md
+
+
 def test_table_a_means_are_dashes_when_no_type_has_truths() -> None:
     from specdx.eval.study_report import study_markdown
 

@@ -458,7 +458,12 @@ def test_report_uses_tau_zero_on_dev_and_the_frozen_tau_on_test(
     assert main(["report", "--dev", str(dev), "--out", str(out)]) == 0
     text = out.read_text()
     assert "dev split" in text and "test split" not in text
-    assert "| jest | 0 |" in text
+    in_sample, tau0 = text.split("## Table A: τ selected on dev (in-sample)")[1].split(
+        "## Table A: τ = 0 (all candidates)")
+    from specdx.eval.freeze import choose
+
+    tau = choose(_dev_result())["jest"]["tau"]
+    assert tau > 0 and f"| jest | {tau:.3g} |" in in_sample and "| jest | 0 |" in tau0
     (tmp_path / "experiments").mkdir()
     (tmp_path / "experiments" / "p3-baselines-prereg.json").write_text(json.dumps(
         {"chosen": {"jest": {"arm": "jest", "model": None, "strategy": None, "tau": 0.5,

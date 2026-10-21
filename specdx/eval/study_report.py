@@ -23,9 +23,8 @@ def _mean_over_truths(rows: Mapping[str, Mapping[str, float]], key: str) -> str:
     return f"{sum(vals) / len(vals):.2f}" if vals else "–"
 
 
-def study_markdown(result, arms: Mapping[str, float]) -> str:
-    lines = [f"# Comparison study: {result.split} split", "",
-             "## Table A: each method at its native protocol (primary table, typed)", "",
+def _table_a(result, arms: Mapping[str, float], heading: str) -> list[str]:
+    lines = [f"## Table A: {heading}", "",
              "AP (mean) and Detection@1 average over the defect types that have truths in "
              "this split.", "",
              "| arm | τ | " + " | ".join(f"{t} F1" for t in DEFECT_TYPES)
@@ -39,6 +38,23 @@ def study_markdown(result, arms: Mapping[str, float]) -> str:
                      + f" | {_mean_over_truths(r, 'ap')} | {_mean_over_truths(r, 'detect@1')}"
                      f" | {_cost(result, arm)} | [{lo:.2f}, {hi:.2f}] | "
                      + (f"{failed} (INCOMPLETE)" if failed else "0") + " |")
+    return lines
+
+
+def study_markdown(result, arms: Mapping[str, float],
+                   in_sample: Mapping[str, float] | None = None) -> str:
+    """arms: every arm and its τ; the paired comparison and Table B use them. in_sample (the
+    dev report): the arms and τ chosen on this same split, shown as a first Table A, with
+    `arms` (every candidate at τ = 0) as the second (spec §9.8)."""
+    lines = [f"# Comparison study: {result.split} split", ""]
+    if in_sample is None:
+        lines += _table_a(result, arms, "each method at its native protocol (primary table, "
+                                        "typed)")
+    else:
+        lines += _table_a(result, in_sample, "τ selected on dev (in-sample)")
+        lines += ["", "τ and arm chosen on this same split: optimistic, not a held-out result.",
+                  ""]
+        lines += _table_a(result, arms, "τ = 0 (all candidates)")
     rivals = {a: t for a, t in arms.items() if a != "specdx"}
     tests = {a: paired(result, "specdx", a, 0.0, t) for a, t in rivals.items()}
     adj = holm({a: v["p"] for a, v in tests.items()})
