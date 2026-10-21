@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -201,8 +201,25 @@ def _specdx_failure(report) -> str | None:
     return bs[0].error if bs and all(b.status == "error" for b in bs) else None
 
 
+def estimate(arms: Sequence[Arm], n_specs: int, violated: Mapping[str, frozenset[str]],
+             ok: set[str]) -> str:
+    """What a split will run, from the base report: arms, specifications, and the failing
+    runs Who&When samples on the base (their union) times its strategies and models."""
+    from specdx.baselines.whowhen import sample_runs
+
+    ww = [a for a in arms if a.name == "whowhen"]
+    union = len({r for rs in sample_runs(violated, ok).values() for r in rs})
+    models = len({a.model for a in ww})
+    strategies = len({a.strategy for a in ww})
+    line = f"estimate: {len(arms)} arms on {n_specs} specifications"
+    if ww:
+        line += (f"; whowhen judges {union} sampled failing runs on the base × {strategies} "
+                 f"strategies × {models} models = {union * strategies * models} logs there")
+    return line
+
+
 def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: Path,
-              split: str) -> SplitResult:
+              split: str, announce: Callable[[str], None] | None = None) -> SplitResult:
     """SpecDx (from the run cache, with checkpoints) then every arm, per specification.
     One JSON line per specification is written to out_lines as it finishes.
 
@@ -210,11 +227,16 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
     fails that (arm, specification) only. A specification SpecDx cannot run, or whose
     baseline input cannot be built, fails every arm on it, since the baselines read
     SpecDx's runs. An arm that fails on the base has no differential reference, so it
-    fails on every specification of the split."""
+    fails on every specification of the split. announce, if given, receives the estimate
+    line once the base report is in (served from the run cache when it was run before)."""
     cfg = dataclasses.replace(config.specdx(), checkpoints=CHECKPOINTS)
     base_cfg = dataclasses.replace(cfg, localize=False)
     base_ctx = bench.loop_context(bench.base, cfg)
     base = run_specdx(bench.base, base_ctx, base_cfg)
+    if announce is not None:
+        announce(estimate(arms, len(mutants) + 1,
+                          {b.run_key: base_ctx.lens.violations(b) for b in base.behaviours},
+                          {b.run_key for b in base.behaviours if b.status == "ok"}))
     touched = touch_counts({m.id: m.truth.observed_at for m in mutants}, base.behaviours,
                            base_ctx.lens)
     result = SplitResult(split, {m.id: m.truth for m in mutants}, set(scorable_ids(touched)),

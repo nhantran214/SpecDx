@@ -433,7 +433,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             mutants = [m for m in allm if m.id not in ids]
         args.out.parent.mkdir(parents=True, exist_ok=True)
         result = run_split(bench, config, mutants, arms, gateway,
-                           args.out.with_suffix(".progress.jsonl"), args.split)
+                           args.out.with_suffix(".progress.jsonl"), args.split,
+                           announce=lambda line: print(line, flush=True))
         if args.command == "study":  # the test report uses exactly these (spec §9.8)
             import hashlib
 

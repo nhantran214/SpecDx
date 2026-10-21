@@ -265,6 +265,42 @@ def test_run_split_totals_the_calls_near_the_context_window_per_arm(monkeypatch,
     assert back.near_ctx == r.near_ctx and json.loads(r.to_json())["near_ctx"]["whowhen"] == 2
 
 
+def test_the_estimate_counts_arms_specs_and_whowhens_judged_logs() -> None:
+    from specdx.eval.study import estimate
+
+    arms = [Arm("jest"), *(Arm("whowhen", m, s) for m in ("a:7b", "b:8b")
+                           for s in ("all_at_once", "step_by_step", "binary_search"))]
+    violated = {f"r{i}": frozenset({"x", "y"}) for i in range(7)}
+    violated["z"] = frozenset({"z"})
+    line = estimate(arms, 21, violated, ok=set(violated) - {"r6"})
+    # x and y share five runs (reuse); z adds one: 6 runs × 3 strategies × 2 models.
+    assert line == ("estimate: 7 arms on 21 specifications; whowhen judges 6 sampled failing "
+                    "runs on the base × 3 strategies × 2 models = 36 logs there")
+    assert estimate([Arm("jest")], 1, {}, set()) == "estimate: 1 arms on 1 specifications"
+
+
+def test_run_split_announces_the_estimate_once_after_the_base(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    import specdx.eval.study as st
+
+    lines: list[str] = []
+    run = SimpleNamespace(run_key="k", status="ok", harness={})
+    rep = SimpleNamespace(defects=[], behaviours=[run], runs=1, probe_runs=0, ddmin_runs=0,
+                          checkpoints=[])
+    monkeypatch.setattr(st, "run_specdx", lambda *a, **k: rep)
+    monkeypatch.setattr(st, "make_input", lambda *a, **k: None)
+    monkeypatch.setattr(st, "touch_counts", lambda *a, **k: {})
+    monkeypatch.setattr(st, "scorable_ids", lambda t: set())
+    monkeypatch.setattr(st, "REGISTRY", {"jest": SimpleNamespace(run=_empty)})
+    cfg = SimpleNamespace(specdx=lambda: st.SpecDxConfig({"f": ("m",)}))
+    lens = SimpleNamespace(violations=lambda b: frozenset({"c"}))
+    bench = SimpleNamespace(base="B", loop_context=lambda v, c: SimpleNamespace(lens=lens))
+    st.run_split(bench, cfg, [], [st.Arm("jest")], None, tmp_path / "o.jsonl", "base",
+                 announce=lines.append)
+    assert lines == ["estimate: 1 arms on 1 specifications"]
+
+
 def test_equal_cost_reaches_specdx_final_report(monkeypatch, tmp_path) -> None:
     from specdx.baselines.api import BaselineOutput
     from specdx.cost import Cost

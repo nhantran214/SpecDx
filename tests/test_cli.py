@@ -523,9 +523,10 @@ def _wired(monkeypatch, tmp_path):
     mutants = [SimpleNamespace(id=i) for i in ("D1", "D2", "T1", "T2")]
     seen = {}
 
-    def fake_split(bench_, config, ms, arms, gateway, out_lines, split):
+    def fake_split(bench_, config, ms, arms, gateway, out_lines, split, announce=None):
         seen.update(mutants=[m.id for m in ms], arms=[a.label for a in arms], split=split,
                     pinned=gateway.pinned, cache=gateway.cache_path, lines=out_lines)
+        announce("estimate: fake")
         return SplitResult(split, {}, set(), {"specdx": {}}, {}, {}, {})
 
     monkeypatch.setattr("specdx.workbench.Workbench.open", lambda workers: bench)
@@ -536,7 +537,7 @@ def _wired(monkeypatch, tmp_path):
 
 
 def test_baselines_runs_the_dev_arms_on_the_dev_split_with_the_cache_digests(
-        monkeypatch, tmp_path) -> None:
+        monkeypatch, tmp_path, capsys) -> None:
     seen = _wired(monkeypatch, tmp_path)
     out = tmp_path / "results" / "dev.json"
     config = _run_config(tmp_path, {"a": ["a:14b"], "b": ["b:8b"]})
@@ -548,7 +549,7 @@ def test_baselines_runs_the_dev_arms_on_the_dev_split_with_the_cache_digests(
     assert seen["lines"] == out.with_suffix(".progress.jsonl")
     assert seen["arms"] and not any("b:8b" in a for a in seen["arms"])
     assert any("@a:14b" in a for a in seen["arms"]) and "jest" in seen["arms"]
-    assert out.exists()
+    assert out.exists() and capsys.readouterr().out.startswith("estimate: fake\n")
     assert main(["baselines", "--split", "base", "--config", str(config),
                  "--out", str(out)]) == 0
     assert seen["mutants"] == [] and seen["split"] == "base"
