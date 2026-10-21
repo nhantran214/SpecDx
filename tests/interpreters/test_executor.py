@@ -407,7 +407,8 @@ def test_a_tool_call_written_as_text_is_executed_and_marked(run_de) -> None:
     envelope, rows = run_de(transport)
     assert {"kind": "FLAGGED", "ref": "ITEM-0012"} in rows
     assert envelope.usage["harness"] == {"nudges": 0, "parsed_from_text": 1, "tool_calls": 1,
-                                         "valid_calls": 1}
+                                         "valid_calls": 1, "requests": 2, "prompt_tokens": 0,
+                                         "eval_tokens": 0, "duration_ms": 0}
     assert envelope.usage["tool_calls"][0]["parsed_from_text"] is True
     assert envelope.status is ResultStatus.DONE
     # the history shows the parsed call as a native one, answered by its tool message
@@ -473,4 +474,17 @@ def test_an_outage_during_a_nudge_round_trip_is_flagged_and_keeps_the_counts(db,
     assert executor.infra_failure is not None and "ConnectError" in executor.infra_failure
     assert envelope.status is ResultStatus.ERROR
     assert envelope.usage["harness"] == {"nudges": 1, "parsed_from_text": 0, "tool_calls": 0,
-                                         "valid_calls": 0}
+                                         "valid_calls": 0, "requests": 1, "prompt_tokens": 0,
+                                         "eval_tokens": 0, "duration_ms": 0}
+
+
+def test_each_request_records_its_usage(run_de) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": _say("Xong."), "done": True,
+                                         "prompt_eval_count": 120, "eval_count": 30,
+                                         "total_duration": 2_500_000_000})
+
+    envelope, _ = run_de(httpx.MockTransport(handle))
+    h = envelope.usage["harness"]
+    assert (h["requests"], h["prompt_tokens"], h["eval_tokens"], h["duration_ms"]) == (
+        1, 120, 30, 2500)

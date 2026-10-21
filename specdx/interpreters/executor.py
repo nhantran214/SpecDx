@@ -165,11 +165,12 @@ class SpecInterpreterExecutor:
         record = _Record()
         tools = harness.tool_parameters(schemas)
         drafts = bool(ctx.token.draft)
-        counts = {"nudges": 0, "parsed_from_text": 0, "tool_calls": 0, "valid_calls": 0}
+        counts = {"nudges": 0, "parsed_from_text": 0, "tool_calls": 0, "valid_calls": 0,
+                  "requests": 0, "prompt_tokens": 0, "eval_tokens": 0, "duration_ms": 0}
         try:
             with httpx.Client(transport=self.transport, timeout=self.timeout) as client:
                 for step in range(1, self.max_steps + 1):
-                    reply = self._chat(client, messages, schemas)
+                    reply = self._chat(client, messages, schemas, counts)
                     messages.append(reply)
                     calls = reply.get("tool_calls") or []
                     for call in calls:
@@ -206,7 +207,8 @@ class SpecInterpreterExecutor:
         ), counts)
 
     def _chat(
-        self, client: httpx.Client, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]
+        self, client: httpx.Client, messages: list[dict[str, Any]], schemas: list[dict[str, Any]],
+        counts: dict[str, int],
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model, "messages": messages, "tools": schemas, "stream": False,
@@ -220,7 +222,12 @@ class SpecInterpreterExecutor:
             try:
                 response = client.post(f"{self.base_url}/api/chat", json=body)
                 response.raise_for_status()
-                message: dict[str, Any] = response.json()["message"]
+                data = response.json()
+                counts["requests"] += 1
+                counts["prompt_tokens"] += int(data.get("prompt_eval_count") or 0)
+                counts["eval_tokens"] += int(data.get("eval_count") or 0)
+                counts["duration_ms"] += int(data.get("total_duration") or 0) // 1_000_000
+                message: dict[str, Any] = data["message"]
                 return message
             except httpx.HTTPError as exc:
                 if isinstance(exc, httpx.ReadTimeout):
