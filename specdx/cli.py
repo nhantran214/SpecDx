@@ -330,16 +330,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         from specdx.eval.study import SplitResult
         from specdx.eval.study_report import study_markdown
 
+        for path in (args.dev, args.test):
+            if path is not None and not path.exists():
+                print(f"error: {path} does not exist", file=sys.stderr)
+                return 2
         dev = SplitResult.from_json(args.dev.read_text(encoding="utf-8"))
         chosen = choose(dev)
         text = study_markdown(dev, {"specdx": 0.0, **{a: 0.0 for a in dev.defects
                                                       if a != "specdx"}},
                               in_sample={"specdx": 0.0, **{c["arm"]: c["tau"]
                                                            for c in chosen.values()}})
-        if args.test is not None and args.test.exists():
+        if args.test is not None:
             test = SplitResult.from_json(args.test.read_text(encoding="utf-8"))
             taus = test.taus
             if taus is None:  # a result written before the study embedded its τ
+                if not (REPO_ROOT / STUDY_PREREG).exists():
+                    print(f"error: {args.test} embeds no τ and there is no pre-registration "
+                          f"({REPO_ROOT / STUDY_PREREG}) for its test section", file=sys.stderr)
+                    return 2
                 pre = json.loads((REPO_ROOT / STUDY_PREREG).read_text(encoding="utf-8"))
                 taus = {c["arm"]: c["tau"] for c in pre["chosen"].values()}
                 warning = (f"warning: {args.test} embeds no τ; the test section uses the "

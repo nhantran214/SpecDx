@@ -486,6 +486,29 @@ def test_report_uses_tau_zero_on_dev_and_the_frozen_tau_on_test(
     assert "| jest | 0.25 |" in tail and "embeds no τ" not in out.read_text()
 
 
+def test_report_exits_2_on_a_missing_file_or_preregistration(monkeypatch, tmp_path,
+                                                              capsys) -> None:
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    dev = tmp_path / "dev.json"
+    dev.write_text(_dev_result().to_json(), encoding="utf-8")
+    out = tmp_path / "report.md"
+    missing = tmp_path / "nope.json"
+    assert main(["report", "--dev", str(dev), "--test", str(missing), "--out", str(out)]) == 2
+    assert f"{missing} does not exist" in capsys.readouterr().err
+    assert main(["report", "--dev", str(missing), "--out", str(out)]) == 2
+    test = _dev_result()
+    test.split = "test"
+    test_json = tmp_path / "test.json"
+    test_json.write_text(test.to_json(), encoding="utf-8")  # no embedded τ, no prereg
+    assert main(["report", "--dev", str(dev), "--test", str(test_json), "--out", str(out)]) == 2
+    err = capsys.readouterr().err
+    assert "no pre-registration" in err and "Traceback" not in err
+    assert not out.exists()
+
+
 def _wired(monkeypatch, tmp_path):
     """A fake workbench and run_split recording what the baselines and study commands pass."""
     from types import SimpleNamespace
