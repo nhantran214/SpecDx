@@ -41,13 +41,68 @@ def test_the_key_changes_with_the_digest(tmp_path) -> None:
     assert len((tmp_path / "c.jsonl").read_text().splitlines()) == 2
 
 
-def test_a_timeout_is_cached_as_an_error_and_not_retried(tmp_path) -> None:
-    t, calls = _server(fail=True)
-    g = Gateway("http://x", tmp_path / "c.jsonl", transport=t)
+def _timeout_after_first(calls):
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "m:7b", "digest": "d1"}]})
+        if calls.count("/api/chat") > 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"message": {"content": "hi"}})
+    return httpx.MockTransport(handle)
+
+
+def test_a_timeout_after_an_ok_reply_is_cached_as_an_error_and_not_retried(tmp_path) -> None:
+    calls: list[str] = []
+    g = Gateway("http://x", tmp_path / "c.jsonl", transport=_timeout_after_first(calls))
+    assert g.chat("m:7b", [{"role": "user", "content": "first"}]).status == "ok"
     r1 = g.chat("m:7b", [])
     r2 = g.chat("m:7b", [])
     assert (r1.status, r1.cost.errors, r2.cached) == ("error", 1, True)
-    assert calls.count("/api/chat") == 1
+    assert calls.count("/api/chat") == 2
+
+
+def test_a_timeout_before_any_ok_reply_is_infrastructure_and_never_cached(tmp_path) -> None:
+    t, calls = _server(fail=True)
+    cache = tmp_path / "c.jsonl"
+    g = Gateway("http://x", cache, transport=t)
+    for _ in range(2):
+        with pytest.raises(InfrastructureError, match="wedged"):
+            g.chat("m:7b", [])
+    assert calls.count("/api/chat") == 2 and (not cache.exists() or cache.read_text() == "")
+    # A cache hit is not a reply from the host: a fresh gateway still treats it as wedged.
+    ok, _ = _server()
+    Gateway("http://x", cache, transport=ok).chat("m:7b", [{"role": "user", "content": "a"}])
+    g2 = Gateway("http://x", cache, transport=t)
+    assert g2.chat("m:7b", [{"role": "user", "content": "a"}]).cached
+    with pytest.raises(InfrastructureError):
+        g2.chat("m:7b", [])
+
+
+def _status(code, body):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "m:7b", "digest": "d1"}]})
+        return httpx.Response(code, json={"error": body})
+    return httpx.MockTransport(handle)
+
+
+@pytest.mark.parametrize("body", ["llama runner process has terminated: signal: killed",
+                                  "model requires more system memory than is available"])
+def test_a_5xx_outage_is_infrastructure_and_never_cached(tmp_path, body) -> None:
+    cache = tmp_path / "c.jsonl"
+    g = Gateway("http://x", cache, transport=_status(500, body))
+    with pytest.raises(InfrastructureError, match="500"):
+        g.chat("m:7b", [])
+    assert not cache.exists() or cache.read_text() == ""
+
+
+def test_a_5xx_for_the_models_own_output_is_cached_as_an_error(tmp_path) -> None:
+    g = Gateway("http://x", tmp_path / "c.jsonl",
+                transport=_status(500, "error parsing tool call: raw='{'"))
+    r = g.chat("m:7b", [])
+    assert (r.status, r.cost.errors) == ("error", 1) and "HTTPStatusError" in r.error
+    assert len((tmp_path / "c.jsonl").read_text().splitlines()) == 1
 
 
 def test_a_missing_model_stops_before_any_chat(tmp_path) -> None:

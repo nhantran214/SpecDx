@@ -1,8 +1,12 @@
 """One door to Ollama for the LLM-calling baselines (baselines spec §4.2).
 
 Every call is keyed by sha256(schema, model digest, request body), so a rerun is served
-from the append-only cache and a changed model can never hit an old answer. A timeout or
-HTTP error is cached as status "error": counted, never a finding, never retried.
+from the append-only cache and a changed model can never hit an old answer. A model error
+(a read timeout once the host has answered, an HTTP error about the model's own output, an
+unusable 200 body) is cached as status "error": counted, never a finding, never retried.
+An outage is never cached (spec §9.8): the executor's classification (`_ollama_failed`:
+unreachable, crashed or out-of-memory runner) raises InfrastructureError, and so does a read
+timeout before this gateway has had any ok reply from the host (a wedged Ollama).
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from typing import Any
 import httpx
 
 from specdx.cost import Cost
-from specdx.interpreters.executor import NUM_CTX
+from specdx.interpreters.executor import NUM_CTX, _describe, _ollama_failed
 from specdx.types import InfrastructureError
 
 SCHEMA = 1
@@ -47,6 +51,7 @@ class Gateway:
         self.total = Cost()
         self._digests: dict[str, str] = {}
         self._cache: dict[str, dict[str, Any]] = {}
+        self._answered = False  # a live ok reply came from the host (cache hits do not count)
         if cache_path.exists():
             self._load(cache_path)
 
@@ -117,14 +122,24 @@ class Gateway:
                         int(data.get("eval_count") or 0),
                         int(data.get("total_duration") or 0) // 1_000_000)
             rec = {"text": str(data["message"].get("content") or ""), "status": "ok", "error": ""}
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.HTTPStatusError) as exc:
+        except httpx.ReadTimeout as exc:
+            if not self._answered:  # no reply yet from this host: wedged, not the model
+                raise InfrastructureError(
+                    f"Ollama at {self.base_url} timed out before any reply ({exc}): "
+                    "it may be wedged") from exc
+            cost = Cost(requests=1, errors=1)
+            rec = {"text": "", "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        except httpx.HTTPError as exc:
+            if _ollama_failed(exc):  # unreachable, crashed or OOM runner: not data
+                raise InfrastructureError(
+                    f"Ollama at {self.base_url} failed: {_describe(exc)}") from exc
             cost = Cost(requests=1, errors=1)
             rec = {"text": "", "status": "error", "error": f"{type(exc).__name__}: {exc}"}
         except (ValueError, KeyError, AttributeError, TypeError) as exc:  # 200 but unusable body
             cost = Cost(requests=1, errors=1)
             rec = {"text": "", "status": "error", "error": f"malformed reply: {exc!r}"}
-        except httpx.TransportError as exc:  # connect/pool timeout, refused, tunnel down: not data
-            raise InfrastructureError(f"Ollama at {self.base_url} failed: {exc}") from exc
+        else:
+            self._answered = True
         rec.update({"key": key, "model": model, "digest": digest, "cost": cost.as_dict()})
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         with self.cache_path.open("a", encoding="utf-8") as fh:
