@@ -394,3 +394,51 @@ def test_markdown_tables_have_matching_header_and_separator_widths() -> None:
     for i, line in enumerate(lines):
         if line.startswith("|---"):
             assert lines[i - 1].count("|") == line.count("|") == lines[i + 1].count("|")
+
+
+def _many(n_specdx: int, n_arm: int, n: int = 10) -> SplitResult:
+    """n hidden mutants; SpecDx hits the first n_specdx of them, the arm "x" the first n_arm."""
+    ids = [f"H{i}" for i in range(n)]
+    truths = {m: _t("hidden", f"c{m}", "clause", m) for m in ids}
+    hit = lambda m, k: [_d("hidden", f"c{m}", 0.9)] if int(m[1:]) < k else []  # noqa: E731
+    defects = {"specdx": {"base": [], **{m: hit(m, n_specdx) for m in ids}},
+               "x": {"base": [], **{m: hit(m, n_arm) for m in ids}}}
+    costs = {"specdx": {m: {"requests": 5} for m in ids}, "x": {m: {"requests": 1} for m in ids}}
+    return SplitResult("dev", truths, set(ids), defects, costs, {}, {})
+
+
+def test_paired_ci_excludes_zero_when_specdx_detects_all_and_the_arm_none() -> None:
+    from specdx.eval.stats import paired_bootstrap_ci
+
+    lo, hi = paired_bootstrap_ci(_many(10, 0), "specdx", "x", 0.0, 0.0)
+    assert lo == hi == 1.0
+    lo, hi = paired_bootstrap_ci(_many(5, 5), "specdx", "x", 0.0, 0.0)
+    assert (lo, hi) == (0.0, 0.0)
+    lo, hi = paired_bootstrap_ci(_many(7, 2), "specdx", "x", 0.0, 0.0)
+    assert 0.0 < lo < 0.5 < hi < 1.0
+    r = _many(10, 0)
+    r.failures = {"x": {m: "boom" for m in r.truths}}
+    assert paired_bootstrap_ci(r, "specdx", "x", 0.0, 0.0) == (0.0, 0.0)
+
+
+def test_paired_table_prints_the_ci_and_the_holm_adjusted_p() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    md = study_markdown(_many(10, 0), {"specdx": 0.0, "x": 0.0})
+    row = next(x for x in md.splitlines() if x.startswith("| x | 10 |"))
+    assert row == "| x | 10 | 0 | 10 | +1.00 | [+1.00, +1.00] | 0.002 |"
+    md = study_markdown(_many(5, 5), {"specdx": 0.0, "x": 0.0})
+    assert "| x | 0 | 0 | 10 | +0.00 | [+0.00, +0.00] | 1.000 |" in md
+
+
+def test_table_b_row_carries_the_scores_the_mutant_count_and_the_incomplete_mark() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    arms = {"specdx": 0.0, "llm@m": 0.0}
+    md = study_markdown(_result(), arms)
+    assert "| arm | arm requests | n mutants |" in md
+    assert "| llm@m | 60 | 2 | 0.00 | 0.67 | 0.00 | 0.00 |" in md
+    r = _result()
+    r.failures = {"llm@m": {"H2": "boom"}}
+    md = study_markdown(r, arms)
+    assert "| llm@m (INCOMPLETE) | 60 | 1 | 0.00 | 1.00 | 0.00 | 0.00 |" in md

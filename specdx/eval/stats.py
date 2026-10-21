@@ -56,3 +56,17 @@ def bootstrap_ci(result, arm: str, tau: float, resamples: int = RESAMPLES,
     rng = np.random.default_rng(seed)
     means = hits[rng.integers(0, hits.size, size=(resamples, hits.size))].mean(axis=1)
     return (float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975)))
+
+
+def paired_bootstrap_ci(result, arm_a: str, arm_b: str, tau_a: float, tau_b: float,
+                        resamples: int = RESAMPLES, seed: int = SEED) -> tuple[float, float]:
+    """95% bootstrap CI of the paired risk difference (a minus b) over the mutants both arms
+    reported on, resampling mutant pairs with replacement."""
+    da, db = detected(result, arm_a, tau_a), detected(result, arm_b, tau_b)
+    keys = sorted(set(da) & set(db))
+    if not keys:
+        return (0.0, 0.0)
+    diff = np.array([float(da[k]) - float(db[k]) for k in keys])
+    rng = np.random.default_rng(seed)
+    means = diff[rng.integers(0, diff.size, size=(resamples, diff.size))].mean(axis=1)
+    return (float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975)))

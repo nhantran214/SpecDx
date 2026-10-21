@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from specdx.eval.matching import evaluate_reports
-from specdx.eval.stats import bootstrap_ci, holm, paired
+from specdx.eval.stats import bootstrap_ci, holm, paired, paired_bootstrap_ci
 from specdx.eval.study import equal_cost, rank_metrics, score
 from specdx.types import DEFECT_TYPES
 
@@ -43,18 +43,21 @@ def study_markdown(result, arms: Mapping[str, float]) -> str:
     tests = {a: paired(result, "specdx", a, 0.0, t) for a, t in rivals.items()}
     adj = holm({a: v["p"] for a, v in tests.items()})
     lines += ["", "## Paired comparison with SpecDx (exact McNemar, Holm-adjusted)", "",
-              "| arm | SpecDx only | arm only | n | risk difference | p (Holm) |",
-              "|---|---:|---:|---:|---:|---:|"]
+              "| arm | SpecDx only | arm only | n | risk difference | "
+              "risk difference 95% CI | p (Holm) |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
     for a, v in tests.items():
+        lo, hi = paired_bootstrap_ci(result, "specdx", a, 0.0, rivals[a])
         lines.append(f"| {a} | {v['b']} | {v['c']} | {v['n']} | {v['risk_difference']:+.2f} | "
-                     f"{adj[a]:.3f} |")
+                     f"[{lo:+.2f}, {hi:+.2f}] | {adj[a]:.3f} |")
     lines += ["", "## Table B: SpecDx at each LLM arm's request budget", "",
               "Ambiguity at intermediate checkpoints is unlocalised (spec §9.2). The \"end\" "
               "checkpoint is SpecDx's localised final report. Arms that read SpecDx's runs "
               "are charged SpecDx's cost, so their equal-cost row is SpecDx's final report "
               "by construction.", "",
-              "| arm | arm requests | " + " | ".join(f"SpecDx {t} F1" for t in DEFECT_TYPES) + " |",
-              "|---|---:|" + "---:|" * len(DEFECT_TYPES)]
+              "| arm | arm requests | n mutants | "
+              + " | ".join(f"SpecDx {t} F1" for t in DEFECT_TYPES) + " |",
+              "|---|---:|---:|" + "---:|" * len(DEFECT_TYPES)]
     for a in rivals:
         if "@" not in a:
             continue
@@ -62,6 +65,7 @@ def study_markdown(result, arms: Mapping[str, float]) -> str:
         reports = {k: v for k, v in eq.items() if k != "base" and k in result.truths
                    and k in result.scorable}
         s = evaluate_reports(reports, result.truths, result.defects["specdx"].get("base", []))
-        lines.append(f"| {a} | {_cost(result, a)} | "
+        incomplete = " (INCOMPLETE)" if result.failures.get(a) else ""
+        lines.append(f"| {a}{incomplete} | {_cost(result, a)} | {len(reports)} | "
                      + " | ".join(f"{s[t].f1:.2f}" for t in DEFECT_TYPES) + " |")
     return "\n".join(lines) + "\n"
