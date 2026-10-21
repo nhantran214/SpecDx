@@ -368,3 +368,29 @@ Chosen at `freeze-baselines`, then frozen: the models, the B2 strategy, and τ_B
 | Unencodable clauses limit B5 | Listed per run; R-12 (`fn_reconcile`) is the known case |
 | The gate is NOT PASSED | The dev comparison is still produced and reported; the test study stays locked (exit 4) |
 | The S1 test split has only 15 mutants (35 in all), far below v1 §4.3's 150–250, so per-type McNemar tests have little power | Report effect sizes with bootstrap CIs alongside the p-values. Enlarging the operator sites is a separate decision for the author before `study` runs; `study` uses whatever `specdx mutants` yields, minus the dev split |
+
+---
+
+## 9. Amendments at planning (2026-10-21)
+
+These were found while the plan was being written against the code. Where a rule below conflicts with an earlier section, it replaces that section.
+
+1. **The cost unit of Table B is model requests, not GPU-seconds (replaces §3.5).**
+   - **The problem.** Cached SpecDx runs record neither tokens nor durations. Per step, they keep only `tool_calls`, `valid_calls`, `nudges` and `parsed_from_text`.
+   - **The common unit** is one chat request to Ollama.
+   - **New runs.** The executor gains four harness counters for runs made from now on: `requests`, `prompt_tokens`, `eval_tokens`, `duration_ms`. They are observations only, so run keys do not change.
+   - **Runs cached before the counter.** A step costs at most `tool_calls + nudges + 1` requests. That is an upper bound: it overstates SpecDx's cost, which is the conservative direction.
+   - **Baselines.** Their requests are counted exactly by the gateway.
+   - **Reporting.** Tokens and GPU-seconds are reported wherever they were recorded.
+2. **Checkpoints are taken before localisation (refines §4.4).**
+   - **What a checkpoint holds.** The defect list after the diagnosis and after the base-ambiguity differential, but before ddmin localisation.
+   - **Consequence.** Ambiguity findings at an intermediate checkpoint carry no sentence location and match no ambiguity truth. Table B marks ambiguity as "unlocalised" at those checkpoints. The final checkpoint is the final report.
+3. **B5 explores the golden state's neighbourhood instead of encoding SQL into SAT (replaces §2.8).**
+   - **Exploration.** For each canon scenario, B5 starts from the golden state, materialised by PostgreSQL so that derived values (`fn_reconcile`) are real. It then explores up to two rounds of single-clause repairs with the existing `propose`, within at most 200 clause evaluations per scenario, the bound of v1 §3.6.
+   - **MUS candidates.** Each explored state's violation set is a correction set. The minimal hitting sets of size ≤ 3 over these sets (PySAT `Hitman`) are the MUS candidates, reported as contradictions, including size 1.
+   - **Why.** No SQL is re-encoded, so no clause has to be excluded. This is v1's B5: "symbolic repair … with no interpreters".
+4. **B1 runs in BenchGuard's definition-audit mode only (refines §2.3).**
+   - **Inputs.** Instruction, tests and solution: `AuditMode.DEFINITION`, `agent_evidence=off`.
+   - **Why no traces.** The results-verification mode needs agent trials in Harbor's trial format. SpecDx runs cannot fill it without inventing fields, so the "with traces" arm is dropped.
+   - **How the gateway is wired.** It is injected by replacing the pipeline's `ProtocolRunner` with one built on a `LLMClient` subclass whose `complete` and `acomplete` call the gateway. BenchGuard's code is not modified.
+   - **Generation settings.** Temperature follows BenchGuard's default (0.0); `max_tokens` is 4096.
