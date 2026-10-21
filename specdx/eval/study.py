@@ -29,8 +29,9 @@ from specdx.types import DEFECT_TYPES, Defect, State
 CHECKPOINTS: tuple[int, ...] = (25, 50, 100, 150, 200)
 # Outages stop the step (spec §5.3); a rerun resumes from the run and baseline caches.
 STOPS: tuple[type[BaseException], ...] = (*INFRASTRUCTURE_ERRORS, DigestMismatch)
-# Arms that read SpecDx's runs are charged those runs too (spec §3.5): their cost is
-# SpecDx's cost on the specification plus their own calls. The others pay their own only.
+# Arms that read SpecDx's runs are charged those runs too (spec §3.5, §9.8): their cost is
+# the population runs they read (behaviours_cost(report.behaviours), not SpecDx's probes or
+# ddmin) plus their own calls. The others pay their own only.
 CONSUMES_RUNS: frozenset[str] = frozenset({"whowhen", "irt_audit", "semantic_entropy", "glad",
                                            "dawid_skene", "jest"})
 load_all()  # every baseline registers before arms are listed
@@ -245,6 +246,7 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
                 done(spec, failed=True)
                 continue
             spent = behaviours_cost(report.behaviours, report.probe_runs + report.ddmin_runs)
+            read = behaviours_cost(report.behaviours)  # what a run-consuming arm reads
             record("specdx", spec, list(report.defects), spent, None)
             # Table B must reach SpecDx's final report, not only its intermediate checkpoints.
             result.checkpoints[spec] = [*report.checkpoints, {
@@ -270,7 +272,7 @@ def run_split(bench, config, mutants, arms: Sequence[Arm], gateway, out_lines: P
                     raise
                 except Exception as exc:  # noqa: BLE001 - one arm, one spec
                     out = BaselineOutput([], failure=f"{type(exc).__name__}: {exc}")
-                cost = spent + out.cost if arm.name in CONSUMES_RUNS else out.cost
+                cost = read + out.cost if arm.name in CONSUMES_RUNS else out.cost
                 record(arm.label, spec, out.defects, cost, out.failure)
             done(spec)
     return result

@@ -52,9 +52,9 @@ def study_markdown(result, arms: Mapping[str, float]) -> str:
                      f"[{lo:+.2f}, {hi:+.2f}] | {adj[a]:.3f} |")
     lines += ["", "## Table B: SpecDx at each LLM arm's request budget", "",
               "Ambiguity at intermediate checkpoints is unlocalised (spec §9.2). The \"end\" "
-              "checkpoint is SpecDx's localised final report. Arms that read SpecDx's runs "
-              "are charged SpecDx's cost, so their equal-cost row is SpecDx's final report "
-              "by construction.", "",
+              "checkpoint is SpecDx's localised final report. Arms that read SpecDx's runs are "
+              "charged the population runs they read plus their own calls, not SpecDx's "
+              "probes or ddmin (spec §9.8).", "",
               "| arm | arm requests | n mutants | "
               + " | ".join(f"SpecDx {t} F1" for t in DEFECT_TYPES) + " |",
               "|---|---:|---:|" + "---:|" * len(DEFECT_TYPES)]

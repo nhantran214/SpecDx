@@ -99,9 +99,10 @@ def _behaviour(requests):
     return SimpleNamespace(status="ok", harness={"s1": {"requests": requests}})
 
 
-def _fake_split(monkeypatch, runs, specdx=None, make_input=None, requests=3):
+def _fake_split(monkeypatch, runs, specdx=None, make_input=None, requests=3, extra_runs=0):
     """run_split on base B + mutants H1 (variant V1) and H2 (V2), SpecDx faked with one run
-    of `requests` requests per spec, and one fake arm per entry of runs (name -> run).
+    of `requests` requests per spec (plus extra_runs probe runs), and one fake arm per entry
+    of runs (name -> run).
     specdx / make_input, if given, replace SpecDx on the mutants / the input builder; the
     fake input is the variant name."""
     from types import SimpleNamespace
@@ -110,7 +111,7 @@ def _fake_split(monkeypatch, runs, specdx=None, make_input=None, requests=3):
 
     def report(defects):
         return SimpleNamespace(defects=defects, behaviours=[_behaviour(requests)], runs=1,
-                               probe_runs=0, ddmin_runs=0, checkpoints=[])
+                               probe_runs=extra_runs, ddmin_runs=0, checkpoints=[])
 
     def fake_specdx(variant, ctx, cfg, base=None):
         if variant == "B":
@@ -227,17 +228,19 @@ def test_an_input_that_cannot_be_built_fails_every_arm_on_that_spec(monkeypatch,
     assert "H2" in r.defects["specdx"] and len(out.read_text().splitlines()) == 3
 
 
-def test_arms_that_read_specdx_runs_are_charged_them(monkeypatch, tmp_path) -> None:
+def test_arms_that_read_specdx_runs_are_charged_those_runs_only(monkeypatch, tmp_path) -> None:
     from specdx.baselines.api import BaselineOutput
     from specdx.cost import Cost
 
     def own(inp, **k):
-        return BaselineOutput([], Cost(requests=2, exact=False))
+        return BaselineOutput([], Cost(requests=2))
 
-    r = _fake_split(monkeypatch, {"jest": own, "benchguard": own}, requests=3)(
+    r = _fake_split(monkeypatch, {"jest": own, "benchguard": own}, requests=3, extra_runs=2)(
         tmp_path / "out.jsonl")
-    assert r.costs["specdx"]["H1"]["requests"] == 3 and r.costs["specdx"]["H1"]["exact"]
-    assert (r.costs["jest"]["H1"]["requests"], r.costs["jest"]["H1"]["exact"]) == (5, False)
+    # SpecDx: its one run (3 requests) plus two probe runs at the mean, a bound.
+    assert (r.costs["specdx"]["H1"]["requests"], r.costs["specdx"]["H1"]["exact"]) == (9, False)
+    # jest reads the population run (3, exact), not the probes, plus its own 2.
+    assert (r.costs["jest"]["H1"]["requests"], r.costs["jest"]["H1"]["exact"]) == (5, True)
     assert r.costs["benchguard"]["H1"]["requests"] == 2
 
 
@@ -410,7 +413,8 @@ def test_table_b_caption_states_its_conventions_and_rows_cover_llm_arms() -> Non
     md = study_markdown(_result(), {"specdx": 0.0, "jest": 0.0, "llm@m": 0.0})
     table_b = md.split("## Table B")[1]
     assert "unlocalised (spec §9.2)" in table_b
-    assert "localised final report" in table_b and "charged SpecDx's cost" in table_b
+    assert "localised final report" in table_b
+    assert "charged the population runs they read" in table_b and "not SpecDx's" in table_b
     assert "| llm@m |" in table_b and "| jest |" not in table_b
 
 
