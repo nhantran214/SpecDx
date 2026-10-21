@@ -184,3 +184,20 @@ def test_the_client_counts_calls_near_the_context_window() -> None:
     for G.prompt in (12_000, 12_288, 13_000):  # + 4096: 16096, 16384, 17096
         client.complete("p")
     assert client.near_ctx == 2
+
+
+def test_importing_b1_keeps_litellm_offline() -> None:
+    import os
+    import subprocess
+    import sys
+
+    code = ("import os, sys; import specdx.baselines.benchguard; "
+            "print(os.environ.get('LITELLM_LOCAL_MODEL_COST_MAP'))")
+    env = {k: v for k, v in os.environ.items() if k != "LITELLM_LOCAL_MODEL_COST_MAP"}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                         check=True)
+    assert out.stdout.strip() == "True"
+    env["LITELLM_LOCAL_MODEL_COST_MAP"] = "False"  # an operator's own setting is kept
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                         check=True)
+    assert out.stdout.strip() == "False"

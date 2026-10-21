@@ -168,7 +168,9 @@ check_baseline_cache() {
 
 # The baselines' extra dependencies (pip install -e ".[baselines]").
 check_baseline_deps() {
-  "$PY" -c 'import benchguard, crowdkit, pysat' 2> /dev/null \
+  # Offline host: litellm (under BenchGuard) uses its bundled cost map, as the baseline does.
+  LITELLM_LOCAL_MODEL_COST_MAP=${LITELLM_LOCAL_MODEL_COST_MAP:-True} \
+    "$PY" -c 'import benchguard, crowdkit, pysat' 2> /dev/null \
     || die "the baselines' dependencies are missing: .venv/bin/python -m pip install -e \".[baselines]\""
 }
 

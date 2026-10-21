@@ -9,6 +9,7 @@ by the frozen MAPPING."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from collections.abc import Mapping
@@ -16,23 +17,27 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
-from benchguard.agent.client import LLMClient, LLMConfig, LLMResponse
-from benchguard.agent.runner import ProtocolRunner
-from benchguard.core.finding import Finding, Location
-from benchguard.core.pipeline import AuditMode, VerificationPipeline
-from benchguard.loader import BenchmarkLoader
+# BenchGuard imports litellm, which fetches its model cost map from GitHub at import time
+# unless told to use the bundled copy: the study host is offline, and no call needs it.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-from specdx.baselines.api import (
+from benchguard.agent.client import LLMClient, LLMConfig, LLMResponse  # noqa: E402
+from benchguard.agent.runner import ProtocolRunner  # noqa: E402
+from benchguard.core.finding import Finding, Location  # noqa: E402
+from benchguard.core.pipeline import AuditMode, VerificationPipeline  # noqa: E402
+from benchguard.loader import BenchmarkLoader  # noqa: E402
+
+from specdx.baselines.api import (  # noqa: E402
     BaselineInput,
     BaselineOutput,
     register,
     scenario_text,
     tell_excerpt,
 )
-from specdx.baselines.llm import DigestMismatch, near_ctx
-from specdx.cost import Cost
-from specdx.spec.clauses import describe
-from specdx.types import Defect, InfrastructureError
+from specdx.baselines.llm import DigestMismatch, near_ctx  # noqa: E402
+from specdx.cost import Cost  # noqa: E402
+from specdx.spec.clauses import describe  # noqa: E402
+from specdx.types import Defect, InfrastructureError  # noqa: E402
 
 if TYPE_CHECKING:
     from pathlib import Path
