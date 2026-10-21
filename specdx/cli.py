@@ -1,16 +1,17 @@
-"""specdx: the command line for phases P1 and P1b."""
+"""specdx: the command line for phases P1, P1b and the baseline comparison study."""
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import logging
 import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
-from specdx.config import PDF_DIR, WORK_DIR
+from specdx.config import OLLAMA_URL, PDF_DIR, REPO_ROOT, WORK_DIR
 
 WORKERS_HELP = ("parallel workers, one database each (spec v2 §5.1); set OLLAMA_NUM_PARALLEL "
                 "to at least this on the Ollama host")
@@ -43,8 +44,29 @@ def _log_progress() -> None:
         logger.addHandler(handler)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    _log_progress()
+def study_guard(root: Path, gate_json: Path, prereg_json: Path) -> str | None:
+    """Why the test split must stay locked (spec §3.7), or None: the gate PASSED, the
+    pre-registration is committed and the working tree has no uncommitted changes."""
+    import subprocess
+
+    if not gate_json.exists() or not json.loads(gate_json.read_text()).get("passed"):
+        return f"the gate has not PASSED ({gate_json}); the test split stays locked"
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+
+    try:
+        rel = str(prereg_json.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return f"{prereg_json} is outside {root}, so it cannot be committed there"
+    if git("ls-files", "--error-unmatch", rel).returncode != 0:
+        return f"{rel} is not committed: run ./run_all.sh freeze-baselines"
+    if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        return "the working tree has uncommitted changes"
+    return None
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="specdx", description="SpecDx phase P1")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("build-tell", help="extract and cache the Tell corpus from the PDFs")
@@ -102,7 +124,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     gate.add_argument("--config", type=Path, required=True)
     gate.add_argument("--out", type=Path, required=True)
     gate.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
-    args = parser.parse_args(argv)
+    bl = sub.add_parser("baselines", help="run every baseline arm on the dev split (or the base)")
+    bl.add_argument("--split", choices=("dev", "base"), required=True)
+    bl.add_argument("--config", type=Path, required=True)
+    bl.add_argument("--out", type=Path, required=True)
+    bl.add_argument("--models", nargs="*", default=None)
+    bl.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
+    fr = sub.add_parser("freeze-baselines", help="choose and pin each baseline's arm and τ")
+    fr.add_argument("--from", dest="source", type=Path, required=True)
+    fr.add_argument("--out", type=Path, required=True)
+    fr.add_argument("--cache", type=Path, default=None,
+                    help="the baseline LLM cache to fingerprint")
+    st = sub.add_parser("study", help="the test split, once the gate PASSED (spec §3.7)")
+    st.add_argument("--split", choices=("test",), required=True)
+    st.add_argument("--config", type=Path, required=True)
+    st.add_argument("--baselines", type=Path, required=True)
+    st.add_argument("--out", type=Path, required=True)
+    st.add_argument("--workers", type=int, default=1, help=WORKERS_HELP)
+    rp = sub.add_parser("report", help="tables A and B, statistics, for dev and test")
+    rp.add_argument("--dev", type=Path, required=True)
+    rp.add_argument("--test", type=Path)
+    rp.add_argument("--out", type=Path, required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    _log_progress()
+    args = build_parser().parse_args(argv)
 
     if args.command == "build-tell":
         from specdx.spec.tell import pdf_chunks
@@ -161,8 +209,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "simulate":
-        import json
-
         from specdx.infer.anchored import V3Params
         from specdx.sim.generator import SimConfig
         from specdx.sim.study import (
@@ -219,7 +265,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: screen needs --profile, or --from a screen's JSON", file=sys.stderr)
         return 2
 
-    if args.command in ("gate", "run"):
+    # The commands below need no workbench, so they never take the database lock.
+    if args.command == "freeze-baselines":
+        from specdx.eval.freeze import canonical_json, prereg, prereg_markdown
+        from specdx.eval.study import SplitResult
+
+        result = SplitResult.from_json(args.source.read_text(encoding="utf-8"))
+        bad = {a: f for a, f in result.failures.items() if f}
+        if bad:
+            print(f"error: failed specifications {bad}; re-run baselines-dev", file=sys.stderr)
+            return 1
+        try:
+            doc = prereg(result, args.source, args.cache)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        # canonical_json is the serialization prereg_markdown hashes.
+        args.out.with_suffix(".json").write_text(canonical_json(doc), encoding="utf-8")
+        args.out.with_suffix(".md").write_text(prereg_markdown(doc), encoding="utf-8")
+        return 0
+
+    if args.command == "report":
+        from specdx.eval.study import SplitResult
+        from specdx.eval.study_report import study_markdown
+
+        dev = SplitResult.from_json(args.dev.read_text(encoding="utf-8"))
+        text = study_markdown(dev, {"specdx": 0.0, **{a: 0.0 for a in dev.defects
+                                                      if a != "specdx"}})
+        if args.test is not None and args.test.exists():
+            pre = json.loads((REPO_ROOT / "experiments" / "p3-baselines-prereg.json")
+                             .read_text(encoding="utf-8"))
+            test = SplitResult.from_json(args.test.read_text(encoding="utf-8"))
+            taus = {c["arm"]: c["tau"] for c in pre["chosen"].values()}
+            text += "\n" + study_markdown(test, {"specdx": 0.0, **taus})
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
+        print(text)
+        return 0
+
+    if args.command == "study":  # refused before any configuration, pack or lock (exit 4)
+        reason = study_guard(REPO_ROOT, REPO_ROOT / "results" / "p2-gate.json", args.baselines)
+        if reason:
+            print(f"error: {reason}", file=sys.stderr)
+            return 4
+
+    if args.command in ("gate", "run", "baselines", "study"):
         from specdx.eval.pilot import GateConfig as _GateConfig
 
         # Refuse an empty or unscreened population before any pack is built; the smoke
@@ -249,6 +340,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         for m in all_mutants(bench.base, bench.pdf, bench.work_dir):
             location = ", ".join(sorted(m.truth.location))
             print(f"{m.id}\t{m.truth.type}\t{m.truth.location_kind}\t{location}")
+        return 0
+
+    if args.command in ("baselines", "study"):
+        from specdx.baselines.llm import Gateway
+        from specdx.eval.freeze import study_arms
+        from specdx.eval.pilot import GateConfig
+        from specdx.eval.study import dev_arms, run_split
+
+        config = GateConfig.load(args.config)  # its population was checked above
+        allm = all_mutants(bench.base, bench.pdf, bench.work_dir)
+        dev = dev_split(allm, config.dev_per_type, config.rng_seed)
+        pinned: dict[str, str] = {}
+        for r in bench.cache:  # RunCache iterates Behaviours in file order: the last wins
+            if r.model_digest:
+                pinned[r.interpreter.model] = r.model_digest
+        gateway = Gateway(OLLAMA_URL, bench.work_dir / "baseline-llm.jsonl", pinned)
+        if args.command == "baselines":
+            arms = dev_arms(config.models_by_family)
+            if args.models is not None:
+                arms = [a for a in arms if a.model is None or a.model in args.models]
+            mutants = dev if args.split == "dev" else []
+        else:
+            doc = json.loads(args.baselines.read_text(encoding="utf-8"))
+            arms = [a for a, _ in study_arms(doc)]
+            ids = {m.id for m in dev}
+            mutants = [m for m in allm if m.id not in ids]
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        result = run_split(bench, config, mutants, arms, gateway,
+                           args.out.with_suffix(".progress.jsonl"), args.split)
+        args.out.write_text(result.to_json(), encoding="utf-8")
+        print(f"{len(result.defects)} arms on {len(mutants) + 1} specifications -> {args.out}")
         return 0
 
     from specdx.eval.pilot import GateConfig, gate_markdown, run_gate

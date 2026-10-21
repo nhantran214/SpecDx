@@ -13,7 +13,8 @@ def test_help_lists_every_subcommand(capsys) -> None:
     assert exit_info.value.code == 0
     out = capsys.readouterr().out
     for command in ("build-tell", "make-variants", "capability", "screen", "doctor",
-                    "cache-info", "mutants", "run", "gate"):
+                    "cache-info", "mutants", "run", "gate", "baselines", "freeze-baselines",
+                    "study", "report"):
         assert command in out
 
 
@@ -176,3 +177,245 @@ def test_run_localises_only_when_the_variant_is_not_the_base(
     assert main(["run", "--config", str(_run_config(tmp_path, {"q": ["a"]})),
                  "--variant", variant, "--out", str(tmp_path / "r.json")]) == 0
     assert seen == [localize]
+
+
+def test_study_refuses_without_a_passed_gate(tmp_path) -> None:
+    from specdx.cli import study_guard
+
+    gate = tmp_path / "g.json"
+    gate.write_text('{"passed": false}')
+    reason = study_guard(tmp_path, gate, tmp_path / "p.json")
+    assert reason and "gate" in reason
+
+
+def test_study_refuses_an_uncommitted_preregistration(tmp_path) -> None:
+    import subprocess
+
+    from specdx.cli import study_guard
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    gate = tmp_path / "g.json"
+    gate.write_text('{"passed": true}')
+    pre = tmp_path / "p.json"
+    pre.write_text("{}")
+    reason = study_guard(tmp_path, gate, pre)
+    assert reason and "commit" in reason
+
+
+def test_the_new_commands_parse() -> None:
+    from specdx.cli import build_parser
+
+    p = build_parser()
+    a = p.parse_args(["baselines", "--split", "dev", "--config", "c.json", "--out", "o.json"])
+    assert (a.command, a.split) == ("baselines", "dev")
+    assert p.parse_args(["report", "--dev", "d.json", "--out", "r.md"]).command == "report"
+
+
+def _git_repo(root: Path) -> None:
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    (root / "g.json").write_text('{"passed": true}')
+    (root / "p.json").write_text("{}")
+    git("add", "g.json", "p.json")
+    git("commit", "-q", "-m", "prereg")
+
+
+def test_study_guard_admits_a_committed_preregistration_on_a_clean_tree(tmp_path) -> None:
+    from specdx.cli import study_guard
+
+    _git_repo(tmp_path)
+    (tmp_path / "untracked.txt").write_text("not part of the tree's state")
+    assert study_guard(tmp_path, tmp_path / "g.json", tmp_path / "p.json") is None
+
+
+def test_study_guard_refuses_a_dirty_tree(tmp_path) -> None:
+    from specdx.cli import study_guard
+
+    _git_repo(tmp_path)
+    (tmp_path / "p.json").write_text('{"edited": true}')
+    reason = study_guard(tmp_path, tmp_path / "g.json", tmp_path / "p.json")
+    assert reason and "uncommitted" in reason
+
+
+def test_study_guard_refuses_a_missing_gate_and_an_outside_preregistration(tmp_path) -> None:
+    from specdx.cli import study_guard
+
+    reason = study_guard(tmp_path, tmp_path / "missing.json", tmp_path / "p.json")
+    assert reason and "gate" in reason
+    (tmp_path / "repo").mkdir()
+    _git_repo(tmp_path / "repo")
+    outside = tmp_path / "elsewhere.json"
+    outside.write_text("{}")
+    reason = study_guard(tmp_path / "repo", tmp_path / "repo" / "g.json", outside)
+    assert reason and "commit" in reason
+
+
+def _no_workbench(monkeypatch) -> None:
+    def refuse(*args, **kwargs):
+        raise AssertionError("the workbench (and its database lock) must not be opened")
+
+    monkeypatch.setattr("specdx.workbench.Workbench.open", refuse)
+
+
+def test_study_exits_4_before_opening_the_workbench_when_refused(
+        monkeypatch, tmp_path, capsys) -> None:
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)  # no results/p2-gate.json there
+    pre = tmp_path / "p.json"
+    pre.write_text("{}")
+    code = main(["study", "--split", "test", "--config", str(tmp_path / "c.json"),
+                 "--baselines", str(pre), "--out", str(tmp_path / "t.json")])
+    assert code == 4
+    assert "gate has not PASSED" in capsys.readouterr().err
+    assert not (tmp_path / "t.json").exists()
+
+
+def _dev_result():
+    from specdx.baselines.api import REGISTRY
+    from specdx.eval.study import SplitResult
+    from specdx.mutate.operators import GroundTruth
+    from specdx.types import Defect
+
+    truths = {"H1": GroundTruth("H1", "hidden", frozenset({"c1"}), "clause")}
+    hit = [Defect("hidden", ("c1",), (), (), 0.7)]
+    defects = {"specdx": {"base": [], "H1": hit}}
+    for name in sorted(REGISTRY):
+        defects[name] = {"base": [], "H1": hit}
+    return SplitResult("dev", truths, {"H1"}, defects, {}, {}, {})
+
+
+def test_freeze_baselines_writes_canonical_json_whose_hash_the_markdown_prints(
+        monkeypatch, tmp_path) -> None:
+    import hashlib
+
+    _no_workbench(monkeypatch)
+    src = tmp_path / "dev.json"
+    src.write_text(_dev_result().to_json(), encoding="utf-8")
+    cache = tmp_path / "baseline-llm.jsonl"
+    cache.write_bytes(b'{"a": 1}\n')
+    out = tmp_path / "exp" / "p3-baselines-prereg"
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out),
+                 "--cache", str(cache)]) == 0
+    body = out.with_suffix(".json").read_bytes()
+    assert hashlib.sha256(body).hexdigest() in out.with_suffix(".md").read_text()
+    import json
+
+    doc = json.loads(body)
+    assert doc["baseline_cache"]["lines"] == 1 and set(doc["chosen"]) >= {"jest"}
+
+
+def test_freeze_baselines_refuses_failed_specifications_and_incomplete_choices(
+        monkeypatch, tmp_path, capsys) -> None:
+    _no_workbench(monkeypatch)
+    failed = _dev_result()
+    failed.failures = {"jest": {"H1": "boom"}}
+    src = tmp_path / "dev.json"
+    src.write_text(failed.to_json(), encoding="utf-8")
+    out = tmp_path / "prereg"
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out)]) == 1
+    assert "failed specifications" in capsys.readouterr().err
+    incomplete = _dev_result()
+    del incomplete.defects["jest"]
+    src.write_text(incomplete.to_json(), encoding="utf-8")
+    assert main(["freeze-baselines", "--from", str(src), "--out", str(out)]) == 1
+    assert "jest" in capsys.readouterr().err
+    assert not out.with_suffix(".json").exists() and not out.with_suffix(".md").exists()
+
+
+def test_report_uses_tau_zero_on_dev_and_the_frozen_tau_on_test(
+        monkeypatch, tmp_path, capsys) -> None:
+    import json
+
+    import specdx.cli
+
+    _no_workbench(monkeypatch)
+    monkeypatch.setattr(specdx.cli, "REPO_ROOT", tmp_path)
+    dev = tmp_path / "dev.json"
+    dev.write_text(_dev_result().to_json(), encoding="utf-8")
+    out = tmp_path / "report.md"
+    assert main(["report", "--dev", str(dev), "--out", str(out)]) == 0
+    text = out.read_text()
+    assert "dev split" in text and "test split" not in text
+    assert "| jest | 0 |" in text
+    (tmp_path / "experiments").mkdir()
+    (tmp_path / "experiments" / "p3-baselines-prereg.json").write_text(json.dumps(
+        {"chosen": {"jest": {"arm": "jest", "model": None, "strategy": None, "tau": 0.5,
+                             "dev_f1": 1.0}}}))
+    test = _dev_result()
+    test.split = "test"
+    test_json = tmp_path / "test.json"
+    test_json.write_text(test.to_json(), encoding="utf-8")
+    assert main(["report", "--dev", str(dev), "--test", str(test_json), "--out", str(out)]) == 0
+    tail = out.read_text().split("test split", 1)[1]
+    assert "| jest | 0.5 |" in tail and "| specdx | 0 |" in tail
+    assert capsys.readouterr().out.startswith("# Comparison study: dev split")
+
+
+def _wired(monkeypatch, tmp_path):
+    """A fake workbench and run_split recording what the baselines and study commands pass."""
+    from types import SimpleNamespace
+
+    from specdx.eval.study import SplitResult
+
+    def behaviour(model, digest):
+        return SimpleNamespace(interpreter=SimpleNamespace(model=model), model_digest=digest)
+
+    cache = [behaviour("a:14b", "old"), behaviour("a:14b", "new"), behaviour("b:8b", "")]
+    bench = SimpleNamespace(base="base", pdf=None, work_dir=tmp_path, cache=cache)
+    mutants = [SimpleNamespace(id=i) for i in ("D1", "D2", "T1", "T2")]
+    seen = {}
+
+    def fake_split(bench_, config, ms, arms, gateway, out_lines, split):
+        seen.update(mutants=[m.id for m in ms], arms=[a.label for a in arms], split=split,
+                    pinned=gateway.pinned, cache=gateway.cache_path, lines=out_lines)
+        return SplitResult(split, {}, set(), {"specdx": {}}, {}, {}, {})
+
+    monkeypatch.setattr("specdx.workbench.Workbench.open", lambda workers: bench)
+    monkeypatch.setattr("specdx.mutate.operators.all_mutants", lambda *a: mutants)
+    monkeypatch.setattr("specdx.mutate.operators.dev_split", lambda ms, n, seed: ms[:2])
+    monkeypatch.setattr("specdx.eval.study.run_split", fake_split)
+    return seen
+
+
+def test_baselines_runs_the_dev_arms_on_the_dev_split_with_the_cache_digests(
+        monkeypatch, tmp_path) -> None:
+    seen = _wired(monkeypatch, tmp_path)
+    out = tmp_path / "results" / "dev.json"
+    config = _run_config(tmp_path, {"a": ["a:14b"], "b": ["b:8b"]})
+    assert main(["baselines", "--split", "dev", "--config", str(config), "--out", str(out),
+                 "--models", "a:14b"]) == 0
+    assert seen["mutants"] == ["D1", "D2"] and seen["split"] == "dev"
+    assert seen["pinned"] == {"a:14b": "new"}  # the last digest per model; none for empty
+    assert seen["cache"] == tmp_path / "baseline-llm.jsonl"
+    assert seen["lines"] == out.with_suffix(".progress.jsonl")
+    assert seen["arms"] and not any("b:8b" in a for a in seen["arms"])
+    assert any("@a:14b" in a for a in seen["arms"]) and "jest" in seen["arms"]
+    assert out.exists()
+    assert main(["baselines", "--split", "base", "--config", str(config),
+                 "--out", str(out)]) == 0
+    assert seen["mutants"] == [] and seen["split"] == "base"
+
+
+def test_study_runs_the_frozen_arms_on_the_mutants_outside_the_dev_split(
+        monkeypatch, tmp_path) -> None:
+    from specdx.eval.freeze import canonical_json, prereg, study_arms
+
+    seen = _wired(monkeypatch, tmp_path)
+    monkeypatch.setattr("specdx.cli.study_guard", lambda *a: None)
+    src = tmp_path / "dev.json"
+    src.write_text(_dev_result().to_json(), encoding="utf-8")
+    doc = prereg(_dev_result(), src)
+    pre = tmp_path / "prereg.json"
+    pre.write_text(canonical_json(doc), encoding="utf-8")
+    out = tmp_path / "test.json"
+    assert main(["study", "--split", "test", "--config", str(_run_config(tmp_path, {"a": ["m"]})),
+                 "--baselines", str(pre), "--out", str(out)]) == 0
+    assert seen["mutants"] == ["T1", "T2"] and seen["split"] == "test"
+    assert seen["arms"] == [a.label for a, _ in study_arms(doc)]
