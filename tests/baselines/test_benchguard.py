@@ -119,7 +119,22 @@ def test_a_malformed_llm_reply_yields_no_finding(tmp_path, tell_corpus, pack, go
 
     out = REGISTRY["benchguard"].run(_input(G(), tell_corpus, pack, golden), model="m:7b")
     assert out.defects == [] and out.cost.requests >= 1
-    assert (tmp_path / "baselines" / "benchguard" / "base" / "m_7b" / "happy").is_dir()
+    assert (tmp_path / "baselines" / "benchguard" / "base" / "m_7b" / "grn12").is_dir()
+
+
+def test_only_the_anchor_scenario_is_packaged(tmp_path, tell_corpus, pack, golden) -> None:
+    import json
+
+    from specdx.baselines.benchguard import package
+
+    inp = _input(None, tell_corpus, pack, golden)
+    assert len(inp.ctx.canon) > 1  # the canon has other scenarios, which are not packaged
+    files = package(inp, tmp_path / "pkg")
+    assert [p.name for p in (tmp_path / "pkg").iterdir()] == [inp.clauses.anchor.id]
+    task = tmp_path / "pkg" / inp.clauses.anchor.id
+    assert json.loads((task / "solution" / "golden_state.json").read_text()) == golden.tables
+    assert set(files.values()) == {c.id for c in inp.clauses
+                                   if inp.clauses.applies(c, inp.clauses.anchor)}
 
 
 @pytest.mark.parametrize("error", ["infrastructure", "digest"])

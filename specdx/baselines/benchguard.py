@@ -1,7 +1,8 @@
 """B1: BenchGuard (Tu et al., arXiv 2604.24955; COLM 2026), definition audit only
 (baselines spec §2.3, §9.4). Each specification becomes a BenchGuard benchmark with one
-task per canon scenario: instruction = scenario + numbered T excerpt; tests = one file per
-clause that applies; solution = the golden state. Every LLM call goes through the
+task, the anchor canon scenario (the golden state is defined there alone, spec §9.8):
+instruction = scenario + numbered T excerpt; tests = one file per clause that applies;
+solution = the golden state. Every LLM call goes through the
 gateway via GatewayClient; BenchGuard's code is unchanged. Findings map to SpecDx types
 by the frozen MAPPING."""
 
@@ -62,31 +63,32 @@ def _column(clause_id: str) -> str | None:
 
 
 def package(inp: BaselineInput, root: Path) -> dict[str, str]:
+    """One task, the anchor scenario: the golden state is defined there alone."""
     if root.exists():
         shutil.rmtree(root)
     files: dict[str, str] = {}
     excerpt = "\n".join(f"[T:{sid}] {t}" for sid, t in tell_excerpt(inp))
     golden = inp.golden.tables if inp.golden is not None else {}
-    for name, scenario in sorted(inp.ctx.canon.items()):
-        task = root / name
-        (task / "tests").mkdir(parents=True)
-        (task / "solution").mkdir()
-        (task / "task.toml").write_text(
-            f"[metadata]\nid = {json.dumps(name)}\ncategory = \"business-process\"\n"
-            'benchmark_source = "TonomyX"\n', encoding="utf-8")
-        (task / "instruction.md").write_text(
-            f"{scenario_text(scenario)}\n\nRequirements (numbered sentences):\n{excerpt}\n",
-            encoding="utf-8")
-        for c in inp.clauses:
-            if inp.clauses.applies(c, scenario):
-                rel = _fname(c.id)
-                (task / rel).write_text(
-                    f"{c.id}\n{describe(c, scenario)}\n"
-                    f"{json.dumps(c.payload, ensure_ascii=False, default=str)}\n",
-                    encoding="utf-8")
-                files[rel] = c.id
-        (task / "solution" / "golden_state.json").write_text(
-            json.dumps(golden, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    scenario = inp.clauses.anchor
+    task = root / scenario.id
+    (task / "tests").mkdir(parents=True)
+    (task / "solution").mkdir()
+    (task / "task.toml").write_text(
+        f"[metadata]\nid = {json.dumps(scenario.id)}\ncategory = \"business-process\"\n"
+        'benchmark_source = "TonomyX"\n', encoding="utf-8")
+    (task / "instruction.md").write_text(
+        f"{scenario_text(scenario)}\n\nRequirements (numbered sentences):\n{excerpt}\n",
+        encoding="utf-8")
+    for c in inp.clauses:
+        if inp.clauses.applies(c, scenario):
+            rel = _fname(c.id)
+            (task / rel).write_text(
+                f"{c.id}\n{describe(c, scenario)}\n"
+                f"{json.dumps(c.payload, ensure_ascii=False, default=str)}\n",
+                encoding="utf-8")
+            files[rel] = c.id
+    (task / "solution" / "golden_state.json").write_text(
+        json.dumps(golden, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     return files
 
 
