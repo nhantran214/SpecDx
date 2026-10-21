@@ -47,10 +47,18 @@ class Gateway:
         self._digests: dict[str, str] = {}
         self._cache: dict[str, dict[str, Any]] = {}
         if cache_path.exists():
-            for line in cache_path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
+            lines = [ln for ln in cache_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            for i, line in enumerate(lines):
+                try:
                     rec = json.loads(line)
-                    self._cache[rec["key"]] = rec
+                except ValueError as exc:
+                    if i == len(lines) - 1:  # a hard kill mid-append leaves a partial last line:
+                        # drop it so the next append does not glue a record onto it
+                        cache_path.write_text("".join(f"{ln}\n" for ln in lines[:i]),
+                                              encoding="utf-8")
+                        break
+                    raise ValueError(f"{cache_path}: unparseable record on line {i + 1}") from exc
+                self._cache[rec["key"]] = rec
 
     def _client(self) -> httpx.Client:
         return httpx.Client(transport=self.transport, timeout=self.timeout)
@@ -99,10 +107,13 @@ class Gateway:
                         int(data.get("eval_count") or 0),
                         int(data.get("total_duration") or 0) // 1_000_000)
             rec = {"text": str(data["message"].get("content") or ""), "status": "ok", "error": ""}
-        except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.HTTPStatusError) as exc:
             cost = Cost(requests=1, errors=1)
             rec = {"text": "", "status": "error", "error": f"{type(exc).__name__}: {exc}"}
-        except httpx.TransportError as exc:  # connection refused, tunnel down: not data
+        except (ValueError, KeyError, AttributeError, TypeError) as exc:  # 200 but unusable body
+            cost = Cost(requests=1, errors=1)
+            rec = {"text": "", "status": "error", "error": f"malformed reply: {exc!r}"}
+        except httpx.TransportError as exc:  # connect/pool timeout, refused, tunnel down: not data
             raise InfrastructureError(f"Ollama at {self.base_url} failed: {exc}") from exc
         rec.update({"key": key, "model": model, "digest": digest, "cost": cost.as_dict()})
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)

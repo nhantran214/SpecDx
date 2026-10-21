@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from specdx.baselines.llm import DigestMismatch, Gateway
+from specdx.types import InfrastructureError
 
 
 def _server(digest="d1", fail=False):
@@ -57,6 +58,48 @@ def test_a_missing_model_stops_before_any_chat(tmp_path) -> None:
 
 
 def test_a_pinned_digest_mismatch_stops(tmp_path) -> None:
-    t, _ = _server(digest="new")
+    t, calls = _server(digest="new")
     with pytest.raises(DigestMismatch, match="m:7b"):
         Gateway("http://x", tmp_path / "c.jsonl", {"m:7b": "old"}, transport=t).chat("m:7b", [])
+    assert "/api/chat" not in calls
+
+
+def test_a_connect_timeout_is_infrastructure_and_never_cached(tmp_path) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "m:7b", "digest": "d1"}]})
+        raise httpx.ConnectTimeout("tunnel down", request=request)
+
+    cache = tmp_path / "c.jsonl"
+    g = Gateway("http://x", cache, transport=httpx.MockTransport(handle))
+    with pytest.raises(InfrastructureError):
+        g.chat("m:7b", [])
+    assert not cache.exists() or cache.read_text() == ""
+
+
+@pytest.mark.parametrize("content", [b"not json", b'{"no_message": 1}'])
+def test_a_malformed_200_reply_is_cached_as_an_error(tmp_path, content) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "m:7b", "digest": "d1"}]})
+        return httpx.Response(200, content=content)
+
+    g = Gateway("http://x", tmp_path / "c.jsonl", transport=httpx.MockTransport(handle))
+    r = g.chat("m:7b", [])
+    assert (r.status, r.text, r.cost.requests, r.cost.errors) == ("error", "", 1, 1)
+    assert r.error.startswith("malformed reply:")
+
+
+def test_a_truncated_last_cache_line_is_skipped_but_an_earlier_one_raises(tmp_path) -> None:
+    t, calls = _server()
+    cache = tmp_path / "c.jsonl"
+    Gateway("http://x", cache, transport=t).chat("m:7b", [])
+    good = cache.read_text()
+    cache.write_text(good + '{"key": "abc", "te')
+    again = Gateway("http://x", cache, transport=t).chat("m:7b", [])
+    assert again.cached and calls.count("/api/chat") == 1
+    Gateway("http://x", cache, transport=t).chat("m:7b", [{"role": "user", "content": "b"}])
+    assert len(Gateway("http://x", cache, transport=t)._cache) == 2  # reload is clean
+    cache.write_text('{"key": "abc", "te\n' + good)
+    with pytest.raises(ValueError, match="c.jsonl"):
+        Gateway("http://x", cache, transport=t)
