@@ -324,3 +324,73 @@ def test_make_input_passes_no_golden_state_when_the_database_refuses_it() -> Non
     inp = make_input(bench, SimpleNamespace(pack=BASE_PACK), SimpleNamespace(behaviours=[]),
                      ctx, "cfg", None)
     assert inp.golden is None
+
+
+def test_the_report_renders_both_tables() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    md = study_markdown(_result(), {"specdx": 0.0, "jest": 0.0, "llm@m": 0.0})
+    assert "Table A" in md and "Table B" in md and "| llm@m |" in md
+
+
+def _table_a(md: str, arm: str) -> dict[str, str]:
+    lines = md.split("## Table A")[1].splitlines()
+    head = next(x for x in lines if x.startswith("| arm |"))
+    row = next(x for x in lines if x.startswith(f"| {arm} |"))
+    cut = lambda x: [c.strip() for c in x.strip("|").split("|")]  # noqa: E731
+    return dict(zip(cut(head), cut(row), strict=True))
+
+
+def test_table_a_means_skip_types_without_truths_and_marks_incomplete() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    r = _result()
+    r.failures = {"jest": {"H2": "boom"}}
+    md = study_markdown(r, {"specdx": 0.0, "jest": 0.0})
+    specdx = _table_a(md, "specdx")
+    # Only "hidden" has truths, so the mean is its own value: SpecDx hits H1 and misses H2.
+    assert specdx["AP (mean)"] == "0.50" and specdx["Detection@1"] == "0.50"
+    assert specdx["failed specs"] == "0"
+    assert _table_a(md, "jest")["failed specs"] == "1 (INCOMPLETE)"
+
+
+def test_table_a_means_are_dashes_when_no_type_has_truths() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    r = _result()
+    r.truths, r.scorable = {}, set()
+    row = _table_a(study_markdown(r, {"specdx": 0.0}), "specdx")
+    assert row["AP (mean)"] == "–" and row["Detection@1"] == "–"
+
+
+def test_table_b_caption_states_its_conventions_and_rows_cover_llm_arms() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    md = study_markdown(_result(), {"specdx": 0.0, "jest": 0.0, "llm@m": 0.0})
+    table_b = md.split("## Table B")[1]
+    assert "unlocalised (spec §9.2)" in table_b
+    assert "localised final report" in table_b and "charged SpecDx's cost" in table_b
+    assert "| llm@m |" in table_b and "| jest |" not in table_b
+
+
+def test_paired_counts_discordant_mutants_and_the_ci_is_seeded() -> None:
+    from specdx.eval.stats import bootstrap_ci, paired
+
+    r = _result()
+    assert paired(r, "specdx", "jest", 0.0, 0.0) == {
+        "b": 0, "c": 0, "n": 2, "risk_difference": 0.0, "p": 1.0}
+    # jest's only hit (score 0.5) falls below tau 0.6, so SpecDx alone detects H1.
+    p = paired(r, "specdx", "jest", 0.0, 0.6)
+    assert (p["b"], p["c"], p["n"], p["risk_difference"]) == (1, 0, 2, 0.5)
+    assert bootstrap_ci(r, "specdx", 0.0) == bootstrap_ci(r, "specdx", 0.0)
+    assert bootstrap_ci(_result(), "specdx", 0.0) == (0.0, 1.0)
+
+
+def test_markdown_tables_have_matching_header_and_separator_widths() -> None:
+    from specdx.eval.study_report import study_markdown
+
+    md = study_markdown(_result(), {"specdx": 0.0, "jest": 0.0, "llm@m": 0.0})
+    lines = md.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("|---"):
+            assert lines[i - 1].count("|") == line.count("|") == lines[i + 1].count("|")
