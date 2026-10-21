@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from specdx.active.budget import RunBudget
 from specdx.active.refute import SYMBOLIC_WITNESS
 from specdx.active.search import CellBandit, information_gain, should_escalate
+from specdx.cost import behaviours_cost
 from specdx.infer.act import Act, Rasch, fit_rasch
 from specdx.infer.anchored import AnchoredFit, V3Params, fit_anchored, posterior_at
 from specdx.infer.cells import CellData
@@ -86,6 +87,9 @@ class SpecDxConfig:
     localize_budget: int = 80
     # The anchored model's priors and thresholds (spec v3 §9).
     params: V3Params = V3Params()
+    # Anytime checkpoints (baselines spec §4.4, §9.2): population-run counts at which the
+    # diagnosis so far is recorded. Output only: never read by any decision.
+    checkpoints: tuple[int, ...] = ()
 
 
 @dataclass
@@ -141,10 +145,10 @@ class Report:
     converged: bool = True
     iterations: int = 0
     fit_start: str = ""
+    checkpoints: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(
-            {"variant": self.variant, "defects": [asdict(d) for d in self.defects],
+        out = {"variant": self.variant, "defects": [asdict(d) for d in self.defects],
              "unobservable": [asdict(d) for d in self.unobservable],
              "runs": self.runs, "probe_runs": self.probe_runs, "ddmin_runs": self.ddmin_runs,
              "executed": self.executed, "scenarios": self.scenarios, "theta": self.theta,
@@ -152,9 +156,10 @@ class Report:
              "converged": self.converged, "iterations": self.iterations,
              "fit_start": self.fit_start, "items": self.items, "cells": self.cells,
              "literals": [x.as_dict() for x in self.literals],
-             "spent": [list(loc) for loc in sorted(self.spent)]},
-            ensure_ascii=False, indent=2,
-        )
+             "spent": [list(loc) for loc in sorted(self.spent)]}
+        if self.checkpoints:
+            out["checkpoints"] = self.checkpoints
+        return json.dumps(out, ensure_ascii=False, indent=2)
 
 
 def item_table(rasch: Rasch) -> dict[str, dict[str, Any]]:
@@ -255,6 +260,7 @@ def run_specdx(
     spent: frozenset[tuple[str, ...]] = frozenset()
     previous: dict[str, float] = {}
     order: list[str] = []
+    checkpoints: list[dict[str, Any]] = []
     runs = 0
     executed_before = ctx.runner.executed
     members = committee(config.models_by_family, config.variants, config.seeds)
@@ -316,6 +322,13 @@ def run_specdx(
             tau=config.tau, known=known,
         )
         defects, spent = diagnosis.defects, diagnosis.spent
+        for at in config.checkpoints:
+            if runs >= at and all(c["at"] != at for c in checkpoints):
+                kept = [d for d in defects if d.type != "ambiguity" or base is None
+                        or ambiguity_key(d) not in base.ambiguity_keys]
+                checkpoints.append({"at": at, "runs": runs,
+                                    "cost": behaviours_cost(behaviours).as_dict(),
+                                    "defects": [asdict(d) for d in kept]})
         scores = {repr(identity(d)): d.score for d in defects}
         bandit.update(scenario, information_gain(previous, scores))
         previous = scores
@@ -357,7 +370,7 @@ def run_specdx(
                   unobservable=diagnosis.unobservable, literals=list(ctx.literals),
                   alpha=dict(model.alpha), cells=cell_table(data, model),
                   converged=model.converged, iterations=model.iterations,
-                  fit_start=model.start)
+                  fit_start=model.start, checkpoints=checkpoints)
 
 
 def _persists(cells: CellsLike, data: CellData, model: AnchoredFit, cell: str) -> Persists:

@@ -40,7 +40,8 @@ class FakeRunner:
         self.calls.append(scenario.id)
         klass, bad = self.plan(scenario, interp)
         return Behaviour(f"{scenario.id}|{interp.key}|{variant.name}", interp, scenario,
-                         State({}, {"k": klass, "v": ",".join(sorted(bad))}, {}))
+                         State({}, {"k": klass, "v": ",".join(sorted(bad))}, {}),
+                         harness={"s0": {"requests": 1}})
 
     def run_batch(self, requests):
         return [self.run(r.variant, r.scenario, r.interp, r.suffix, kind=r.kind) for r in requests]
@@ -551,3 +552,21 @@ def test_an_ambiguity_below_tau_a_is_never_localised(monkeypatch) -> None:
     assert calls == ["grn12|step"]
     found = {d.note: d.location for d in report.defects if d.type == "ambiguity"}
     assert found == {"grn12|step": ("A:01",), "happy|step": ()}
+
+
+def test_checkpoints_leave_the_report_unchanged() -> None:
+    plain = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)), _config(budget=100))
+    marked = run_specdx(VARIANT, _ctx(FakeRunner(_hidden_plan)),
+                        _config(budget=100, checkpoints=(5, 20, 1000)))
+    assert [c["at"] for c in marked.checkpoints] == [5, 20]
+    assert all(c["runs"] >= c["at"] and c["cost"]["requests"] > 0 for c in marked.checkpoints)
+    assert dataclasses.replace(marked, checkpoints=[]).to_json() == plain.to_json()
+    assert "checkpoints" not in json.loads(plain.to_json())
+
+
+def test_a_checkpoint_drops_the_base_ambiguities_like_the_final_report() -> None:
+    base = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan)), _config(budget=60))
+    mutant = run_specdx(VARIANT, _split_ctx(FakeRunner(_split_plan)),
+                        _config(budget=60, checkpoints=(10,)), base=base)
+    kept = mutant.checkpoints[0]["defects"]
+    assert not [d for d in kept if d["type"] == "ambiguity"]
