@@ -55,13 +55,14 @@ def test_env_findings_are_dropped() -> None:
     assert map_finding(_f("ENV-DEP", ErrorCategory.ENV), FILES, set()) == []
 
 
-def test_a_clause_is_cited_by_its_shown_file_name_or_its_id_in_the_snippet() -> None:
+def test_a_clause_is_cited_by_its_file_name_or_its_id() -> None:
     files = {**FILES, "tests/inv__po-1.txt": "inv:po-1"}
     by_name = _f("GT-LOGIC", ErrorCategory.GT, ["inv__po-15.txt"])
     by_id = _f("GT-LOGIC", ErrorCategory.GT)
     by_id.evidence.primary_source = Location(file="eval_script", snippet="inv:po-15\npo ...")
-    assert [d.location for d in map_finding(by_name, files, set())] == [("inv:po-15",)]
-    assert [d.location for d in map_finding(by_id, files, set())] == [("inv:po-15",)]
+    by_id_in_file = _f("GT-LOGIC", ErrorCategory.GT, ["eval_script (inv:po-15)"])
+    for f in (by_name, by_id, by_id_in_file):
+        assert [d.location for d in map_finding(f, files, set())] == [("inv:po-15",)]
 
 
 def test_a_gateway_outage_is_not_swallowed_as_a_protocol_error(tmp_path) -> None:
@@ -88,18 +89,27 @@ def test_a_gateway_outage_is_not_swallowed_as_a_protocol_error(tmp_path) -> None
         client.complete("again")
 
 
-def test_a_malformed_llm_reply_yields_no_finding(tmp_path, tell_corpus, pack, golden) -> None:
+def _input(gateway, tell_corpus, pack, golden):
     from types import SimpleNamespace
 
-    from specdx.baselines.api import REGISTRY
-    from specdx.baselines.llm import Reply
     from specdx.config import BASE_PACK
-    from specdx.cost import Cost
     from specdx.interpreters.prompt import load_variants
     from specdx.orchestrate.work_orders import load_work_orders
     from specdx.scenarios.space import canon_scenarios
     from specdx.spec.clauses import ClauseSet
     from specdx.variant import SpecVariant
+
+    steps = load_work_orders()
+    return SimpleNamespace(
+        gateway=gateway, variant=SpecVariant("base", BASE_PACK, tell_corpus),
+        ctx=SimpleNamespace(canon=canon_scenarios(pack)), clauses=ClauseSet.from_pack(pack, steps),
+        steps=steps, statements=load_variants().statements, golden=golden)
+
+
+def test_a_malformed_llm_reply_yields_no_finding(tmp_path, tell_corpus, pack, golden) -> None:
+    from specdx.baselines.api import REGISTRY
+    from specdx.baselines.llm import Reply
+    from specdx.cost import Cost
 
     class G:
         cache_path = tmp_path / "c.jsonl"
@@ -107,10 +117,29 @@ def test_a_malformed_llm_reply_yields_no_finding(tmp_path, tell_corpus, pack, go
         def chat(self, model, messages, **kw):
             return Reply("not json at all", Cost(1), "ok")
 
-    steps = load_work_orders()
-    inp = SimpleNamespace(
-        gateway=G(), variant=SpecVariant("base", BASE_PACK, tell_corpus),
-        ctx=SimpleNamespace(canon=canon_scenarios(pack)), clauses=ClauseSet.from_pack(pack, steps),
-        steps=steps, statements=load_variants().statements, golden=golden)
-    out = REGISTRY["benchguard"].run(inp, model="m")
+    out = REGISTRY["benchguard"].run(_input(G(), tell_corpus, pack, golden), model="m:7b")
     assert out.defects == [] and out.cost.requests >= 1
+    assert (tmp_path / "baselines" / "benchguard" / "base" / "m_7b" / "happy").is_dir()
+
+
+@pytest.mark.parametrize("error", ["infrastructure", "digest"])
+def test_an_outage_or_digest_mismatch_stops_the_run(tmp_path, tell_corpus, pack, golden,
+                                                    error) -> None:
+    from specdx.baselines.api import REGISTRY
+    from specdx.baselines.llm import DigestMismatch
+    from specdx.types import InfrastructureError
+
+    exc = {"infrastructure": InfrastructureError("Ollama down"),
+           "digest": DigestMismatch("m has digest x, the population runs used y")}[error]
+
+    class G:
+        cache_path = tmp_path / "c.jsonl"
+        calls = 0
+
+        def chat(self, model, messages, **kw):
+            G.calls += 1
+            raise exc
+
+    with pytest.raises(type(exc)):
+        REGISTRY["benchguard"].run(_input(G(), tell_corpus, pack, golden), model="m")
+    assert G.calls == 1  # later tasks fail fast in the client, never reach the gateway

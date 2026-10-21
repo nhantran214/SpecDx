@@ -98,9 +98,9 @@ def _names(text: str, token: str) -> bool:
 def _cites(src: Location, rel: str, cid: str) -> bool:
     """BenchGuard's loader shows each test file under its base name (`# === <name> ===`) and
     its prompt asks for `"file": "eval_script"`, so a clause is cited by its file's base name
-    in `file` or `snippet`, or by its id (each file's first line) in `snippet`."""
+    or by its id (each file's first line) in `file` or `snippet`."""
     base = PurePosixPath(rel).name
-    return _names(src.file, base) or _names(src.snippet, base) or _names(src.snippet, cid)
+    return any(_names(text, token) for text in (src.file, src.snippet) for token in (base, cid))
 
 
 def _cited(f: Finding, files: Mapping[str, str]) -> list[str]:
@@ -183,7 +183,8 @@ class BenchGuard:
             strategy: str | None = None) -> BaselineOutput:
         if inp.gateway is None or not model:
             raise ValueError("benchguard needs a gateway and a model")
-        root = inp.gateway.cache_path.parent / "baselines" / "benchguard" / inp.variant.name
+        root = (inp.gateway.cache_path.parent / "baselines" / "benchguard" / inp.variant.name
+                / model.replace(":", "_"))
         files = package(inp, root)
         client = GatewayClient(inp.gateway, model)
         pipe = VerificationPipeline(BenchmarkLoader(root), llm_config=client.config,
