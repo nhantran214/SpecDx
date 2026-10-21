@@ -403,3 +403,9 @@ These were found while the plan was being written against the code. Where a rule
    - **Retrieval.** The sentences come from the same BM25 query as the localiser (v3 §5.3): a step's statement plus its tables, top 5 chunks per step.
    - **Order.** The excerpt keeps the sentences in step order, then in sentence-id order, until the cap is reached.
    - **Context window.** Every baseline call sets `num_ctx` to the interpreters' `NUM_CTX` (16384).
+7. **B3 follows the published indicator (replaces §2.6's fit).**
+   - **What the paper does** (Land & Bikel, p. 3, Eq. 1; p. 4, end of §3.3):
+     - Item parameters (a, b, c) are refitted twice with θ held fixed: once with the ceiling forced to d = 0 and once with d = 1.
+     - The bounds are a ∈ [1/15, 15], b ∈ [−2, 2] and c ∈ [0, 1], with c free. Appendix B.1 reports that fixing c at chance degrades results the most.
+     - The score is Δℓ = ℓ(d = 0) − ℓ(d = 1) in average per-response log-likelihood. It is signed, and only items with Δℓ > 0 are reported.
+   - **Disclosed simplification.** θ is the standardised logit of overall accuracy, instead of the paper's two-stage preliminary fit on items with r > 0.2.
