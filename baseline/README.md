@@ -1,74 +1,204 @@
-# Baselines for SpecDx
+# Baselines: what is compared with SpecDx and how to run it
 
-These baselines were selected on 2026-10-21 from the verified survey in [`../related_work/`](../related_work/README.md), which has 587 papers in 9 themes. Each folder holds a `NOTES.md` covering:
-- the paper(s), with keys in `related_work/references.bib`;
-- the code, with the exact commit and licence;
-- what the method does and which SpecDx defect types it can address;
-- the input it needs, the concrete adaptation to S1 (TonomyX) and S2 (τ²-bench), model requirements, effort and caveats.
+SpecDx is compared with seven published methods, plus two secondary arms taken from SpecDx's own gate.
+- Every baseline is implemented inside SpecDx, in `specdx/baselines/`, behind one interface.
+- Every baseline runs on the same specifications as SpecDx, and every baseline that reads interpreter runs reads the same cached SpecDx runs.
+- The two LLM-based baselines call the same open-weight population models, with the same digests, through one cached gateway.
+- All baselines are scored by the same matching code as SpecDx.
 
-The `code*/` folders are shallow clones of third-party repositories. They are not part of SpecDx; see **Licences** below before reusing anything.
+This file explains which baselines are used, how each one is run, and how to run the experiments.
 
-## Selection criteria
+The numbered folders hold, for each baseline:
+- `NOTES.md`: paper, original code and commit, licence, adaptation notes;
+- a local PDF of the paper;
+- a shallow clone of the original code (`code*/`) for reference.
 
-1. **Close to SpecDx.** The method either attacks the same problem (automatic detection of specification, benchmark or ground-truth defects, or separating agent errors from task defects) or replaces one SpecDx component on the same input.
-2. **Released code preferred.** 14 of the 15 baselines have a repository. The JEST rule is reimplemented in a few lines because its code is specific to ECMAScript.
-3. **Reputable venue preferred.** Most are at CORE A* or A venues: ICML, FSE, ASE, ICSE, ACL, JAIR, Nature, Constraints, SAT. Four preprints are kept because they are direct competitors or the only released code for a component: BenchGuard (reported accepted at COLM 2026), BenchJack and the Land & Bikel IRT audit (reported accepted at EMNLP 2026), all from 2026, and IntellAgent from 2025.
-4. **Runnable under SpecDx's constraints** (local models, no human labels), either directly or with a documented port.
+Clones and PDFs are git-ignored. **Nothing is imported from these clones**: the code that runs is in `specdx/baselines/`, and its third-party dependencies are installed from PyPI or a pinned git commit.
 
-## The 15 baselines
+---
 
-| # | Baseline | Venue | Code / licence | SpecDx slot | Defect types |
-|---|---|---|---|---|---|
-| **A. Direct competitors (whole method)** | | | | | |
-| 01 | [ClarifyGPT](01_clarifygpt/NOTES.md): ambiguity when sampled executions disagree | FSE 2024 (A*) | yes / none | Ambiguity; single-family ablation; B4 | Ambiguity |
-| 02 | [SpecFix](02_specfix/NOTES.md): interpretation distribution anchored to examples | ASE 2025 (A*) | yes / none | Ambiguity + hidden requirement | Ambiguity, Hidden (partial) |
-| 03 | [AgentSuite / COBA](03_agentsuite_coba/NOTES.md): component-based benchmark audit; finds τ²-bench issues | ICML 2026 (A*) | yes / none | B1 + B5 (published) | Hidden, Weak, Ambiguity |
-| 04 | [BenchGuard](04_benchguard/NOTES.md): LLM cross-verification of instruction, grader and solution | COLM 2026 (arXiv 2604.24955) | yes / Apache-2.0 | B1 (published) | all four |
-| 05 | [Who&When](05_who_and_when/NOTES.md): LLM-judge failure attribution | ICML 2025 (A*) | yes / MIT | Agent error vs specification defect | Separation, Hidden |
-| 07 | [BenchJack](07_benchjack/NOTES.md): agents synthesise exploits of benchmark checkers | arXiv 2605.12673 | yes / Apache-2.0 | Weak check with witnesses | Weak |
-| **B. Statistical aggregation on the reading matrix** | | | | | |
-| 06 | [IRT audit](06_irt_audit/NOTES.md): py-irt 2PL/4PL and the Land & Bikel forced-ceiling indicator | ACL 2021 (A*), IJOC 2023, EMNLP 2026 (arXiv 2605.30504) | py-irt / MIT | **B3** (revise, see below) | Hidden / mis-key |
-| 08 | [Crowd-Kit](08_crowdkit/NOTES.md): MV, Dawid–Skene, GLAD, MACE, KOS, M-MSR | JOSS 2024; DS 1979, GLAD NeurIPS 2009, MACE NAACL 2013 | yes / Apache-2.0 | Simulation baselines; "no set truth, no anchor" ablation | Hidden / mis-key |
-| 09 | [cleanlab](09_cleanlab/NOTES.md): Confident Learning and CROWDLAB (specification as one annotator) | JAIR 2021 (A) | yes / Apache-2.0 | Mis-key detector | Hidden / mis-key |
-| 10 | [Semantic entropy](10_semantic_entropy/NOTES.md) | Nature 2024; ICLR 2023 (A*) | yes / BSD-3-Clear | **B4** (published) | Ambiguity |
-| 15 | [JEST rule](15_jest_spec_vote/NOTES.md): N+1-version testing, where a majority deviation means a specification bug | ICSE 2021 (A*) | reimplement | Named form of majority vote / anchor-only | Hidden; separation |
-| **C. Component baselines and ablations** | | | | | |
-| 11 | [PySAT + MARCO](11_pysat_marco/NOTES.md): MUS/MCS enumeration on C alone | SAT 2018 (A), Constraints 2016 (A) | yes / MIT, custom | **B5**; hard vs soft hitting sets | Contradiction |
-| 12 | [ProbDD](12_probdd/NOTES.md): probabilistic delta debugging | ESEC/FSE 2021 (A*) | yes / GPL-3.0 | Replaces ddmin (ambiguity localisation) | Localisation in T |
-| 13 | [Active testing](13_active_testing/NOTES.md): acquisition for efficient evaluation | ICML 2021 (A*) | yes / MIT | Replaces Thompson-EIG; compare with A4 | Efficiency |
-| 14 | [IntellAgent](14_intellagent/NOTES.md): policy-graph scenario generation | arXiv 2501.11067 | yes / Apache-2.0 | Replaces scenario synthesis (S2) | Scenario source |
+## 1. The baselines in use
 
-## Recommended core set for the paper
+| Slot | Registry name | Method (paper) | Implementation | Folder | Uses an LLM | Reads SpecDx runs | Threshold tuned on dev | Reports |
+|---|---|---|---|---|---|---|---|---|
+| **B1** | `benchguard` | BenchGuard: LLM cross-verification of a benchmark's instruction, tests and solution (Tu et al., COLM 2026) | `benchguard.py`, using the original package at commit `7d6a52e` | [04_benchguard](04_benchguard/NOTES.md) | yes | no | yes (+ model) | all four types |
+| **B2** | `whowhen` | Who&When automated failure attribution (Zhang et al., ICML 2025) | `whowhen.py`, with prompts ported verbatim (MIT) | [05_who_and_when](05_who_and_when/NOTES.md) | yes | yes | yes (+ model, strategy) | hidden requirement |
+| **B3** | `irt_audit` | Forced-ceiling IRT mislabel indicator (Land & Bikel, EMNLP 2026) | `irt_audit.py`, reimplemented from the paper | [06_irt_audit](06_irt_audit/NOTES.md) | no | yes | yes | hidden requirement |
+| **B4** | `semantic_entropy` | Discrete semantic entropy (Farquhar et al., Nature 2024; Kuhn et al., ICLR 2023) | `semantic_entropy.py`, reimplemented from the papers | [10_semantic_entropy](10_semantic_entropy/NOTES.md) | no (its localisation re-runs interpreters) | yes | yes | ambiguity |
+| **B5** | `b5_mus` | Contradictions in C alone: MUS by hitting sets (PySAT, SAT 2018) | `mus_c.py`, using `python-sat` | [11_pysat_marco](11_pysat_marco/NOTES.md) (PySAT part) | no | no | no (τ = 0) | contradiction |
+| TI | `glad` | GLAD (Whitehill et al., NeurIPS 2009) | `truth_inference.py`, using `crowd-kit` | [08_crowdkit](08_crowdkit/NOTES.md) | no | yes | no (τ = 0) | hidden requirement |
+| TI | `dawid_skene` | Dawid–Skene (JRSS-C 1979) | `truth_inference.py`, using `crowd-kit` | [08_crowdkit](08_crowdkit/NOTES.md) | no | yes | no (τ = 0) | hidden requirement |
+| JEST | `jest` | N+1-version rule (Park et al., ICSE 2021) | `jest_rule.py`, reimplemented from the paper | [15_jest_spec_vote](15_jest_spec_vote/NOTES.md) | no | yes | yes | hidden requirement |
+| secondary | `b2_naive` | Best single interpreter, every violated clause flagged (SpecDx's gate baseline) | `secondary.py`, wrapping `b2_single.py` | — | no | yes | no (τ = 0) | hidden requirement |
+| secondary | `b3_2pl` | Plain 2PL IRT, negative discrimination (SpecDx's gate baseline) | `secondary.py`, wrapping `b3_irt.py` | — | no | yes | no (τ = 0) | hidden requirement |
 
-The evaluation has five rival detectors (B1–B5) and the simulation baselines of v3 §8.1. A compact, defensible comparison is:
+### How each baseline is run on SpecDx
 
-| Slot | Use | Reason |
+#### B1 BenchGuard
+- **Packaging.** The anchor canon scenario of each specification becomes one BenchGuard task:
+  - `instruction.md` holds the scenario statement and the relevant sentences of T, numbered `[T:<id>]`, capped at 8000 characters;
+  - `tests/` holds one file per clause of C that applies;
+  - `solution/` holds the golden end state. If the database refuses that state, which C2 mutants do on purpose, the unmaterialised golden tables are used.
+- **Audit.** BenchGuard runs in definition-audit mode, with its own protocols unchanged. Every LLM call goes through SpecDx's gateway, at temperature 0 with `max_tokens` 4096.
+- **Mapping findings to types.** The mapping is frozen:
+
+  | BenchGuard finding | SpecDx type and location |
+  |---|---|
+  | `INST-INCOMPLETE` | ambiguity, at the quoted `[T:id]` sentences |
+  | `INST-CONTRADICT` | contradiction when it cites two or more clauses; otherwise hidden requirement |
+  | `INST-INFEASIBLE` | contradiction |
+  | `GT-*` | hidden requirement at the cited clause |
+  | `EVAL-*` | hidden requirement at the cited clause; also a weak check on the clause's column when the finding says the check *accepts* or *passes* too much |
+  | `ENV-*`, `EVAL-STOCHASTIC` | dropped |
+
+- **Score.** Severity rank × confidence rank.
+
+#### B2 Who&When
+- **Logs.** Each failing SpecDx run becomes a multi-agent log with one entry per work step: the step's claim, its refused tool calls and its rows.
+- **Sampling.** For each violated clause, at most 5 failing runs are judged. Runs already chosen for other clauses are reused first; all choices are ordered by sha256 of the run key.
+- **Localisation.** The judge finds the decisive step with one of the three original strategies (`all_at_once`, `step_by_step`, `binary_search`).
+- **Verdict.** One added call decides `agent_error` or `spec_defect <clause>`. A clause's score is the share of its sampled runs judged a specification defect at that clause.
+- **Settings.** Generation follows the original's open-model path: temperature 0.6, top_p 0.95, seed 1, `max_tokens` 1024.
+- **Unparseable replies.** They are counted, never turned into findings.
+
+#### B3 forced-ceiling IRT
+- **Data.** Subjects are interpreters (model, Tell variant, seed); items are anchored cells.
+- **Fit.** Item parameters are refitted with the ceiling forced to 0 and to 1, θ held fixed and c free.
+- **Score.** Δℓ = ℓ(d=0) − ℓ(d=1), per response. Only Δℓ > 0 is reported.
+
+#### B4 semantic entropy
+- **Score.** The entropy of each cell's readings, pooled and per model family; the larger of the two counts.
+- **Localisation.** Flagged cells are localised in T by SpecDx's own ddmin localiser, with the same budget of 80 re-runs, highest score first. The re-runs are interpreter runs, so they go to Ollama.
+
+#### B5 MUS on C
+- **Exploration.** Starting from the anchor's golden state, explore up to two rounds of single-clause repairs, at most 200 evaluations.
+- **MUS.** Each explored state's violated set is a correction set. Minimal hitting sets of size ≤ 3 (PySAT `Hitman`) are reported as contradictions. No interpreter is involved.
+
+#### GLAD and Dawid–Skene
+- **Input.** Task = cell, worker = interpreter, label = its modal reading; `n_iter` = 100.
+- **Report.** A cell is reported only when the aggregate label differs from the value the specification declares. The score is 1 − P(declared value).
+
+#### JEST
+- **Score.** The share of models whose modal reading of a cell deviates from the declared value.
+
+#### Secondary arms
+- `b2_naive` and `b3_2pl` are the gate's own B2 and B3, run unchanged.
+
+### Thresholds, models and strategies (chosen on the development set only)
+
+- **Grid.**
+  - Tuned baselines (`benchguard`, `whowhen`, `irt_audit`, `semantic_entropy`, `jest`) are scored on the development set at every threshold in {0, deciles of their scores}.
+  - The LLM baselines are also scored for each population model, and `whowhen` for each strategy.
+- **Rule.** The choice maximises the mean typed F1 over the types the baseline reports, on scorable mutants. Ties go to the smaller model, then the higher threshold.
+- **Untuned arms.** `glad`, `dawid_skene`, `b5_mus`, `b2_naive` and `b3_2pl` keep τ = 0.
+- **Freezing.** The choices are written to `experiments/p3-baselines-prereg.{json,md}` and committed before the test set runs. They cannot be replaced without `--force`.
+
+### Cost accounting
+
+- **Unit.** Costs are counted in model requests, plus prompt and output tokens and GPU time wherever Ollama recorded them.
+- **What each baseline pays.**
+  - A baseline that reads SpecDx's runs is charged those population runs plus its own calls.
+  - BenchGuard and B5 pay only their own calls.
+- **The two tables.**
+  - Table A reports each method at its native protocol.
+  - Table B reports SpecDx at each LLM baseline's cost, read from SpecDx's anytime checkpoints at 25, 50, 100, 150 and 200 population runs, and at the end. Ambiguity at an intermediate checkpoint is not yet localised.
+
+---
+
+## 2. Before running
+
+1. SpecDx is installed and its tests pass. PostgreSQL (`specdx-postgres`, port 55434) is up.
+2. Install the baselines' dependencies once:
+   ```bash
+   .venv/bin/python -m pip install -e ".[baselines]"     # crowd-kit, python-sat, BenchGuard @ 7d6a52e
+   .venv/bin/python -c "import crowdkit, pysat, benchguard; print('ok')"
+   ```
+3. The population is frozen in `experiments/p2-gate.json`, and its models are pulled on the Ollama host with the same digests as the cached SpecDx runs. Nothing else needs pulling: BenchGuard and Who&When reuse those models. A missing model or a different digest stops the run before any call.
+4. The gate has finished: `results/p2-gate.json` exists. The baselines run after the gate, on the same cached runs.
+5. `SPECDX_OLLAMA_URL` points at the Ollama host, for example `http://localhost:11435` through the SSH tunnel.
+
+## 3. Smoke test (no GPU time beyond a few calls)
+
+```bash
+./run_all.sh local
+```
+
+Besides SpecDx's own smoke run, this:
+- checks the baseline packages;
+- runs every baseline arm once on the smoke base with one model;
+- lists arms that failed;
+- fails if any LLM call's prompt plus its output budget reached the 16384-token context window (`near_ctx`).
+
+Fix any failure here before running the GPU steps.
+
+## 4. Running the comparison
+
+The usual way is `./run_all.sh all [--yes]`, which runs the gate and then these steps. Each step can also be run on its own:
+
+```bash
+export SPECDX_OLLAMA_URL=http://localhost:11435
+
+./run_all.sh baselines-dev       # every arm, every population model, base + 20 development mutants
+./run_all.sh freeze-baselines    # choose and commit each baseline's model, strategy and threshold
+./run_all.sh study               # SpecDx + frozen baselines on the test mutants (gate PASSED only)
+./run_all.sh report              # results/p3-report.md
+./run_all.sh status              # pid, log tail and cache sizes of the running steps
+```
+
+| Step | Reads | Writes | Notes |
+|---|---|---|---|
+| `baselines-dev` | `experiments/p2-gate.json`, `work/runs.jsonl` | `results/p3-baselines-dev.json`, `work/baseline-llm.jsonl` | Detached, with a pid and log in `work/p3-baselines-dev.*`. Prints an estimate of arms, specifications and judged logs once the base report is in. Checks the run cache and the Ollama digests before launching |
+| `freeze-baselines` | `results/p3-baselines-dev.json` | `experiments/p3-baselines-prereg.{json,md}` (committed) | Refuses if any development specification failed. Records the sha256 of the gate configuration and gate result, and the line count and md5 of the baseline cache |
+| `study` | the pre-registration, `experiments/p2-gate.json` | `results/p3-study.json` | Exit 4 unless: the gate PASSED; the pre-registration is committed; the tree is clean; the fingerprints match. Embeds the thresholds it used. Detached (`work/p3-study.*`) |
+| `report` | the dev result, and the study result if present | `results/p3-report.md` | The dev section shows Table A twice, at the in-sample thresholds and at τ = 0. The test section uses the thresholds embedded in the study |
+
+If the gate is NOT PASSED, `all` runs `baselines-dev` and the development report, then exits 4. The test set stays locked.
+
+### The underlying commands
+
+These are the commands `run_all.sh` runs. `study` accepts only these two files:
+
+```bash
+.venv/bin/specdx baselines --split dev --config experiments/p2-gate.json \
+  --out results/p3-baselines-dev.json --workers 2
+.venv/bin/specdx freeze-baselines --from results/p3-baselines-dev.json \
+  --out experiments/p3-baselines-prereg --cache work/baseline-llm.jsonl \
+  --gate-config experiments/p2-gate.json --gate-result results/p2-gate.json
+.venv/bin/specdx study --split test --config experiments/p2-gate.json \
+  --baselines experiments/p3-baselines-prereg.json --out results/p3-study.json --workers 2
+.venv/bin/specdx report --dev results/p3-baselines-dev.json --test results/p3-study.json \
+  --out results/p3-report.md
+```
+
+- To try the baselines on the base specification only, with one model: `specdx baselines --split base --config experiments/p2-gate.json --out /tmp/base.json --models gpt-oss:20b`.
+- `--models` restricts the LLM arms; the other arms always run.
+
+## 5. Reading the results
+
+- **Table A** gives, per arm:
+  - typed and untyped F1 per defect type;
+  - average precision per type and Detection@1/3/5, both computed at τ = 0;
+  - requests, tokens and duration. A "(bound)" mark means some runs predate exact counting, so the figure is an upper bound.
+- **The paired comparison** of SpecDx against each arm gives exact McNemar with Holm correction and the risk difference with a 95% bootstrap CI (10,000 resamples, seed 20261021).
+- **Table B** gives SpecDx's F1 at each LLM arm's request budget.
+- **INCOMPLETE** after an arm name means it failed on some specifications. They are excluded from its scores and listed.
+
+## 6. Pausing, resuming and failures
+
+- **Pausing.** Pause and resume a detached step with `kill -STOP` / `kill -CONT` on its pid in `work/`. Never start a second SpecDx process on the same database.
+- **Resuming.** If a step stops (tunnel dropped, reboot), run the same step again.
+  - SpecDx's runs come from `work/runs.jsonl` and the baselines' LLM calls from `work/baseline-llm.jsonl`.
+  - Finished work is served from these caches and the rerun writes the same result. Both caches are append-only; never edit them.
+- **Outages.** An Ollama outage (5xx, connection failure, a timeout before the host has answered once) is never cached: the step stops and can be resumed. A model timeout or malformed reply is cached as an error and is never a finding.
+- **Failures.** A baseline that fails on one specification is marked failed there only. A baseline that fails on the base specification is failed everywhere, because the differential needs the base.
+
+## 7. Licences of the code in use
+
+| Baseline | Code | Licence |
 |---|---|---|
-| **B1** static LLM review | **BenchGuard** (04), with **COBA** (03) on S2 | Published, automatic auditors of agent benchmarks. COBA is peer-reviewed (ICML 2026) and was evaluated on τ²-bench, SpecDx's own subject S2. |
-| **B2** best single interpreter | Keep, and add **Who&When** (05) | Gives B2 a published per-trace attribution judge, not only "flag every violation". |
-| **B3** IRT | **Land & Bikel forced-ceiling indicator** on py-irt (06), with plain 2PL as a secondary arm | The published IRT auditor reports that "negative discrimination" (the current B3) is the weaker variant. Keeping only that variant would invite a reviewer objection. |
-| **B4** disagreement | **Semantic entropy** (10) | A citable estimator instead of an ad hoc entropy. |
-| **B5** check-only | **PySAT/MARCO** (11) | Standard MUS/MCS tooling. |
-| Simulation baselines | **Crowd-Kit** DS/GLAD/MACE (08), **cleanlab** CL/CROWDLAB (09), **JEST rule** (15) | Shows what set-valued truth, anchors and the restricted error model add over classic truth inference. |
-| Direct-competitor arms (ambiguity) | **ClarifyGPT** (01) and **SpecFix** (02) | The two peer-reviewed execution-disagreement ambiguity detectors. Both use one model and no rater model. |
-| Component ablations | ProbDD (12), active testing (13), IntellAgent (14), BenchJack (07, weak checks) | Each replaces one SpecDx component at an equal run budget. |
-
-## Methods without usable code (reimplement or cite)
-
-These are in `related_work/catalog.md` with full notes:
-- **VERIMED** (Hall et al., arXiv 2026: neurosymbolic auditing of NL requirements; LLM formalisation disagreement plus SMT). The closest "statistics plus logic" competitor on the T side. No code.
-- **FAMAS** (PACMSE 2026: spectrum-based failure attribution over repeated LLM-agent runs) and **Barinel** (ASE 2009: Bayesian SFL with hitting sets). Both run on SpecDx's run × clause matrix; Zoltar is archived, so reimplement.
-- **Ambiguity Detection and Elimination in Executable Process Modeling** (arXiv 2604.10884): dispersion of simulated KPIs over repeated BPMN generations. The closest work in the BPM community. No code.
-- **Policy Loopholes in Agent Evaluation** (arXiv 2609.14400) and the **τ²-Bench-Verified** repairs (SABER, arXiv 2512.07850; github.com/amazon-agi/tau2-bench-verified, MIT). These are sources of real labelled defects, not runnable baselines.
-- **Auto Benchmark Audit** (arXiv 2605.26079; github.com/IsThatYou/auto-bench-audit, no licence). An alternative to BenchGuard as B1. Not cloned (296 MB, mostly HTML reports).
-
-## Practical notes
-
-- **Local models.** BenchGuard, BenchJack and COBA default to frontier models through Claude Code, Codex or OpenAI APIs. SpecDx's constraint is local models only (v1 §1.2), so run them through their OpenAI-compatible or litellm clients pointed at Ollama (`http://localhost:11434/v1`), and state the quality gap in the threats to validity. ClarifyGPT, SpecFix and Who&When also use OpenAI clients and can be redirected the same way. IntellAgent has an Ollama provider.
-- **Offline statistics.** The statistical baselines (06, 08, 09, 10, 15) need no LLM calls. They run on the cached readings (`work/runs.jsonl` and the cell extraction of `specdx/infer/cells.py`), so they add no GPU cost.
-- **Licences.**
-  - ClarifyGPT, SpecFix and AgentSuite have **no licence file**: use them for local research only, and do not redistribute or vendor their code.
-  - ProbDD is **GPL-3.0**: reimplement it rather than copy code into SpecDx.
-  - The others are MIT, Apache-2.0, BSD or custom permissive.
-- **Size.** About 3.2 GB in total, of which AgentSuite is 2.3 GB (it vendors τ-bench and τ²-bench plus pipeline data). These clones should not be committed. Add `baseline/*/code*/` to `.gitignore` if the folder is put under version control.
-- **Reproducibility.** Every clone is pinned to the commit recorded in its `NOTES.md`. Re-create one with `git clone <repo> && git checkout <commit>`.
+| B1 BenchGuard | `benchguard` package, git commit `7d6a52e` | Apache-2.0 |
+| B2 Who&When | prompts ported from `mingyin1/Agents_Failure_Attribution` @ `b2bae5c` | MIT |
+| B5 | `python-sat` | MIT |
+| GLAD, Dawid–Skene | `crowd-kit` | Apache-2.0 |
+| B3, B4, JEST | reimplemented from the papers (B4's reference code is BSD-3-Clause-Clear) | — |
+| secondary arms | SpecDx's own code | — |
