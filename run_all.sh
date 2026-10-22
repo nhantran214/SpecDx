@@ -366,8 +366,8 @@ stage_g2() {
     ok "already frozen: $(jq -c .models_by_family "$GATE_CONFIG")"
     return
   fi
-  [[ -z $(git status --porcelain -- results/p2-screen.json results/p2-screen.md "$GATE_CONFIG") ]] \
-    || die "results/p2-screen.* or $GATE_CONFIG has uncommitted changes"
+  [[ -z $(git status --porcelain -- "$GATE_CONFIG") ]] \
+    || die "$GATE_CONFIG has uncommitted changes"
   local rc=0 tmp
   "$SPECDX" screen --from results/p1b-screen.json --out results/p2-screen || rc=$?
   if [[ $rc == 3 ]]; then
@@ -379,9 +379,10 @@ stage_g2() {
   jq --slurpfile s results/p2-screen.json '.models_by_family = $s[0].population' "$GATE_CONFIG" > "$tmp"
   mv "$tmp" "$GATE_CONFIG"
   "$PY" -m pytest -q -o addopts="" tests/test_preregistration_v3.py | tail -1
-  git add results/p2-screen.json results/p2-screen.md "$GATE_CONFIG"
-  git commit -q -m "results: G2 — the cached P1b screen under the 0.3 act rate; population frozen into the gate config" \
-    -- results/p2-screen.json results/p2-screen.md "$GATE_CONFIG"
+  # results/ is git-ignored: the screen stays on disk, the frozen population is committed.
+  git add "$GATE_CONFIG"
+  git commit -q -m "experiments: G2 — the cached P1b screen under the 0.3 act rate; population frozen into the gate config" \
+    -- "$GATE_CONFIG"
   ok "population $(jq -c .models_by_family "$GATE_CONFIG"); committed $(git rev-parse --short HEAD)"
 }
 
@@ -492,9 +493,9 @@ stage_freeze() {
   pin=$("$PY" -m pytest -q -o addopts="" tests/test_preregistration_baselines.py 2>&1) \
     || { tail -20 <<< "$pin"; fail "the pre-registration pin test failed; nothing committed"; }
   tail -1 <<< "$pin"
-  # The gate result is committed with the pre-registration that records its sha256 (§9.8).
-  files=("$PREREG.json" "$PREREG.md" results/p3-baselines-dev.json results/p2-gate.json)
-  [[ -f results/p2-gate.md ]] && files+=(results/p2-gate.md)
+  # results/ is git-ignored: the pre-registration records the sha256 of the gate result and of
+  # the dev results it was chosen from (§9.8), so only it is committed.
+  files=("$PREREG.json" "$PREREG.md")
   git add "${files[@]}"
   git commit -q -m "experiments: baseline pre-registration — arms and thresholds frozen on the dev split" \
     -- "${files[@]}"

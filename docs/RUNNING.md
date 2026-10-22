@@ -172,7 +172,7 @@ jq --slurpfile s results/p2-screen.json '.models_by_family = $s[0].population' \
 .venv/bin/python -m pytest tests/test_preregistration_v3.py
 ```
 
-Exit status 3 is the G2 stop rule of spec v3.1 §7: fewer than 2 families, or fewer than 4 acting models, were admitted. P2 then stops and reports. Otherwise commit `results/p2-screen.*` and `experiments/p2-gate.json`.
+Exit status 3 is the G2 stop rule of spec v3.1 §7: fewer than 2 families, or fewer than 4 acting models, were admitted. P2 then stops and reports. Otherwise commit `experiments/p2-gate.json` (`results/` is git-ignored; the screen stays on disk).
 
 **The tunnel and the host.** On the GPU host: Ollama 0.30.4 with `OLLAMA_NUM_PARALLEL=2`, `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_KEEP_ALIVE=-1`, and the population's models pulled. Here:
 
@@ -212,7 +212,7 @@ echo $! > work/p2-gate.pid
 
 ## 12. Reproducing G0 and G1 (P2a, CPU only)
 
-The committed records `results/p2-calibration.json`, `results/p2-g0.*`, `results/p2-sim.*` and `results/p2-g1.md` were produced by the commands below, with these commits:
+The records `results/p2-calibration.json`, `results/p2-g0.*`, `results/p2-sim.*` and `results/p2-g1.md` (kept on disk; `results/` is git-ignored since 2026-10-22, so their committed versions are in the history up to `d444736`) were produced by the commands below, with these commits:
 - G0 ran on the code of `46beddf` and was recorded in `a97a67c`, together with the calibration, the freeze of `V3Params` into `specdx/infer/anchored.py` and the simulation study. Between `46beddf` and `a97a67c` the only change under `specdx/` is that frozen block, so the simulation and the fit are the same code.
 - G1 ran on the code of `a97a67c` and was recorded in `e9aac9b`. Both read the cached P1 run log, whose `md5sum` must be `db1e1823c66df102648c69eb6a8789b3` before and after.
 
@@ -243,7 +243,7 @@ Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to 
 | Step | Writes | Notes |
 |---|---|---|
 | `./run_all.sh baselines-dev` | `results/p3-baselines-dev.json` | every arm, every population model, on the dev split; detached (pid and log `work/p3-baselines-dev.*`) |
-| `./run_all.sh freeze-baselines` | `experiments/p3-baselines-prereg.{json,md}` | chooses each baseline's arm and τ on dev only, records the line count and md5 of `work/baseline-llm.jsonl` and the sha256 of `experiments/p2-gate.json` and `results/p2-gate.json`, and commits both files with `results/p3-baselines-dev.json` and the gate result (`results/p2-gate.{json,md}`); a committed pre-registration is never replaced |
+| `./run_all.sh freeze-baselines` | `experiments/p3-baselines-prereg.{json,md}` | chooses each baseline's arm and τ on dev only, records the line count and md5 of `work/baseline-llm.jsonl` and the sha256 of `experiments/p2-gate.json` and `results/p2-gate.json`, and commits both files (`results/` is git-ignored, so the gate result and the dev results are bound by their recorded sha256 instead); a committed pre-registration is never replaced |
 | `./run_all.sh study` | `results/p3-study.json` | SpecDx and the frozen baselines on the test split (days); detached (`work/p3-study.*`); the result embeds the pre-registration's sha256 and the τ it used per arm |
 | `./run_all.sh report` | `results/p3-report.md` | tables A and B and the statistics, for dev, and for test once `results/p3-study.json` exists (with the τ the study embedded) |
 
