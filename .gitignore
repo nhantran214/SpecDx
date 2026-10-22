@@ -5,3 +5,9 @@ __pycache__/
 .ruff_cache/
 work/
 .claude/
+# Third-party baseline clones and paper PDFs (reference copies; not redistributed)
+baseline/*/code*/
+baseline/*/*.pdf
+# Related-work survey: downloaded PDFs and the lookup cache
+related_work/pdfs/
+related_work/tools/.cache/
