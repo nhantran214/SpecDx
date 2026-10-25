@@ -1,0 +1,137 @@
+\section{Proofs}
+\label{app:proofs}
+
+Throughout, $P_m(y)$ denotes model $m$'s reading distribution at a fixed cell. When two models are compared, $p_1>p_2$, $\Delta=p_1-p_2$ and $D=P_1-P_2$. For $A\neq\emptyset$ we write $\tilde\varepsilon=\varepsilon(\cdot\mid V\setminus A)$, which vanishes on $A$.
+
+\subsection{Proof of \cref{prop:ideal}}
+
+\begin{proof}
+(a)~Let $b$ be observed with $V(b)=\{\varphi\}$. By assumption, $b\in\Adm_\Tell(\pi)$. Since $V(b)=\{\varphi\}$, $b$ satisfies every applicable clause other than $\varphi$ and violates $\varphi$. This is exactly~\eqref{eq:def-hid}, so $\varphi$ is a hidden requirement. Whether $\varphi$ is in addition unsatisfiable on its own, a contradiction of size one, cannot be decided from $b$; refutation decides it.
+
+(b)~Two observed behaviours $b\not\equiv_\Spec b'$ both lie in $\Adm_\Tell(\pi)$, so $\Adm_\Tell(\pi)$ meets at least two equivalence classes, which is~\eqref{eq:def-amb}.
+
+(c)~Suppose every clause is invariant under $\equiv_\Spec$, which holds when clauses read only locked and blank columns, as in our subject. Then $V(b)=V(b')$ whenever $b\equiv_\Spec b'$. If $\varphi$ is a hidden requirement, a witness $b^\star\in\Adm_\Tell(\pi)$ of~\eqref{eq:def-hid} exists. A sample that covers every class contains some $b\equiv_\Spec b^\star$, so $V(b)=\{\varphi\}$, and test (a) fires. If $\Tell$ is ambiguous, a sample that covers every class contains two non-equivalent behaviours, and test (b) fires.
+\end{proof}
+
+\subsection{Proof of \cref{lem:signatures}}
+
+\begin{proof}
+If $A\neq\emptyset$, then by (A2) and (A3), $P_m(y)=p_m\one[y\in A]/|A|+(1-p_m)\tilde\varepsilon(y)$ with the same $\tilde\varepsilon$ for both models. Subtracting gives
+\[
+D(y)=(p_1-p_2)\frac{\one[y\in A]}{|A|}-(p_1-p_2)\tilde\varepsilon(y)=\Delta\Bigl(\frac{\one[y\in A]}{|A|}-\tilde\varepsilon(y)\Bigr).
+\]
+If $A=\emptyset$, then by (A5), $P_1=P_2=\varepsilon$, so $D\equiv0$.
+\end{proof}
+
+\subsection{Proof of \cref{thm:t1}}
+
+\begin{proof}
+Let $A=\{x\}$. Since $\tilde\varepsilon(x)=0$, we have $P_m(x)=p_m$, and $P_m(y)=(1-p_m)\tilde\varepsilon(y)$ for $y\neq x$. By \eqref{eq:pc}, $P_m(x)=p_m>(1-p_m)\max_y\tilde\varepsilon(y)\ge P_m(y)$ for every $y\neq x$. Hence $x$ is the unique maximiser of $P_m$, and $p_m=\max_yP_m(y)$.
+\end{proof}
+
+\subsection{Proof of \cref{thm:t2}}
+
+\begin{proof}
+By \cref{lem:signatures}, if $A\neq\emptyset$:
+\begin{itemize}[leftmargin=*]
+\item for $y\in A$, $D(y)=\Delta/|A|>0$, because $\tilde\varepsilon(y)=0$;
+\item for $y\notin A$, $D(y)=-\Delta\tilde\varepsilon(y)\le0$.
+\end{itemize}
+So $\{y:D(y)>0\}=A$. If $A=\emptyset$, then $D\equiv0$, and $\{y:D(y)>0\}=\emptyset=A$.
+
+Under (A4), $p_{1,c}-p_{2,c}=\sigma(\alpha_1-\beta_{g(c)})-\sigma(\alpha_2-\beta_{g(c)})$. Since $\sigma$ is strictly increasing, this difference has the sign of $\alpha_1-\alpha_2$ at every finite $\beta_{g(c)}$, so $\Delta_c>0$ at every cell whenever $\alpha_1>\alpha_2$.
+\end{proof}
+
+\subsection{Proof of \cref{thm:t2prime}}
+
+\begin{proof}
+Let $\varepsilon=u$ be flat over $V$, with $K=|V|$.
+
+\emph{Distributions.} If $A\neq\emptyset$, then $\tilde\varepsilon=u(\cdot\mid V\setminus A)$ equals $1/(K-|A|)$ off $A$. So $P_m(y)=p/|A|$ on $A$ and $P_m(y)=(1-p)/(K-|A|)$ off $A$. If $A=\emptyset$, then $P_m=u$, which is flat at $1/K$.
+
+\emph{Identification.} Let $A\neq\emptyset$. The two levels of $P_m$ differ exactly when
+\[
+\frac{p}{|A|}\neq\frac{1-p}{K-|A|}\iff p(K-|A|)\neq(1-p)|A|\iff p\neq\frac{|A|}{K}.
+\]
+In that case, $A$ is recovered as the set on which $P_m$ takes the value that differs from the off-$A$ floor; when $|A|<K-|A|$, this is the minority level set.
+
+Now suppose two candidate sets $A\neq A'$ produce the same $P_m$.
+\begin{itemize}[leftmargin=*]
+\item \textbf{Both non-empty, and $p\neq|A|/K$.} $P_m$ is non-flat with level set $A$, so $A'=A$, a contradiction.
+\item \textbf{$A'=\emptyset$.} $P_m$ is flat, which for non-empty $A$ requires $p/|A|=(1-p)/(K-|A|)$, that is, $p=|A|/K$.
+\end{itemize}
+Hence $A$ is identified whenever $p\neq|A|/K$.
+
+\emph{Known accuracy.} When $p$ is known, each candidate set predicts a distinct distribution under the same condition. The smallest sup-norm distance $\gamma_{\min}$ between any two such predictions is therefore positive.
+\end{proof}
+
+\subsection{Proof of \cref{thm:t3}}
+
+\begin{proof}
+At an anchored cell with $A_c=\{d_c\}$, (A2) and (A4) give $P_{m,c}(d_c)=p_{m,c}=\sigma(\alpha_m-\beta_{g(c)})$. Hence
+\[
+\logit P_{m,c}(d_c)=\alpha_m-\beta_{g(c)},\qquad
+\ell_c=(\alpha_1-\beta_{g(c)})-(\alpha_2-\beta_{g(c)})=\alpha_1-\alpha_2,
+\]
+which is the same value $v$ at every non-defective anchored cell. If more than half of the anchored cells are non-defective, more than half of the values $\ell_c$ equal $v$. The median of a multiset in which a strict majority of the values equal $v$ is $v$, whatever the remaining values are. This is a breakdown point of $\tfrac12$. The sign of $v$ gives the model order.
+
+For the levels, take the median over the non-defective anchored cells of $\logit P_{m,c}(d_c)=\alpha_m-\beta_{g(c)}$. Subtracting a constant commutes with the median, so this median equals $\alpha_m-\median\beta_{g(c)}=\alpha_m$ under the location constraint.
+\end{proof}
+
+\subsection{Proof of \cref{thm:t4}}
+
+\begin{proof}
+Let $\hat P_m$ be the empirical distribution of $n$ readings of model $m$, independent by (A1), with $\E\hat P_m(y)=P_m(y)$, the variant average. For each $y$, $\hat P_m(y)$ is a mean of $n$ independent indicators. By Hoeffding's inequality~\cite{hoeffding1963probability},
+\begin{equation}
+\label{eq:hoeffding}
+\Prob\bigl(|\hat P_m(y)-P_m(y)|\ge t\bigr)\le2\exp(-2nt^2).
+\end{equation}
+
+\emph{(a) Two-model contrast.} Take $t=\Delta/8$ in~\eqref{eq:hoeffding} and use a union bound over $y\in V$ and $m\in\{1,2\}$. With probability at least $1-4|V|\exp(-n\Delta^2/32)$, every $|\hat P_m(y)-P_m(y)|<\Delta/8$, and hence every $|\hat D(y)-D(y)|<\Delta/4$. On this event:
+\begin{itemize}[leftmargin=*]
+\item for $y\in A$, $D(y)=\Delta/|A|\ge\Delta/2$, because $|A|\le2$; so $\hat D(y)>\Delta/4$;
+\item for $y\notin A$, $D(y)\le0$, so $\hat D(y)<\Delta/4$.
+\end{itemize}
+Hence $\hat A=A$, including the case $A=\emptyset$, where $D\equiv0$.
+
+\emph{(b) Plug-in mode.} Under \eqref{eq:pc}, $P(x)-P(y)\ge p-(1-p)\max\tilde\varepsilon=\gamma$ for every $y\neq x$. If every $|\hat P(y)-P(y)|<\gamma/2$, then $\hat P(x)>\hat P(y)$ for every $y\neq x$. Taking $t=\gamma/2$ in~\eqref{eq:hoeffding} with a union bound over $V$ gives the failure probability $2|V|\exp(-n\gamma^2/2)$.
+
+\emph{(c) Minimum distance.} Let $Q_A$ denote the reading distribution that candidate set $A$ predicts. Suppose every $|\hat P(y)-P(y)|<\gamma_{\min}/2$. Then $\|\hat P-Q_{A}\|_\infty<\gamma_{\min}/2$ for the true $A$. For any other $A'$, $\|Q_A-Q_{A'}\|_\infty\ge\gamma_{\min}$, so by the triangle inequality $\|\hat P-Q_{A'}\|_\infty>\gamma_{\min}/2$. The rule therefore picks $A$. Taking $t=\gamma_{\min}/2$ with a union bound over $V$ gives the failure probability $2|V|\exp(-n\gamma_{\min}^2/2)$.
+\end{proof}
+
+\begin{remark}
+Readings pooled across Tell variants are independent but not identically distributed. Hoeffding's inequality applies to their mean, with $P_m$ taken as the variant-averaged distribution, as (A1) states. Pooling lifted cells across scenarios adds readings to $n$, but only if (A2)--(A4) hold for the pooled cell. A cell's difficulty may differ across scenarios, and the simulation measures the effect.
+\end{remark}
+
+\subsection{Proof of \cref{prop:refute}}
+
+\begin{proof}
+Clauses are evaluated on end states, and a state accepted by the database with its guardrails installed is a possible end state of some behaviour. Both refutation routes yield such a state: symbolic repair materialises it in PostgreSQL with the specification's triggers active, and a directed probe is itself a behaviour. If every clause of $M$ evaluates to $\sat$ on the witness $w$, then $w\models M$, so~\eqref{eq:def-con} fails and $M$ is satisfiable.
+\end{proof}
+
+\subsection{Proof of \cref{prop:noaction}}
+
+\begin{proof}
+Consider two hypotheses about clause $\varphi$:
+\begin{itemize}[leftmargin=*]
+\item $H_1$: $\varphi$ is a hidden requirement;
+\item $H_0$: $\varphi$ is correct, but no behaviour of the population reaches the rows it reads.
+\end{itemize}
+Under both hypotheses, the specification, the interpreters and the scenarios are the same. Every observation a behaviour-based method uses is a function of the behaviours, whatever their act indicators, readings and violation sets. By assumption, no acted behaviour touches the rows read by $\varphi$. Whether $\varphi$ is admissible therefore cannot influence any behaviour, and the joint distribution of all observations is the same under $H_0$ and $H_1$. Any test based on these observations has power equal to its size, and the only output whose error rate does not depend on the unknown hypothesis is to abstain.
+\end{proof}
+
+\subsection{The error-distribution update}
+\label{app:em}
+
+We show that~\eqref{eq:mstep-eps} is an exact EM step for the truncated error model. Fix a cell and a set $A\neq\emptyset$. Under~\eqref{eq:reading}, an error reading is generated as follows:
+\begin{enumerate}[leftmargin=*]
+\item draw $z\sim\varepsilon$ repeatedly until $z\notin A$;
+\item report the accepted draw.
+\end{enumerate}
+The number of rejected draws before acceptance is geometric. Given acceptance, the expected number of rejected draws equal to $k\in A$ is $\varepsilon(k)/(1-\varepsilon(A))$.
+
+Treat the rejected draws as missing data. The complete data then consist of $N^{\textit{err}}(A)$ accepted draws, whose expected counts are $E(k)$, and the rejected draws, whose expected counts are $R(k)$ in~\eqref{eq:mstep-eps-rej}, averaged over the posterior on $A$. Under $A=\emptyset$, every reading is an untruncated draw from $\varepsilon$ and enters $E$ with weight one. Since every complete-data draw is a plain categorical draw from $\varepsilon$, the complete-data log-likelihood in $\varepsilon$ is multinomial. With the conjugate $\Dir(\kappa u)$ prior, its posterior mean is
+\[
+\varepsilon(k)=\frac{E(k)+R(k)+\kappa u(k)}{\sum_{k'}[E(k')+R(k')]+\kappa},
+\]
+which is~\eqref{eq:mstep-eps}. This choice applies exactly $\kappa$ pseudo-counts towards $u$. The literal mode of $\Dir(\kappa u)$ would apply only $\kappa-|V|$ of them, so we use the posterior mean, which is the mode under $\Dir(\mathbf{1}+\kappa u)$.

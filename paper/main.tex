@@ -1,0 +1,93 @@
+%% SpecDx: manuscript for ACM Transactions on Software Engineering and Methodology (TOSEM).
+%% Build: latexmk -pdf main.tex
+% T5 is loaded alongside T1 so that Vietnamese words from the subject can be typeset.
+\PassOptionsToPackage{T5,T1}{fontenc}
+\documentclass[acmsmall,screen,review,anonymous]{acmart}
+
+\usepackage{mathtools} % acmart already loads amsmath, amsthm and newtxmath (which provides the AMS symbols)
+\usepackage{booktabs,multirow,makecell}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds,shapes.geometric,patterns}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots,colormaps}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{xspace}
+\usepackage[capitalise,nameinlink]{cleveref}
+
+\input{macros}
+
+\setcopyright{none}
+\acmJournal{TOSEM}
+\acmVolume{0}
+\acmNumber{0}
+\acmArticle{0}
+\acmYear{2026}
+\acmMonth{10}
+
+\begin{document}
+
+\title[When the Specification Is the Bug]{When the Specification Is the Bug: Diagnosing Executable Business Specifications with Populations of LLM Interpreters}
+
+\author{Anonymous Author(s)}
+\affiliation{%
+  \institution{Anonymous Institution}
+  \country{Anonymous Country}}
+
+\begin{abstract}
+\input{sections/00-abstract}
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+<concept>
+<concept_id>10011007.10011074.10011099.10011102.10011103</concept_id>
+<concept_desc>Software and its engineering~Software testing and debugging</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+<concept>
+<concept_id>10011007.10011074.10011075.10011076</concept_id>
+<concept_desc>Software and its engineering~Requirements analysis</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+<concept>
+<concept_id>10002950.10003648.10003662</concept_id>
+<concept_desc>Mathematics of computing~Probabilistic inference problems</concept_desc>
+<concept_significance>300</concept_significance>
+</concept>
+</ccs2012>
+\end{CCSXML}
+\ccsdesc[500]{Software and its engineering~Software testing and debugging}
+\ccsdesc[500]{Software and its engineering~Requirements analysis}
+\ccsdesc[300]{Mathematics of computing~Probabilistic inference problems}
+
+\keywords{specification defects, executable specifications, test oracles, large language models, latent class models, truth inference, minimal unsatisfiable subsets, benchmark validity}
+
+\maketitle
+
+\input{sections/01-introduction}
+\input{sections/02-motivating-example}
+\input{sections/03-problem}
+\input{sections/04-approach}
+\input{sections/05-theory}
+\input{sections/06-evaluation-design}
+\input{sections/07-results}
+\input{sections/08-discussion}
+\input{sections/09-threats}
+\input{sections/10-related-work}
+\input{sections/11-conclusion}
+
+\begin{acks}
+To be added after review.
+\end{acks}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\appendix
+\input{sections/appendix-proofs}
+
+\end{document}

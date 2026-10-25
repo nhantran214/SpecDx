@@ -155,7 +155,7 @@ Items are ranked by Δℓ_i, and those with Δℓ_i ≥ τ_B3 are reported as hi
 
 - **Specifications.** Every method runs on the same base and mutants:
   - the 20 development mutants (`dev_per_type` 5, `rng_seed` 20261006);
-  - for the study, the test split: the complement of `dev_split` in `specdx mutants`. The current operators yield 35 mutants (`results/p1-mutants.tsv`), so the test split has 15. Enlarging the mutant set toward v1 §4.3's 150–250 is outside this design (§8).
+  - for the study, the test split: the complement of `dev_split` in `specdx mutants`. The current operators yield 36 mutants (`results/p1-mutants.tsv`), so the test split has 16. Enlarging the mutant set toward v1 §4.3's 150–250 is outside this design (§8).
 - **Differential.** v1 §11 item 13's differential against the base applies to every method.
 - **Shared runs.** B2, B3, B4, TI and JEST consume **exactly the cached SpecDx runs** of the specification, including the scenarios SpecDx synthesised. Any bias this introduces favours the baselines.
 
@@ -367,7 +367,7 @@ Chosen at `freeze-baselines`, then frozen: the models, the B2 strategy, and τ_B
 | Who&When cost | k = 5 runs per (specification, clause); the cost is reported |
 | Unencodable clauses limit B5 | Listed per run; R-12 (`fn_reconcile`) is the known case |
 | The gate is NOT PASSED | The dev comparison is still produced and reported; the test study stays locked (exit 4) |
-| The S1 test split has only 15 mutants (35 in all), far below v1 §4.3's 150–250, so per-type McNemar tests have little power | Report effect sizes with bootstrap CIs alongside the p-values. Enlarging the operator sites is a separate decision for the author before `study` runs; `study` uses whatever `specdx mutants` yields, minus the dev split |
+| The S1 test split has only 16 mutants (36 in all), far below v1 §4.3's 150–250, so per-type McNemar tests have little power | Report effect sizes with bootstrap CIs alongside the p-values. Enlarging the operator sites is a separate decision for the author before `study` runs; `study` uses whatever `specdx mutants` yields, minus the dev split |
 
 ---
 

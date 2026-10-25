@@ -1,0 +1,101 @@
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Executable specifications are trusted, and wrong}
+
+A growing share of software is judged by specifications that can be executed. A business process for an LLM agent comes with natural-language procedures and policies that tell the agent what to do. It also comes with database invariants, expected outcomes and guardrails that decide whether the agent did it right~\cite{calvanese2026agentic,li2025sopbench,levy2026webagentbench}. Agent benchmarks follow the same pattern:
+\begin{itemize}[leftmargin=*]
+\item $\tau$-bench and $\tau^2$-bench give agents a domain policy and score them against an expected database state~\cite{yao2025bench,barres2026bench};
+\item SWE-bench scores patches with the project's own tests~\cite{jimenez2024swe}.
+\end{itemize}
+We call such an artefact an \emph{executable business specification}. It has two parts that must agree: a \emph{Tell} part $\Tell$, which is everything an executor is told, and a \emph{Check} part $\Chk$, which is everything a result is judged by. The systems and studies built on these specifications treat $\Chk$ as ground truth.
+
+That trust is often misplaced. Audits of the most widely used agent benchmarks keep finding checks that are wrong:
+\begin{itemize}[leftmargin=*]
+\item Cuadron et al.\ traced ceiling effects in $\tau$-bench to annotation errors and underspecified tasks, and released a verified version with targeted repairs~\cite{cuadron2025saber}.
+\item A systematic checklist study found, among other flaws, that $\tau$-bench counted some empty responses as successes~\cite{zhu2025establishing}.
+\item Many SWE-bench patches that pass the tests are still wrong~\cite{wang2026solved,yu2025utboost,yu2026swe}. The tests of popular code benchmarks miss many wrong programs~\cite{liu2023your}.
+\item Expert audits report ground truths that are incorrect, underspecified or contradictory across agent, coding and data-engineering benchmarks~\cite{zanoli2026elt,bhat2026benchmarking,wang2026automated,cao2026policy}.
+\end{itemize}
+The same problem appears outside benchmarks. Label errors destabilise machine-learning test sets~\cite{northcutt2021pervasive,gema2025done}, and even formally verified systems fail because their specifications are wrong~\cite{fonseca2017empirical}. When the specification is the bug, an agent that does the right thing is scored as wrong, and conclusions about which system is better can flip~\cite{northcutt2021pervasive,cao2026policy}.
+
+\subsection{Why the defects are hard to find}
+
+A specification defect is a disagreement between $\Tell$ and $\Chk$, or inside $\Chk$. We distinguish four kinds:
+\begin{itemize}[leftmargin=*]
+\item a \emph{contradiction}: no behaviour can satisfy the checks;
+\item a \emph{hidden requirement}: the checks demand something the text does not say;
+\item an \emph{ambiguity}: the text allows more than one reading;
+\item a \emph{weak check}: a behaviour the text forbids still passes every check.
+\end{itemize}
+Current approaches see only part of this picture.
+
+\paragraph{Static review reads, but never runs.} Work on requirements quality detects ambiguity, incompleteness and inconsistency in natural-language text~\cite{berry2003contract,chantree2006identifying,femmer2017rapid,gervasi2005reasoning}. Recent work does so with LLMs~\cite{fantechi2023inconsistency,gartner2024automated,hall2026neurosymbolic}. LLM auditors now review benchmark tasks, graders and reference solutions automatically~\cite{tu2026who,wang2026automated,suh2026agentsuite,mohl2026automated}. These tools read the artefacts. They do not observe what a reasonable executor actually does when it follows the text, so they cannot see where executions and checks part ways. They also rely on a single auditor's judgement.
+
+\paragraph{Population statistics see disagreement, but not its cause.} A second line of work learns from the answers of many models.
+\begin{itemize}[leftmargin=*]
+\item Item response theory flags benchmark items whose difficulty profile looks wrong~\cite{rodriguez2021evaluation,land2026auditing}.
+\item Confident learning and LLM ensembles flag likely label errors~\cite{northcutt2021confident,nahum2025llms,klie2023annotation}.
+\item Disagreement and semantic entropy flag uncertain inputs~\cite{kuhn2023semantic,farquhar2024detecting,zhang2025stress}.
+\end{itemize}
+These methods assume one correct answer per item, so they cannot express an item that has two correct answers or none. They cannot say which kind of defect they found or where it sits in the text. They also struggle with a well-documented fact: errors of different LLMs are correlated~\cite{kim2025correlated,goel2025great}, and models faced with an underspecified prompt tend to collapse onto a single reading instead of exposing the alternatives~\cite{richter2026underspecification}. Raw disagreement is therefore a weak signal.
+
+\paragraph{Symbolic analysis sees the checks, but not the text.} Minimal unsatisfiable subsets and unsatisfiable cores find conflicts inside a set of constraints~\cite{liffiton2008algorithms,torlak2008finding,shlyakhter2003debugging}. Vacuity detection and oracle assessment find checks that are too loose~\cite{kupferman2003vacuity,jahangirova2016test,schuler2011assessing}. All of these work on $\Chk$ alone, so they cannot tell that a check demands something $\Tell$ never says.
+
+The closest existing work combines execution with disagreement:
+\begin{itemize}[leftmargin=*]
+\item ClarifyGPT and SpecFix call a requirement ambiguous when programs sampled from one model disagree~\cite{mu2024clarifygpt,jia2025automated}.
+\item JEST runs several JavaScript engines and blames the specification when most of them fail the same test~\cite{park2021jest}.
+\end{itemize}
+These methods either trust the checks, use a single model with no notion of its competence, or assume near-deterministic executors. None of them types its findings or backs them with logical witnesses.
+
+\subsection{Our approach}
+
+Our starting point is simple. An LLM agent that executes a specification is a fallible but cheap \emph{reasonable reader}. One run tells us little, because the agent may simply be wrong. Many runs from several model families, each reading the same text under paraphrase and sampling noise, tell us how reasonable readers interpret it. The evidence then sorts itself as follows:
+\begin{itemize}[leftmargin=*]
+\item If competent readers agree with each other but not with $\Chk$, the check is suspect.
+\item If they split into stable camps, the text is ambiguous.
+\item If a run that the population considers wrong still passes every check, a check is weak.
+\item If no run, however competent, satisfies a set of clauses together, the clauses may contradict each other.
+\end{itemize}
+
+Turning this intuition into a method requires answers to three questions:
+\begin{itemize}[leftmargin=*]
+\item[\textbf{Q1.}] How can we separate interpreter error from specification defect, when models differ in competence and the ``truth'' of a check may be a set of values or no value at all?
+\item[\textbf{Q2.}] How can we turn noisy evidence into findings that are typed, located and backed by witnesses?
+\item[\textbf{Q3.}] How should a limited budget of runs be spent?
+\end{itemize}
+
+We answer them with \specdx.
+\begin{itemize}[leftmargin=*]
+\item \textbf{Q1: the anchored cell model.} For Q1, \specdx reads every run cell by cell, where a cell is one checked value or one clause. It fits an \emph{anchored cell model}, a latent-class model in the tradition of Dawid and Skene~\cite{dawid1979maximum} and GLAD~\cite{whitehill2009whose}, with three changes:
+  \begin{itemize}
+  \item the specification's declared value is an anchor, so the specification is one more fallible rater;
+  \item the latent truth of a cell is a \emph{set} of admissible readings, which may hold one value, two values or none;
+  \item an interpreter's accuracy depends on its ability and on the cell's difficulty, and its errors never fall on an admissible value.
+  \end{itemize}
+  We prove that under these assumptions each defect form leaves a distinct \emph{accuracy-gradient signature}, and that the forms are identifiable with finite-sample guarantees.
+\item \textbf{Q2: combining statistics with logic.} Each run's set of violated clauses is a sampled correction set, so minimal hitting sets of these sets give candidate minimal unsatisfiable subsets~\cite{reiter1987theory,liffiton2008algorithms}. Every candidate is then put to a refutation step that searches for a witness state. Ambiguities are localised to sentences of $\Tell$ by delta debugging~\cite{zeller2002simplifying}.
+\item \textbf{Q3: active scenario choice.} \specdx chooses the next scenario by Thompson sampling~\cite{russo2018tutorial}, using boundary values taken from the text. It runs a cheap pilot of one model per family before committing the full population.
+\end{itemize}
+
+We evaluate \specdx on a Vietnamese procure-to-pay specification from the TonomyX project. The specification has nine gated tools, a 26-table database and three requirement documents. We seed 36 defects with nine mutation operators and also study defects recorded in the project's history. The study is pre-registered: every threshold is chosen by simulation or on base data before any seeded defect is seen. \specdx is compared with seven published baselines and two secondary arms, all run on the same specifications, models, cached runs and scoring code. [Summary of the results to be added once the experiments are complete.]
+
+\subsection{Contributions}
+
+\begin{enumerate}[leftmargin=*,label=\textbf{C\arabic*.}]
+\item \textbf{A formal model of executable business specifications.} We define the specification as $\Spec=\langle\Tell,\Chk,\Scen\rangle$, a four-type defect taxonomy defined purely by satisfaction, and a cell-level view of behaviours that lifts checks across scenarios (\cref{sec:problem}).
+\item \textbf{The anchored cell model.} This is a latent-class model with set-valued truth, anchors, item difficulty and a restricted error distribution, fitted by penalised EM (\cref{sec:approach}).
+\item \textbf{Identifiability results.} We give accuracy-gradient signatures, identification of every defect form from two models with different accuracies or from one model with a known error pool, identification of model contrasts from anchors with a breakdown point of one half, and Hoeffding-type finite-sample bounds (\cref{sec:theory}).
+\item \textbf{Typed, witnessed diagnosis.} We combine the cell posteriors with hitting sets over sampled correction sets, sound refutation, delta-debugging localisation in the text, and active scenario synthesis with sequential escalation (\cref{sec:approach}).
+\item \textbf{An evaluation framework and study.} We provide specification mutation operators with kill witnesses, observability-aware scoring, a pre-registered gate, and a fair comparison protocol against seven baselines with frozen, development-only choices. The empirical study and an open artefact complete the contribution (\cref{sec:eval-design,sec:results}).
+\end{enumerate}
+
+\paragraph{Organisation.}
+\begin{itemize}[leftmargin=*]
+\item \Cref{sec:motivating} walks through a real defect.
+\item \Cref{sec:problem} formalises the problem, \cref{sec:approach} presents \specdx and \cref{sec:theory} its theory.
+\item \Cref{sec:eval-design,sec:results} describe the evaluation and its results.
+\item \Cref{sec:discussion,sec:threats} discuss implications and threats to validity.
+\item \Cref{sec:related} relates \specdx to prior work and \cref{sec:conclusion} concludes.
+\end{itemize}

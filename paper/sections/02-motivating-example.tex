@@ -1,0 +1,55 @@
+\section{Motivating Example}
+\label{sec:motivating}
+
+We illustrate the problem with two defects recorded in the history of TonomyX, an open platform in which ``digital employees'' (LLM agents with scoped tools) carry out a Vietnamese procure-to-pay process under human approval gates. Its reference case, CASE-0031, follows one purchase from the sales order to payment:
+\begin{itemize}[leftmargin=*]
+\item a sales order (\texttt{SO-0031}) is created;
+\item a purchase order (\texttt{PO-0015}) for 15 units is issued;
+\item a goods receipt records 12 units;
+\item a three-way match reconciles the order, the receipt and the invoice;
+\item a payment is made.
+\end{itemize}
+
+The specification has the two parts introduced above:
+\begin{itemize}[leftmargin=*]
+\item \textbf{Tell, $\Tell$.} About 160 pages of requirements: a business-analysis document, a demo description and a software architecture document. To these come three knowledge-base articles and a list of business principles.
+\item \textbf{Check, $\Chk$.} Forty-two database invariants, scenario expectations, a golden end state over 26 tables, guardrail triggers and a scope table that grants each digital employee its tools.
+\end{itemize}
+Both parts were written carefully by the same team, and the checks pass on the reference run. Yet both of the following defects went unnoticed for some time.
+
+\paragraph{R-SO: a status the text never asks for.}
+A human approver signs approval \texttt{APR-0102}. In the golden end state, the purchase order then moves to \emph{\vi{Đã duyệt}} (``approved''), while the sales order \texttt{SO-0031} stays at \emph{\vi{Chờ duyệt}} (``awaiting approval''). Nothing in $\Tell$ says that the sales order should stay pending once its approval is granted. An agent that carries out the approval and moves both documents forward is therefore doing what the text allows, but it violates the golden clause on \texttt{SO-0031} and is scored as failing. In our terms, $\Chk$ is stricter than $\Tell$ at one clause: a \emph{hidden requirement}.
+
+\paragraph{R-12: a conflict that only shows off the beaten path.}
+The database schema allows a purchase order to have several goods receipts, and the requirements describe partial deliveries. The reconciliation function \texttt{fn\_reconcile}, however, raises a cardinality error whenever a purchase order has more than one receipt. One invariant demands that the stored reconciliation result equal the value of \texttt{fn\_reconcile}. In any scenario with two receipts, no end state can satisfy that invariant together with the schema and the expectations: the clauses form a \emph{contradiction}. None of the three reference scenarios has two receipts, so the conflict stays invisible until someone tries one.
+
+\paragraph{What existing approaches see.}
+\Cref{tab:motivating} summarises what each family of methods can conclude on these two defects. The point is not that existing methods are weak, but that each one sees a different slice of the evidence.
+\begin{itemize}[leftmargin=*]
+\item \textbf{A static LLM reviewer} reads $\Tell$ and $\Chk$ side by side. Finding R-SO requires it to notice the absence of a rule across 160 pages. Finding R-12 requires it to reason about the behaviour of a SQL function in a scenario that nobody wrote down.
+\item \textbf{A single agent run} that violates the clause on \texttt{SO-0031} looks like any other agent failure. Failure-attribution methods~\cite{zhang2025which} would most likely blame the agent.
+\item \textbf{Population statistics} would see that many runs violate the clause. They could not tell a hidden requirement from a clause that is simply hard to satisfy, or from an ambiguity in which the population splits.
+\item \textbf{A MUS solver over $\Chk$ alone} cannot find R-SO at all, because the golden clause is consistent with the other checks. It can find R-12 only if \texttt{fn\_reconcile} is encoded, and only if it explores a scenario with two receipts.
+\end{itemize}
+
+\begin{table}[t]
+\caption{What each family of methods can conclude on the two motivating defects. The entries are qualitative, not measured: they follow from what each method observes.}
+\label{tab:motivating}
+\small
+\begin{tabular}{@{}p{3.2cm}p{4.9cm}p{4.9cm}@{}}
+\toprule
+Method family & R-SO (hidden requirement) & R-12 (contradiction) \\
+\midrule
+Static LLM review of $\Tell$ and $\Chk$ & Must notice that a rule is \emph{absent} from a long text & Must simulate a SQL function in an unwritten scenario \\
+Failure attribution on one run & Likely blames the agent & Sees an error, not its cause \\
+Population statistics & Flags the clause, but cannot type it & Flags several clauses, without a conflict set \\
+MUS over $\Chk$ alone & Cannot see it (the checks are consistent) & Finds it only if the function is encoded and the scenario is explored \\
+\specdx (this paper) & Competent readers agree with each other, not with the anchor; refutation finds a state satisfying all other clauses $\Rightarrow$ \Dhid & Synthesised scenario with two receipts; no run or repair satisfies the conflict set $\Rightarrow$ \Dcon \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{What \specdx does.}
+\specdx runs the process many times with a population of local LLM interpreters, each reading the same $\Tell$ under paraphrase and seeds. On R-SO, it looks at one \emph{cell}: the status of \texttt{SO-0031} after the approval step. The specification declares \emph{\vi{Chờ duyệt}}, and this is the cell's anchor. If interpreters that are accurate elsewhere, on cells whose anchors they reproduce, read the cell as \emph{\vi{Đã duyệt}}, and if this reading becomes \emph{more} frequent as interpreter accuracy rises, then the anchor is the odd one out. The anchored cell model (\cref{sec:approach-model}) turns this pattern into a posterior probability that the anchor lies outside the set of readings $\Tell$ admits. A refutation step then confirms the type: it searches for an end state that satisfies every other clause, and finding one shows that the defect is a hidden requirement, not a contradiction.
+
+On R-12, \specdx extracts the literals of $\Tell$ that bound its scenario parameters and adds boundary scenarios. It then lets Thompson sampling pick scenarios whose outcomes are uncertain, among them one with two receipts. Every run in that scenario violates some clause, and the minimal hitting sets of the violation sets point to the reconciliation clause. Because no repair of the state satisfies it, the finding is reported as a contradiction, with the failed refutation attempts as evidence.

@@ -1,0 +1,54 @@
+\section{Discussion}
+\label{sec:discussion}
+
+% NOTE TO AUTHORS: the paragraphs below discuss the design. Sentences that depend on the
+% final numbers are marked [..] and should be revised once the results are in.
+
+\subsection{What the population buys}
+
+A natural question is why \specdx runs many weak readers instead of asking one strong reviewer. The theory gives a precise answer: a single reader can only separate a defect from an error through a plurality margin (\cref{thm:t1}). Such a margin does not exist exactly where specifications are hardest, at cells that most readers get wrong for reasons of their own. A population buys two things that a single reviewer cannot provide.
+\begin{itemize}[leftmargin=*]
+\item \textbf{An accuracy gradient.} With it, the direction in which each reading moves as competence grows becomes evidence in its own right (\cref{lem:signatures}). The second reading of an ambiguous cell rises with competence, while a concentrated error falls, even if the two have the same frequency.
+\item \textbf{Anchored contrasts.} These rank the readers without any human label, provided most anchors are right (\cref{thm:t3}).
+\end{itemize}
+The design has a consequence: the readers do not need to be strong. They need to be \emph{different} in competence, to act often enough to be observed, and to agree with the anchor on most cells. This is why the capability screen measures acting, not agreement with $\Chk$, and why mid-sized local models suffice. [Revise with the RQ5 result for two models against four.]
+
+\subsection{Implications for specification authors}
+
+\specdx reports each defect with three pieces of evidence that an author can check directly:
+\begin{itemize}[leftmargin=*]
+\item a location in the artefact the author edits: a clause, a field, or a set of sentences;
+\item a witness: a state that satisfies the remaining clauses, or a run that passes every check while the population disagrees with it;
+\item a posterior that says how sure the method is.
+\end{itemize}
+Each type points to a different repair. A hidden requirement asks the author either to state the rule in $\Tell$ or to relax the clause. An ambiguity asks for the sentences returned by ddmin to be sharpened. A weak check asks for a clause on the reported field. A contradiction asks the author to decide which of the conflicting clauses is wrong. We expect the unstated subtype to be common in golden states: rows that the reference run happened to write, but that no sentence of $\Tell$ asks for. [Revise with RQ3 and the base-specification findings.]
+
+\subsection{Implications for benchmark builders}
+
+Benchmarks for LLM agents are executable specifications in our sense. Several recent audits repaired them by hand~\cite{cuadron2025saber,zhu2025establishing,cao2026policy}. \specdx offers an automatic first pass that needs no frontier model and no labels, and that types its findings, so a maintainer can triage them. Two lessons from the design apply even without \specdx.
+\begin{itemize}[leftmargin=*]
+\item \textbf{A failing run is not evidence against the agent until competent agents also fail at the same place.} The anchored contrasts of \cref{thm:t3} are a cheap way to check this.
+\item \textbf{A benchmark item that no agent reaches cannot be validated by running agents} (\cref{prop:noaction}). Audits should report such items separately instead of counting them as correct.
+\end{itemize}
+
+\subsection{Limits of the approach}
+
+\paragraph{Defects outside behaviour.} \specdx finds only what some behaviour can expose. Documentation-only inconsistencies, such as a README that miscounts the invariants, are invisible to it by construction. Static review remains the right tool for them.
+
+\paragraph{Regime dependence.} The anchored cell model beats simple aggregators only in some regimes. Majority vote is as good when accuracy is moderate and the population is small, and flagging every deviation from the anchor is as good on hidden requirements, though it cannot see ambiguity. We report the whole regime map (\cref{fig:regime}) instead of a single operating point, so that a user can tell from the screen statistics of their own population whether the extra machinery is worth it.
+
+\paragraph{Weak checks remain hard.} A weak check is witnessed only by a behaviour that $\Tell$ forbids. \specdx therefore depends on interpreters making the \emph{right} mistakes at the unguarded field, while still being competent elsewhere. In simulation, this was the type whose performance depended most on generator assumptions that the base data do not determine. We therefore treated simulated weak-check $F_1$ as information only. [Revise with the RQ2 result.]
+
+\paragraph{Contradictions are only refuted, never proven.} A reported contradiction means that neither the population nor the symbolic repair found a satisfying state within budget. The report says how hard the search tried. A complete check would need an encoding of $\Chk$ that a solver can decide. For procedural SQL such as \texttt{fn\_reconcile}, building one is a project in itself.
+
+\paragraph{Cost.} A full diagnosis costs at most 380 runs of a multi-step process. On a single 48\,GB GPU this is [hours/days, to be measured]. The cache makes re-diagnosis after an edit cheap, because only runs whose inputs changed are repeated. The pilot-then-escalate policy keeps uninformative scenarios cheap. [Revise with RQ4.]
+
+\subsection{Beyond procure-to-pay}
+
+Nothing in the model is specific to procurement or to Vietnamese. The ingredients are only these:
+\begin{itemize}[leftmargin=*]
+\item a text that executors read;
+\item checks that can be evaluated on an end state;
+\item a way to vary scenarios.
+\end{itemize}
+$\tau^2$-bench~\cite{barres2026bench} fits this mould: its policy document is $\Tell$, and its expected actions and database fields are $\Chk$. The repairs of its verified release give real defects with types. We have designed but not yet built this second subject. Its tasks are fixed, so scenario synthesis does not apply, and its user simulator adds a source of variation that the model would have to absorb. Business-process settings with executable process models and conformance checks~\cite{fahland2015model,calvanese2026agentic} are another natural target.

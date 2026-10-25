@@ -1,0 +1,132 @@
+\section{Related Work}
+\label{sec:related}
+
+\specdx draws on several lines of work that rarely meet. \Cref{tab:positioning} summarises how it relates to the closest of them.
+
+\begin{table}[t]
+\caption{Positioning. \checkmark: the property holds; $\circ$: partially or in some variants; blank: it does not.}
+\label{tab:positioning}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}l ccccccc@{}}
+\toprule
+Approach & \makecell{Executes\\$\Tell$} & \makecell{Uses $\Chk$\\as evidence} & \makecell{Several\\models} & \makecell{Rater\\competence} & \makecell{Set-valued\\truth} & \makecell{Typed\\findings} & \makecell{Logical\\witness} \\
+\midrule
+LLM requirements review~\cite{fantechi2023inconsistency,gartner2024automated,hall2026neurosymbolic} & & & & & & $\circ$ & $\circ$ \\
+LLM benchmark auditors~\cite{tu2026who,wang2026automated,suh2026agentsuite} & & \checkmark & & & & \checkmark & \\
+Ambiguity by sampling~\cite{mu2024clarifygpt,jia2025automated} & \checkmark & & & & & & \\
+$N{+}1$-version testing~\cite{park2021jest} & \checkmark & \checkmark & \checkmark & & & $\circ$ & \\
+IRT audits~\cite{rodriguez2021evaluation,land2026auditing} & \checkmark & \checkmark & \checkmark & \checkmark & & & \\
+Truth inference~\cite{dawid1979maximum,whitehill2009whose} & & & \checkmark & \checkmark & $\circ$ & & \\
+Semantic entropy~\cite{kuhn2023semantic,farquhar2024detecting} & \checkmark & & $\circ$ & & & & \\
+MUS / core extraction~\cite{liffiton2008algorithms,torlak2008finding} & & \checkmark & & & & $\circ$ & \checkmark \\
+Failure attribution~\cite{zhang2025which,ge2026spectrum} & \checkmark & \checkmark & & & & $\circ$ & \\
+\midrule
+\specdx & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Validity of benchmarks and executable specifications}
+
+A growing body of work shows that the checks of popular benchmarks are often wrong.
+\begin{itemize}[leftmargin=*]
+\item \textbf{Code benchmarks.} Test-based evaluation of code misses many wrong programs~\cite{liu2023your}. In SWE-bench, a substantial fraction of patches that pass the tests are incorrect or exploit weak tests~\cite{wang2026solved,yu2025utboost,yu2026swe}.
+\item \textbf{Agent benchmarks.} Annotation errors and underspecified tasks have been reported in $\tau$-bench~\cite{cuadron2025saber} and in many agentic benchmarks under a common checklist~\cite{zhu2025establishing}. Others have been found in tool-calling evaluations~\cite{bhat2026benchmarking} and data-engineering benchmarks~\cite{zanoli2026elt}. Cao et al.\ show that policy ambiguity often masquerades as agent error~\cite{cao2026policy}.
+\item \textbf{Label errors.} Even well-established test sets contain them, and they can change model rankings~\cite{northcutt2021pervasive,gema2025done}.
+\end{itemize}
+Most of these audits are manual, or they rely on one strong model to review each task.
+
+Automated auditors have appeared recently.
+\begin{itemize}[leftmargin=*]
+\item \textbf{Reviewers of task definitions.} BenchGuard reviews instructions, tests and solutions with an LLM protocol~\cite{tu2026who}. Other systems audit tasks for hidden dependencies and grading gaps~\cite{wang2026automated} or check benchmark components~\cite{suh2026agentsuite}.
+\item \textbf{Reviewers of transcripts and attack surfaces.} Some auditors analyse agent transcripts for flaws~\cite{mohl2026automated} probe benchmarks for exploitable shortcuts~\cite{wang2026androids}, or measure how readily agents exploit the tests~\cite{zhong2026impossiblebench}.
+\end{itemize}
+\specdx shares their goal but differs in method. It does not ask a model whether a check is right. It infers what $\Tell$ admits from how a calibrated population \emph{executes} it, and it backs its findings with logical witnesses. We compare against BenchGuard directly (B1).
+
+\subsection{Requirements quality and ambiguity}
+
+Requirements engineering has long studied ambiguity, incompleteness and inconsistency in natural-language requirements. This includes linguistic sources of ambiguity~\cite{berry2003contract}, nocuous ambiguity~\cite{chantree2006identifying}, logical reasoning about inconsistencies~\cite{gervasi2005reasoning} and requirements smells~\cite{femmer2017rapid}. LLMs have since been used for the same tasks:
+\begin{itemize}[leftmargin=*]
+\item to detect inconsistent requirements~\cite{fantechi2023inconsistency};
+\item to find contradictions through formal logic~\cite{gartner2024automated};
+\item to audit requirements neurosymbolically~\cite{hall2026neurosymbolic}.
+\end{itemize}
+Related work translates natural language into temporal logic~\cite{cosler2023nl2spec} and checks the realisability of formalised requirements~\cite{katis2022capture}. Protocol specifications have received similar attention, through disambiguation~\cite{yen2021semi}, inconsistency detection~\cite{rahman2024cellularlint} and the mining of logical ambiguities from errata~\cite{pawagi2025rfcscope}.
+
+In business processes, prior work has detected inconsistencies between textual descriptions and process models~\cite{aa2017comparing}. It has also handled behavioural ambiguity in process texts~\cite{aa2016dealing} and analysed decision tables~\cite{calvanese2016semantics}. Inconsistency in declarative process models has been resolved~\cite{ciccio2017resolving} and measured~\cite{corea2022measuring}, and ambiguity has been detected through executable process modelling~\cite{matei2026ambiguity}.
+
+These methods analyse the text or a single formal model of it. \specdx instead uses execution by many interpreters, with $\Chk$ as the arbiter. The closest execution-based work samples programs from an LLM and flags a requirement as ambiguous when they disagree~\cite{mu2024clarifygpt,jia2025automated}. That work uses one model with no notion of its competence and treats every disagreement as ambiguity, whereas \specdx separates disagreement caused by interpreter error from disagreement caused by the text.
+
+\subsection{Truth inference and latent class models}
+
+Inferring a true label from fallible raters is a classical problem. Dawid and Skene~\cite{dawid1979maximum} introduced the latent class model fitted by EM. GLAD added item difficulty~\cite{whitehill2009whose}, and later work added Bayesian treatments, spammer models and provably optimal estimators~\cite{hovy2013learning,zhang2016spectral,bachrach2012grade}; Zheng et al.~\cite{zheng2017truth} compare these methods. Cultural consensus theory estimates an answer key and rater competence together~\cite{batchelder1988test}.
+
+The identifiability of such models rests on conditionally independent views~\cite{kruskal1977three,allman2009identifiability,hui1980estimating}. It can be achieved with a few weak raters~\cite{platanios2017estimating,fu2020fast}, as in weak supervision~\cite{ratner2016data,ratner2017snorkel}.
+
+\paragraph{Set-valued truth.} Several works allow more than one true value, or none:
+\begin{itemize}[leftmargin=*]
+\item multi-truth discovery~\cite{zhao2012bayesian,wang2015integrated,lin2018domain};
+\item modelling whether a truth exists at all~\cite{zhi2015modeling};
+\item recovering the top two answers in crowdsourcing~\cite{jeong2023recovering}.
+\end{itemize}
+
+\paragraph{Correlated sources.} Data fusion has long dealt with sources that copy each other or err together~\cite{dong2009integrating,pochampally2014fusing,li2016survey}. Recent studies document that LLM errors are correlated~\cite{kim2025correlated,goel2025great}, echoing the coincident-failure literature on multi-version software~\cite{eckhardt1985theoretical,knight1986experimental,littlewood1989conceptual}.
+
+\paragraph{LLMs as raters.} Several studies validate LLMs used as judges or annotators~\cite{zhang2025quantifying,guerdan2025validating}.
+
+\paragraph{What \specdx adds.} The anchored cell model combines set-valued truth with a competence and difficulty model, and adds two things that these lines of work lack:
+\begin{itemize}[leftmargin=*]
+\item an \emph{anchor}: one rater, the specification, whose declared value enters the prior;
+\item an error distribution truncated to values \emph{outside} the truth.
+\end{itemize}
+These two choices make the accuracy-gradient signatures of \cref{lem:signatures} available. They identify ambiguity and silence where a free error distribution cannot. We compare against GLAD and Dawid--Skene directly (TI).
+
+\subsection{Item response theory and label errors}
+
+Item response theory has been used to build evaluation scales~\cite{lalor2016building}, to weigh benchmark items~\cite{rodriguez2021evaluation} and, at scale, through dedicated libraries~\cite{lalor2023irt}. Land and Bikel~\cite{land2026auditing} use it to audit LLM benchmarks: items whose responses fit a model with a forced ceiling are flagged as likely mislabelled. Confident learning~\cite{northcutt2021confident} and LLM-based detectors~\cite{nahum2025llms,klie2023annotation} flag label errors from model predictions.
+
+These methods assume one correct answer per item and cannot express ambiguity or silence. They cannot type their findings either, and they do not account for items that the models never reach. \specdx uses a Rasch model only for the act indicator (stage 1). We compare against the IRT audit (B3) and a 2PL variant.
+
+\subsection{Disagreement and differential testing}
+
+\paragraph{Disagreement as uncertainty.} Semantic entropy measures uncertainty over the meanings of sampled answers~\cite{kuhn2023semantic,farquhar2024detecting}, and self-consistency checks detect hallucination~\cite{manakul2023selfcheckgpt}. Disagreement between models has been used to stress-test model specifications~\cite{zhang2025stress}, and an agent's disagreement with itself serves as an uncertainty signal~\cite{mehta2026agents}.
+
+\paragraph{Differential testing.} JEST~\cite{park2021jest} runs several JavaScript engines and blames the specification when most of them fail the same test. It is the closest precedent for using a population of executors to test a specification.
+
+\paragraph{What \specdx adds.} \specdx shares the idea that disagreement carries information, but it models \emph{why} executors disagree. It also uses the anchor to tell a specification defect from a shared misreading. We compare against semantic entropy (B4) and the JEST rule directly.
+
+\subsection{Test oracles and specification mutation}
+
+The oracle problem~\cite{barr2015oracle,staats2011programs} concerns whether checks are correct and strong enough. Oracle assessment and improvement detect checks that are too weak, through mutation analysis~\cite{jahangirova2016test,terragni2020evolutionary}, checked coverage~\cite{schuler2011assessing} and brittle assertions~\cite{huo2014improving}. Mutation operators for specifications have a long history~\cite{black2000mutation,jia2011analysis}. They have been applied to database integrity constraints~\cite{mcminn2015effectiveness} and, recently, to Dafny specifications~\cite{amaral2026mutdafny}.
+
+Formal-methods work has studied specification correctness in several ways:
+\begin{itemize}[leftmargin=*]
+\item vacuity detection~\cite{kupferman2003vacuity};
+\item unsatisfiable cores of declarative specifications~\cite{torlak2008finding,shlyakhter2003debugging};
+\item fault localisation in Alloy models~\cite{zheng2021flack};
+\item the reliability of formal specifications~\cite{goldweber2024ironspec,cunha2026validating};
+\item LLM-generated postconditions~\cite{endres2024large,lahiri2024evaluating}.
+\end{itemize}
+Fonseca et al.\ found that specification errors cause real bugs in verified systems~\cite{fonseca2017empirical}.
+
+These works treat the specification as a formal object. \specdx targets specifications whose Tell part is natural language and whose meaning can only be sampled. Our evaluation adopts specification mutation with kill witnesses.
+
+\subsection{Model-based diagnosis and constraint conflicts}
+
+Reiter's theory of diagnosis~\cite{reiter1987theory} and de Kleer and Williams' work on multiple faults~\cite{kleer1987diagnosing} established the duality between conflicts and diagnoses. Liffiton and Sakallah turned this duality into practical MUS enumeration~\cite{liffiton2008algorithms,liffiton2016fast}, and it has been further studied in conflict-directed diagnosis~\cite{stern2012exploring}. Diagnosis has been extended to multiple observations~\cite{ignatiev2019model} and to uncertain observations~\cite{cazes2020model}. QuickXplain~\cite{junker2004quickxplain} and consistency-based diagnosis of knowledge bases~\cite{felfernig2004consistency} find preferred conflicts. Spectrum-based methods localise faults from passing and failing runs~\cite{abreu2009spectrum}.
+
+All of these assume that the observations are correct. \specdx treats each LLM run as a \emph{noisy} sample of a correction set, weights it by the run's estimated faithfulness, and uses soft hitting sets, followed by sound refutation. Delta debugging~\cite{zeller2002simplifying} and its probabilistic variant~\cite{wang2021probabilistic} localise failure-inducing inputs. \specdx applies ddmin to the sentences of $\Tell$, with a statistical oracle.
+
+\subsection{Active testing and experimental design}
+
+Choosing which test to run next is an experimental-design problem~\cite{chaloner1995bayesian,rainforth2024modern}. Thompson sampling~\cite{thompson1933likelihood,russo2018tutorial} and information-directed sampling~\cite{russo2018learning,russo2020simple} offer practical policies, and active testing applies such ideas to model evaluation~\cite{kossen2021active}. Domain testing chooses inputs at the boundaries of conditions~\cite{white1980domain}, and LLM-driven generators synthesise agent benchmarks and scenarios~\cite{levi2025intellagent,keren2026matter,anand2026mantra}.
+
+\specdx combines boundary scenarios taken from the literals of $\Tell$ with Thompson sampling over scenario cells. Its reward is the realised change in its own defect posteriors.
+
+\subsection{Failure attribution for LLM agents}
+
+Failure-attribution methods ask which agent and step caused a failed multi-agent run~\cite{zhang2025which,cemri2025multi}. They do so with LLM judges~\cite{zhuge2025agent}, spectrum analysis~\cite{ge2026spectrum} or verifier diagnostics~\cite{hu2026verifying}. They take the checks as given and blame an agent.
+
+\specdx asks the complementary question: when should the blame go to the specification? We adapt Who\&When~\cite{zhang2025which} with an added ``specification defect'' verdict as baseline B2.

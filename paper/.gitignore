@@ -1,0 +1,12 @@
+# LaTeX build artefacts (rebuild with: latexmk -pdf main.tex)
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.cut
+main.pdf

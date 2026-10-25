@@ -1,0 +1,38 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+Executable specifications are increasingly used as ground truth for agents and the benchmarks that evaluate them, yet their checks can be wrong. This paper argued that the evidence needed to find such defects is spread across three places:
+\begin{itemize}[leftmargin=*]
+\item the text that executors read;
+\item the checks that judge them;
+\item the behaviour of the executors themselves.
+\end{itemize}
+No single source is enough.
+
+\specdx brings the three together. It treats each run of a local LLM interpreter as a sample of a reasonable reading of the text, and the specification as one more fallible rater. Its anchored cell model gives every cell a latent set of admissible readings and every interpreter an accuracy that depends on its ability and on the cell's difficulty. We showed that, under stated assumptions, each defect form leaves a distinct accuracy-gradient signature. The forms are therefore identifiable from two interpreters of different ability, or from one interpreter with a known error pool, and the anchors identify the interpreters' abilities with a breakdown point of one half. On top of the statistical model, \specdx combines several components:
+\begin{itemize}[leftmargin=*]
+\item minimal-hitting-set duality over sampled correction sets;
+\item sound refutation by witness states;
+\item delta-debugging localisation in the text;
+\item scenario selection by Thompson sampling.
+\end{itemize}
+Together they report four typed defects, each backed by witnesses.
+
+[Summary of the empirical findings for RQ1--RQ5, to be added.]
+
+\paragraph{Future work.} Four directions follow.
+\begin{itemize}[leftmargin=*]
+\item \textbf{Generality.} Build the $\tau^2$-bench subject, with the repairs of its verified release as real defects, to test the method in a second language and domain.
+\item \textbf{Statistical power.} Grow the mutation sites towards a larger test split.
+\item \textbf{Relaxed assumptions.} Model-specific error pools would relax (A3), and family random effects would capture correlated errors within a model family.
+\item \textbf{Repair.} Use the typed, witnessed findings to propose repairs of $\Tell$ or $\Chk$ automatically.
+\end{itemize}
+
+\section*{Data Availability}
+The implementation of \specdx and the baselines, the run caches, the mutant packs, the simulation code and the pre-registration documents will be released in a public repository upon acceptance. During review, an anonymised artefact is available to the reviewers. The repository includes:
+\begin{itemize}[leftmargin=*]
+\item the scripts that regenerate every table and figure from the raw run logs;
+\item the frozen Tell variants;
+\item the pinned model digests.
+\end{itemize}
+The subject specification is taken byte for byte from the open TonomyX repository at a pinned commit.
