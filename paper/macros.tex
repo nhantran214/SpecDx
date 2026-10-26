@@ -50,3 +50,6 @@
 
 %% Vietnamese text from the subject (Latin Modern in T5 encoding; the main font has no T5).
 \newcommand{\vi}[1]{{\fontencoding{T5}\fontfamily{lmr}\selectfont #1}}
+%% Vietnamese status values used inside TikZ loops (robust, so \foreach does not expand them).
+\DeclareRobustCommand{\viDa}{\vi{Đã duyệt}}
+\DeclareRobustCommand{\viCho}{\vi{Chờ duyệt}}

@@ -1,0 +1,37 @@
+% Defect taxonomy as relations between the admissible behaviours and the behaviours that pass the checks.
+\begin{tikzpicture}[
+  every node/.style={font=\footnotesize},
+  adm/.style={draw=blue!60!black, fill=blue!12, fill opacity=0.8, text opacity=1},
+  sat/.style={draw=orange!80!black, fill=orange!18, fill opacity=0.65, text opacity=1},
+  beh/.style={draw=gray, rounded corners=2pt},
+  pt/.style={circle, fill=black, inner sep=1.3pt}]
+\foreach \x/\t in {0/{(a) Contradiction}, 3.55/{(b) Hidden requirement}, 7.1/{(c) Ambiguity}, 10.65/{(d) Weak check}} {
+  \draw[beh] (\x,0) rectangle ++(3.25,2.6);
+  \node[anchor=north west, gray] at (\x,2.6) {$\Beh$};
+  \node[anchor=north, font=\footnotesize\bfseries] at (\x+1.625,-0.05) {\t};
+}
+% (a) no behaviour satisfies M
+\draw[adm] (0.95,1.35) ellipse (0.7 and 0.55); \node at (0.95,1.35) {$\Adm_\Tell$};
+\draw[draw=red!70!black, dashed, thick] (2.45,1.5) circle (0.4);
+\draw[red!70!black, thick] (2.17,1.22) -- (2.73,1.78) (2.17,1.78) -- (2.73,1.22);
+\node[red!70!black, align=center, font=\scriptsize] at (1.85,0.4) {no $b$ with $b\models M$};
+% (b) an admissible behaviour fails one clause
+\begin{scope}[shift={(3.55,0)}]
+\draw[sat] (2.0,1.3) ellipse (1.05 and 0.8); \node at (2.45,1.75) {$\textsf{Sat}(\Chk)$};
+\draw[adm] (1.05,1.2) ellipse (0.8 and 0.6); \node at (0.95,1.45) {$\Adm_\Tell$};
+\node[pt] (b) at (0.6,1.0) {}; \node[font=\scriptsize, align=center] at (1.62,0.3) {$b\models\Chk\setminus\{\varphi\}$, $b\not\models\varphi$};
+\end{scope}
+% (c) two admissible classes
+\begin{scope}[shift={(7.1,0)}]
+\draw[adm] (1.62,1.3) ellipse (1.25 and 0.75);
+\draw[blue!60!black, dashed] (1.62,0.55) -- (1.62,2.05);
+\node at (1.05,1.3) {$[b_1]$}; \node at (2.2,1.3) {$[b_2]$};
+\node[font=\scriptsize] at (1.62,0.3) {$|\Adm_\Tell/{\equiv_\Spec}|\ge2$};
+\end{scope}
+% (d) a non-admissible behaviour passes every check
+\begin{scope}[shift={(10.65,0)}]
+\draw[sat] (1.62,1.4) ellipse (1.3 and 0.85); \node at (2.35,1.95) {$\textsf{Sat}(\Chk)$};
+\draw[adm] (1.25,1.25) ellipse (0.65 and 0.45); \node at (1.25,1.25) {$\Adm_\Tell$};
+\node[pt] at (2.45,0.95) {}; \node[font=\scriptsize] at (1.62,0.22) {$b\notin\Adm_\Tell$, $b\models\Chk$};
+\end{scope}
+\end{tikzpicture}

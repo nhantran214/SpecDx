@@ -110,6 +110,34 @@ Joint-class latent model & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd
 
 \paragraph{Typing.} [To be written: typed $F_1$ against the simple baselines at the calibrated point; the effect of the (A3) and (A5) arms.]
 
+\paragraph{Calibration.} \Cref{fig:calibration} compares the posterior defect probabilities with the observed frequency of planted defects. [To be written.]
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{groupplot}[
+  group style={group size=3 by 1, horizontal sep=10mm, y descriptions at=edge left},
+  width=0.36\textwidth, height=0.36\textwidth,
+  xmin=0, xmax=1, ymin=0, ymax=1,
+  xlabel={posterior probability}, ylabel={observed frequency},
+  xtick={0,0.25,0.5,0.75,1}, ytick={0,0.25,0.5,0.75,1},
+  tick label style={font=\scriptsize}, label style={font=\scriptsize}, title style={font=\footnotesize},
+  legend style={font=\scriptsize, draw=none, legend columns=3, at={(-0.75,-0.38)}, anchor=north}]
+\nextgroupplot[title={$\Prob(A_c\neq\{d_c\})$ (hidden)}]
+  \addplot[gray, dashed, domain=0:1] {x};
+\nextgroupplot[title={$\Prob(|A_c|=2)$ (ambiguity)}]
+  \addplot[gray, dashed, domain=0:1] {x};
+\nextgroupplot[title={MAP posterior (weak check)}]
+  \addplot[gray, dashed, domain=0:1] {x};
+  \addlegendimage{black, thick, mark=*}\addlegendentry{calibrated point}
+  \addlegendimage{blue, thick, dashed, mark=square*}\addlegendentry{(A3) violated}
+  \addlegendimage{red, thick, dotted, mark=triangle*}\addlegendentry{(A5) violated}
+\end{groupplot}
+\end{tikzpicture}
+\caption{Calibration of the posterior defect probabilities in simulation (reliability diagrams, ten bins). The dashed diagonal is perfect calibration. Data to be added.}
+\label{fig:calibration}
+\end{figure}
+
 \paragraph{Regimes.} [To be written: where \specdx wins, ties or loses; agreement of the empirical boundaries with \cref{thm:t2,thm:t2prime,thm:t4}.]
 
 \rqanswer{1}{[To be completed once the results are final.]}
@@ -201,7 +229,29 @@ JEST & \Dhid & \tbd\ [\tbd, \tbd] & \tbd \\
 
 \paragraph{Weak checks.} [To be written.]
 
-\paragraph{False positives on the base specification.} [To be written: the number of findings on the unmutated base, by type, and how many fall on the Unobservable list.]
+\paragraph{False positives on the base specification.} \Cref{fig:base-findings} shows the findings each method reports on the unmutated base specification. [To be written: the number of findings by type, and how many fall on the Unobservable list.]
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.92\textwidth, height=0.3\textwidth,
+  ybar stacked, bar width=10pt, ymin=0, ymax=100, xmin=0.4, xmax=8.6,
+  xtick={1,...,8}, xticklabels={\specdx, B1, B2, B3, B4, B5, TI, JEST},
+  ylabel={findings on the base}, tick label style={font=\scriptsize}, label style={font=\scriptsize},
+  ymajorgrids, grid style={gray!20},
+  legend style={font=\scriptsize, draw=none, legend columns=5, at={(0.5,1.03)}, anchor=south},
+  /tikz/every even column/.append style={column sep=3mm}]
+  \addlegendimage{ybar, ybar legend, fill=purple!40}\addlegendentry{\Dcon}
+  \addlegendimage{ybar, ybar legend, fill=red!40}\addlegendentry{\Dhid}
+  \addlegendimage{ybar, ybar legend, fill=yellow!60}\addlegendentry{\Damb}
+  \addlegendimage{ybar, ybar legend, fill=green!40}\addlegendentry{\Dweak}
+  \addlegendimage{ybar, ybar legend, fill=gray!25}\addlegendentry{Unobservable (not scored)}
+\end{axis}
+\end{tikzpicture}
+\caption{Findings on the unmutated base specification, by type. Real defects among them are counted in \cref{sec:results-rq3}; the rest are candidate false positives. The y-axis range is a placeholder. Data to be added.}
+\label{fig:base-findings}
+\end{figure}
 
 \rqanswer{2}{[To be completed once the results are final.]}
 
@@ -227,6 +277,31 @@ R-DE (\Dhid) & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \nr & \nr & \tbd & \tbd
 \bottomrule
 \end{tabular}
 \end{table}
+
+\Cref{fig:rso} looks inside the anchored cell model at the R-SO cell: the share of readings that move away from the anchor for each model, and the posterior over the cell's candidate sets.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{groupplot}[
+  group style={group size=2 by 1, horizontal sep=16mm},
+  width=0.46\textwidth, height=0.32\textwidth,
+  tick label style={font=\scriptsize}, label style={font=\scriptsize}, title style={font=\footnotesize}]
+\nextgroupplot[title={(a) readings by model}, ybar stacked, bar width=12pt, ymin=0, ymax=1, xmin=0.4, xmax=4.6,
+  xtick={1,...,4}, xticklabels={model 1, model 2, model 3, model 4}, ylabel={share of acted readings},
+  xlabel={models ordered by $\hat\theta_m$},
+  legend style={font=\scriptsize, draw=none, at={(0.5,-0.42)}, anchor=north, legend columns=3}]
+  \addlegendimage{ybar, ybar legend, fill=orange!40}\addlegendentry{\vi{Chờ duyệt} ($d_c$)}
+  \addlegendimage{ybar, ybar legend, fill=green!40}\addlegendentry{\vi{Đã duyệt}}
+  \addlegendimage{ybar, ybar legend, fill=gray!30}\addlegendentry{other}
+\nextgroupplot[title={(b) posterior over $A_c$}, ybar, bar width=12pt, ymin=0, ymax=1, xmin=0.4, xmax=5.6,
+  xtick={1,...,5}, xticklabels={{$\{d_c\}$}, {\{\vi{Đã}\}}, {$\{d_c$, \vi{Đã}$\}$}, {$\emptyset$}, {other}},
+  ylabel={posterior probability}, extra y ticks={0.5}, extra y tick style={grid=major, major grid style={red, dashed}}, extra y tick labels={}]
+\end{groupplot}
+\end{tikzpicture}
+\caption{Inside the diagnosis of R-SO. (a)~For each model, the share of its acted readings of the cell \texttt{SO-0031}.status that equal the anchor, the alternative reading, or something else. (b)~The posterior over the cell's candidate sets; the dashed line marks $\tau_H$. Data to be added.}
+\label{fig:rso}
+\end{figure}
 
 [To be written: discussion of each real defect, including the witness that \specdx reports and, for R-12, the synthesised scenario that exposed it. R-DOC is discussed qualitatively for B1.]
 
@@ -275,6 +350,30 @@ B2 Who\&When & \tbd & \tbd & \nr\,/\,\tbd & \tbd\,/\,\tbd & \nr\,/\,\tbd & \nr\,
 \bottomrule
 \end{tabular}
 \end{table}
+
+\Cref{fig:cost} breaks the cost of each method down by what the requests were spent on.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.92\textwidth, height=0.3\textwidth,
+  xbar stacked, bar width=8pt, xmin=0, xmax=1000, ymin=0.4, ymax=8.6,
+  ytick={1,...,8}, yticklabels={\specdx, B1 BenchGuard, B2 Who\&When, B3 IRT audit, B4 Sem.\ entropy, B5 MUS on $\Chk$, TI, JEST},
+  y dir=reverse, xlabel={model requests per specification},
+  tick label style={font=\scriptsize}, label style={font=\scriptsize}, xmajorgrids, grid style={gray!20},
+  legend style={font=\scriptsize, draw=none, legend columns=5, at={(0.5,1.03)}, anchor=south},
+  /tikz/every even column/.append style={column sep=3mm}]
+  \addplot[draw=none, forget plot] coordinates {(0,0.4) (0,8.6)};
+  \addlegendimage{xbar, xbar legend, fill=blue!40}\addlegendentry{population runs}
+  \addlegendimage{xbar, xbar legend, fill=purple!40}\addlegendentry{refutation probes}
+  \addlegendimage{xbar, xbar legend, fill=yellow!60}\addlegendentry{ddmin tests}
+  \addlegendimage{xbar, xbar legend, fill=orange!50}\addlegendentry{own LLM calls}
+\end{axis}
+\end{tikzpicture}
+\caption{Cost per specification in model requests, by component. Baselines that consume \specdx's runs are charged those runs plus their own calls. The x-axis range is a placeholder. Data to be added.}
+\label{fig:cost}
+\end{figure}
 
 [To be written: runs to first detection per type; the share of scenarios escalated; the cost of refutation and localisation relative to population runs; wall-clock time on the 48\,GB GPU.]
 

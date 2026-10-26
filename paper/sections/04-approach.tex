@@ -13,34 +13,8 @@ The loop is \emph{anytime}: stopping it at any point yields a report.
 
 \begin{figure}[t]
 \centering
-\resizebox{\textwidth}{!}{%
-\begin{tikzpicture}[
-  node distance=4mm and 4mm,
-  box/.style={draw, rounded corners=2pt, align=center, font=\footnotesize, minimum height=9mm, text width=22mm, fill=white},
-  data/.style={draw, align=center, font=\footnotesize, minimum height=8mm, text width=20mm, fill=gray!10},
-  arr/.style={-{Latex[length=2mm]}, thick},
-  grp/.style={draw, dashed, rounded corners=4pt, inner sep=2.5mm}]
-  \node[data] (spec) {$\Spec=\langle\Tell,\Chk,\Scen\rangle$};
-  \node[box, right=of spec] (scen) {\textbf{Scenario choice}\\T-boundaries,\\Thompson sampling};
-  \node[box, right=of scen] (run) {\textbf{Execution}\\pilot $\to$ population\\(models $\times$ variants\\$\times$ seeds)};
-  \node[box, right=of run] (obs) {\textbf{Observation}\\items, cells,\\anchors, $V(b)$};
-  \node[box, below=16mm of obs] (act) {\textbf{Stage 1: act}\\Rasch $\sigma(\eta_m-\delta_s)$\\observability $O_s$};
-  \node[box, left=of act] (acm) {\textbf{Stage 2: read}\\anchored cell model\\$\Prob(A_c\mid\text{readings})$};
-  \node[box, left=of acm] (typ) {\textbf{Typing}\\hitting sets, refutation,\\thresholds $\tau_H,\tau_A,\tau_W$};
-  \node[box, left=of typ] (loc) {\textbf{Localisation}\\ddmin over\\sentences of $\Tell$};
-  \node[data, below=6mm of loc] (rep) {Typed defects\\+ witnesses};
-  \draw[arr] (spec) -- (scen);
-  \draw[arr] (scen) -- (run);
-  \draw[arr] (run) -- (obs);
-  \draw[arr] (obs) -- (act);
-  \draw[arr] (act) -- (acm);
-  \draw[arr] (acm) -- (typ);
-  \draw[arr] (typ) -- (loc);
-  \draw[arr] (loc) -- (rep);
-  \draw[arr, dashed] (typ.north) -- node[font=\scriptsize, right, pos=0.72] {reward $\sum\KL$} (scen.south);
-  \draw[arr, dashed] (loc.north) -- ++(0,5mm) -| node[font=\scriptsize, above, pos=0.12] {re-runs (budget 80)} (run.south);
-\end{tikzpicture}}
-\caption{Overview of \specdx. Solid arrows show one round; dashed arrows show the feedback from the diagnosis to scenario choice, and the re-runs that localisation requests.}
+\includegraphics[width=\textwidth]{figures/drawio/pipeline.pdf}
+\caption{Overview of \specdx. Each round explores a scenario, infers what the population's runs say about every cell, and diagnoses typed defects. Solid arrows show one round. Dashed arrows show the feedback: the change in the defect scores rewards the scenario choice, and refutation and localisation request further runs within their own budgets.}
 \label{fig:pipeline}
 \end{figure}
 
@@ -150,6 +124,15 @@ Three design choices distinguish~\eqref{eq:reading} from the classical Dawid--Sk
 \end{equation}
 where $u_c$ is the flat distribution over $V_c$ and $\kappa=10$. The flat pool has a specific job. A free per-cell $\varepsilon_c$ lets the silence hypothesis $A_c=\emptyset$ fit any sharp split or mode, and in our simulation spikes it absorbed almost every true ambiguity. Pulling $\varepsilon_c$ towards a flat profile makes silence predict flat readings, so a sharp split identifies a pair and a sharp mode identifies a value (\cref{thm:t2prime}). The pool is a regularisation, not a claim that errors are flat: real errors concentrate, and \cref{sec:theory} and the simulation study examine what happens then.
 
+\Cref{fig:graphical} summarises the generative model as a plate diagram.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{\input{figures/graphical-model}}
+\caption{Plate diagram of the anchored cell model. Shaded nodes are observed: the readings $y_{bc}$ and the anchors $d_c$. The anchor enters only through the prior on the latent set $A_c$. Accuracy $p_{m,c}$ is a deterministic function of model ability and group difficulty.}
+\label{fig:graphical}
+\end{figure}
+
 \paragraph{Posterior.} Let $\Theta=(\alpha,\beta,\varepsilon)$ and let $Y_c=\{y_{bc}\}$ be the readings of cell $c$ by acted behaviours. Under conditional independence of readings given $A_c$ and $\Theta$, the cell-level posterior is
 \begin{equation}
 \label{eq:post}
@@ -214,7 +197,14 @@ No component of \specdx is switched on or off by a hard threshold on competence.
 \subsection{Typing}
 \label{sec:approach-typing}
 
-This subsection answers \textbf{Q2}: how the posteriors become typed findings with witnesses.
+This subsection answers \textbf{Q2}: how the posteriors become typed findings with witnesses. \Cref{fig:typing} summarises the decision flow; the paragraphs below give the details.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/drawio/typing.pdf}
+\caption{Typing. The cell posteriors give hidden requirements, contradictions of size one, ambiguities and weak checks; the weighted violation sets give contradictions of two or more clauses. Every contradiction requires a failed refutation, and every ambiguity is localised in $\Tell$ by ddmin.}
+\label{fig:typing}
+\end{figure}
 
 \paragraph{Hidden requirements and contradictions of size one.} An anchored cell is a candidate when its anchor is unlikely to be the whole truth:
 \begin{equation}
@@ -232,7 +222,14 @@ The candidate then goes to \emph{refutation} (described below), which searches f
 \label{eq:sofths}
 \frac{\sum_{b}w_b\,\one\bigl[H\cap V(b)\neq\emptyset\bigr]}{\sum_b w_b\,\one\bigl[V(b)\neq\emptyset\bigr]}\ge 1-\tau_{\textit{hs}},\qquad |H|\le 3 .
 \end{equation}
-\specdx enumerates minimal soft hitting sets with PySAT's \textsc{Hitman}~\cite{ignatiev2018pysat}, with $\tau_{\textit{hs}}=0.05$. It drops behaviours whose weight share is below $0.01$. A set $H$ with $|H|\ge 2$ becomes a contradiction candidate when every clause of $H$ is satisfied individually by some behaviour but no behaviour satisfies all of them together. The candidate is reported only if refutation fails.
+\specdx enumerates minimal soft hitting sets with PySAT's \textsc{Hitman}~\cite{ignatiev2018pysat}, with $\tau_{\textit{hs}}=0.05$. It drops behaviours whose weight share is below $0.01$. A set $H$ with $|H|\ge 2$ becomes a contradiction candidate when every clause of $H$ is satisfied individually by some behaviour but no behaviour satisfies all of them together. The candidate is reported only if refutation fails. \Cref{fig:hitting} works through a small example.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{\input{figures/hitting-sets}}
+\caption{Runs as sampled correction sets. Every run violates $\varphi_2$ or $\varphi_3$, and each of the two is satisfied by some run, so $H=\{\varphi_2,\varphi_3\}$ is a minimal hitting set and a candidate MUS. It is reported as a contradiction only if refutation finds no state that satisfies both clauses.}
+\label{fig:hitting}
+\end{figure}
 
 \paragraph{Refutation.} Refutation searches for a witness state $w$ with $w\models M$, along two routes.
 \begin{itemize}[leftmargin=*]
@@ -270,7 +267,14 @@ ddmin returns a 1-minimal set of sentences whose \emph{presence} is needed for t
 \subsection{Choosing scenarios}
 \label{sec:approach-scenarios}
 
-This subsection answers \textbf{Q3}. The scenarios come from a queue with three tiers.
+This subsection answers \textbf{Q3}. The scenarios come from a queue with three tiers, and each new scenario is run cheaply first. \Cref{fig:scenarios} illustrates the three mechanisms.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{\input{figures/scenarios}}
+\caption{Choosing scenarios. (a)~A numeric literal next to a comparison keyword in $\Tell$ adds boundary values to a parameter's domain. (b)~Each scenario cell keeps a posterior over the information gain of running it; one draw per cell is taken and the largest wins (values illustrative). (c)~A new scenario first runs a pilot and is escalated to the full population only if the pilot is informative.}
+\label{fig:scenarios}
+\end{figure}
 
 \paragraph{Reference and boundary scenarios.} The queue starts with the reference scenarios of $\Chk$. Next come \emph{T-boundary} scenarios. \specdx extracts every numeric literal in $\Tell$ that appears in the same sentence as a comparison keyword, such as ``\vi{tối đa}'' (at most) or ``\vi{vượt quá}'' (exceeds). It binds percentages to the discount parameter and quantities to the received quantity. Each bound literal $\ell$ adds $\ell-1$, $\ell$ and $\ell+1$ to the parameter's domain. At most 12 such scenarios are queued, each varying one parameter from the anchor scenario.
 

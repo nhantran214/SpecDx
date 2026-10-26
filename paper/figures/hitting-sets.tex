@@ -1,0 +1,27 @@
+% Runs as sampled correction sets; a minimal hitting set is a candidate MUS.
+\begin{tikzpicture}[
+  every node/.style={font=\footnotesize},
+  c/.style={minimum width=0.75cm, minimum height=0.48cm, draw=gray!50},
+  hl/.style={c, fill=purple!15},
+  arr/.style={-{Latex[length=2mm]}, thick},
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt}]
+\foreach \j/\n in {1/1,2/2,3/3,4/4} \node at (\j*0.75,0.5) {$\varphi_{\n}$};
+\node at (4.15,0.5) {$w_b$};
+\foreach \r/\row/\w in {1/{0,1,0,0}/0.9, 2/{0,0,1,0}/0.8, 3/{0,1,0,1}/0.7, 4/{1,0,1,0}/0.6, 5/{1,1,0,0}/0.9} {
+  \node[anchor=east] at (0.3,-0.48*\r+0.48) {$V(b_{\r})$};
+  \foreach \v [count=\j] in \row {
+    \ifnum\j=2 \def\sty{hl}\else\ifnum\j=3 \def\sty{hl}\else\def\sty{c}\fi\fi
+    \node[\sty] at (\j*0.75,-0.48*\r+0.48) {\ifnum\v=1 $\bullet$\fi};
+  }
+  \node at (4.15,-0.48*\r+0.48) {\w};
+}
+\node[font=\scriptsize, align=center, text width=4.2cm] at (2.0,-2.45) {each run $b$ satisfies $\Chk\setminus V(b)$, so $V(b)$ is a correction set};
+\node[box, fill=purple!15] (H) at (7.0,-0.5) {minimal hitting set\\$H=\{\varphi_2,\varphi_3\}$\\covers all weight};
+\node[box] (R) at (10.0,-0.5) {refutation: search\\for $w\models\{\varphi_2,\varphi_3\}$};
+\node[box, fill=purple!25] (C) at (10.0,-2.0) {no witness:\\\Dcon $\{\varphi_2,\varphi_3\}$};
+\node[box, fill=gray!10] (D) at (7.0,-2.0) {witness found:\\candidate dropped};
+\draw[arr] (4.6,-0.5) -- (H);
+\draw[arr] (H) -- (R);
+\draw[arr] (R) -- (C);
+\draw[arr] (R.south west) -- (D.north east);
+\end{tikzpicture}

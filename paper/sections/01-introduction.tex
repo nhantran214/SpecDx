@@ -58,6 +58,14 @@ Our starting point is simple. An LLM agent that executes a specification is a fa
 \item If a run that the population considers wrong still passes every check, a check is weak.
 \item If no run, however competent, satisfies a set of clauses together, the clauses may contradict each other.
 \end{itemize}
+\Cref{fig:concept} illustrates the idea on one cell of the motivating example of \cref{sec:motivating}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/drawio/concept.pdf}
+\caption{The idea of \specdx. A population of local LLM interpreters reads the Tell part $\Tell$ under several paraphrases and seeds. Each run is read cell by cell; here, the status of a sales order after its approval. The Check part $\Chk$ declares the cell's anchor (\vi{Chờ duyệt}) and so acts as one more fallible rater. Interpreters that are accurate elsewhere read the cell as \vi{Đã duyệt}, and the more accurate they are, the more often they do. The anchored cell model turns this pattern into a posterior that the anchor lies outside the admissible readings, and refutation confirms it as a hidden requirement. The bottom row lists the evidence pattern behind each of the four defect types. The readings are illustrative.}
+\label{fig:concept}
+\end{figure}
 
 Turning this intuition into a method requires answers to three questions:
 \begin{itemize}[leftmargin=*]

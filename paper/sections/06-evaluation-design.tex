@@ -179,7 +179,14 @@ Untyped matching drops the type requirement. Findings that are also present in t
 \subsection{Pre-registered protocol}
 \label{sec:eval-sim}
 
-The study proceeds through four go/no-go steps. Each step's pass criterion was written down before the step ran.
+The study proceeds through four go/no-go steps. Each step's pass criterion was written down before the step ran. \Cref{fig:protocol} shows the order of the steps and the comparison study that follows them.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/drawio/protocol.pdf}
+\caption{Evaluation protocol. Every go/no-go step has a pass criterion fixed in advance; a failure stops the study without re-tuning. The baselines are tuned on the development split whatever the gate's verdict, but the test split is run once, and only after the gate has passed and the baseline choices are frozen.}
+\label{fig:protocol}
+\end{figure}
 
 \paragraph{G0: simulation.} We generate synthetic specifications with the following ingredients:
 \begin{itemize}[leftmargin=*]

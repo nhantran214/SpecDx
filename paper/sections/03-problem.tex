@@ -72,6 +72,15 @@ Let $\pi\in\Scen$.
 \end{enumerate}
 \end{definition}
 
+\Cref{fig:taxonomy} pictures the four definitions as relations between two sets of behaviours: those that $\Tell$ admits and those that pass the checks.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{\input{figures/taxonomy}}
+\caption{The four defect types as relations between the admissible behaviours $\Adm_\Tell$ and the behaviours that pass the checks, $\textsf{Sat}(\Chk)$, inside the space of behaviours $\Beh$. (a)~No behaviour satisfies a clause set $M$. (b)~An admissible behaviour fails exactly one clause. (c)~The admissible behaviours fall into two classes of $\equiv_\Spec$. (d)~A behaviour outside $\Adm_\Tell$ passes every check.}
+\label{fig:taxonomy}
+\end{figure}
+
 The types may co-occur. When $\Tell$ is ambiguous and $\Chk$ picks one of the readings, both an ambiguity and a hidden requirement are reported: the behaviours that follow the other reading satisfy \eqref{eq:def-hid}.
 
 The definitions show why no single source of evidence is enough. A contradiction~\eqref{eq:def-con} concerns $\Chk$ alone. Sampling can never prove that no behaviour exists, so a contradiction can only be supported by failed attempts and refuted by a witness. A hidden requirement~\eqref{eq:def-hid} and an ambiguity~\eqref{eq:def-amb} quantify over $\Adm_\Tell$, which only an interpreter of $\Tell$ can sample. A weak check~\eqref{eq:def-weak} quantifies over behaviours \emph{outside} $\Adm_\Tell$, which an ideal interpreter never produces. Its detection therefore relies on interpreters that err. The following proposition makes the role of ideal interpreters precise.
@@ -103,6 +112,15 @@ Comparing whole behaviours is too coarse. Independent variation in several field
 \paragraph{Anchors.} The \emph{anchor} $d_c$ of a cell is what $\Chk$ declares for it: the (lifted) golden value of a value cell, \textsf{present} for a golden event, and $\sat$ for a constraint cell. A value cell on which $\Chk$ declares nothing is \emph{unanchored}. Unanchored cells contribute no evidence about accuracy, but they are where weak checks show up.
 
 \paragraph{Pooling.} A lifted cell is one cell across all the scenarios where it applies. Its readings are pooled in the lifted vocabulary: a reading that equals the scenario's value of the parameter \textit{qty} is recorded as the placeholder \texttt{\{qty\}} in every scenario. Pooling increases the number of readings per cell, which the finite-sample bounds of \cref{sec:theory} depend on.
+
+\Cref{fig:cells} shows what the data look like: a matrix of behaviours by cells, with the anchors in the first row and gaps where a behaviour did not act.
+
+\begin{figure}[t]
+\centering
+\resizebox{0.95\textwidth}{!}{\input{figures/cells}}
+\caption{From runs to cell readings (illustrative values). Each row is one behaviour, each column one cell; the first row holds the anchors that $\Chk$ declares. Value cells are read from the end state, and a constraint cell is read as $\sat$ or $\viol$. A behaviour that did not act at the item contributes no reading.}
+\label{fig:cells}
+\end{figure}
 
 The interpretation of a cell under each defect type follows from \cref{def:defects}. Let $A_c$ be the set of readings of $c$ that $\Tell$ admits. Then:
 \begin{itemize}[leftmargin=*]
