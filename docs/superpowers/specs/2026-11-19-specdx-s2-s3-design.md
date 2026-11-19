@@ -360,6 +360,25 @@ Then it gives the stage's key numbers and its verdict (PASS, FAIL or STOP where 
 
 A subject's failure stops that subject's later stages only; the other subject continues (§13b).
 
+## 13d. S3 cells, revised after reading SOPBench's oracle (2026-11-19)
+
+**Why §5.2's cells need revising.** SOPBench's oracle has no single target state. `env/evaluator.py` replays the agent's *own* tool calls on a strict system that enforces the task's constraints, and compares the two databases. The expected database therefore depends on the run, and cannot serve as one anchor per field. S3's cells are therefore these, per task. They replace the database cells of §5.2:
+
+| Cell | Kind | Vocabulary | Anchor | Reading of a run |
+|---|---|---|---|---|
+| `s3:<domain>:<task>:outcome` | value | `succeeds`, `refused` | `succeeds` if `action_should_succeed`, else `refused` | `succeeds` if `action_successfully_called`, else `refused` |
+| `s3:<domain>:<task>:db_match` | constraint | satisfied, violated | satisfied | `database_match` |
+| `s3:<domain>:<task>:constraints` | constraint | satisfied, violated | satisfied | `constraint_not_violated` |
+| `s3:<domain>:<task>:process` | constraint | satisfied, violated | satisfied | `dirgraph_satisfied` |
+
+- The outcome cell carries the SOP reading. A vague or wrong constraint splits the population between doing the action and refusing it, which is the ambiguity signal on a binary cell.
+- A run is `clean` when its three constraint cells are satisfied.
+- V(b) is the set of a run's violated constraint cells.
+- `no_tool_call_error` is the agent's error, not the specification's. A run with `no_tool_call_error` false is excluded from readings and counted.
+- T is the rendered system prompt that SOPBench stores per run (`interactions[i].prompt`), split into sentences. It is identical across models for the same task.
+- Field-level database cells are deferred to P3b. They need a canonical replay of the directed action graph, and are added only if the development grid shows that the four cells above miss planted defects.
+- Published runs are near-greedy: temperature 0, one run per model and task. Every model is one rater in the replication.
+
 ## 14. Left to the builder
 
 - Adapter internals: how databases are flattened to cells, and how the target end state is materialised (replaying `actions` in τ²-bench's own environment code).
