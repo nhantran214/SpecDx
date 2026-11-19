@@ -1,0 +1,21 @@
+# Core dependencies. This is everything SOPBench itself imports, and is enough
+# to run task generation, simulation against hosted model APIs, and evaluation.
+openai>=1.71.0
+anthropic>=0.49.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+pydantic>=2.9.2
+Pillow>=10.0.0
+termcolor>=2.5.0
+colorama>=0.4.6
+tqdm>=4.66.5
+
+# Optional: serving open-source models locally instead of through a hosted API.
+# vLLM brings its own torch/transformers, so install it separately:
+#
+#     pip install "vllm>=0.25.0"
+#
+# The open-source rows in the README were produced with vLLM 0.25.0. The native
+# function-calling parsers used for Qwen3.5 (qwen3_xml) and Gemma-4 (gemma4)
+# require vLLM 0.25 or newer; earlier releases can still serve the Qwen2.5 and
+# Llama3.1 models, which are evaluated in ReAct mode.
