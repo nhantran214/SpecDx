@@ -68,7 +68,7 @@ Everything runs locally and automatically: there are no hosted APIs and no human
 | `specdx/baselines/` | the comparison baselines and the cached LLM gateway they share |
 | `specdx/eval/` | the capability screen, the gate, scoring, the comparison study, statistics, freezing |
 | `specdx/cli.py` | the `specdx` command |
-| `run_all.sh` | the end-to-end driver (smoke tests, gate, comparison study) |
+| `run_all.sh` | the driver for every P3 stage; reports in `results/p3/` |
 | `experiments/` | frozen configurations, pre-registrations, hardware profiles, replay scripts |
 | `tests/` | unit and database tests (no model is ever called) |
 | `vendor/tonomyx/` | TonomyX, vendored byte-identical and never edited |
@@ -133,12 +133,8 @@ SpecDx reads its configuration from the environment:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WORKERS` | 2 | `--workers` for the long steps; never above the host's `OLLAMA_NUM_PARALLEL` |
-| `FOREGROUND` | 0 | 1 runs the long steps in the foreground (`all` sets it) |
-| `LOCAL_BUDGET` | 8 | population runs in the local smoke run (0 skips it) |
-| `SMOKE_DIR` | a new temporary directory | scratch directory for `local` |
-| `GPU_SSH` | — | `user@gpu-host`, so the G3 check can read the host's Ollama log over SSH |
-| `OLLAMA_LOG_CMD` | — | instead of `GPU_SSH`: a command printing the host's Ollama log between `$SINCE` and `$UNTIL` |
+| `P3_RESULTS` | `results/p3` | where stage reports and `STATUS.md` go |
+| `P3_WORK` | `work` | work directory, including the `p3-<stage>.pid` files |
 
 Each **frozen configuration** in `experiments/` (for example `p2-gate.json`) fixes the following, and nothing is changed by hand after a result has been seen:
 - the population (`models_by_family`);
@@ -174,78 +170,15 @@ Every Ollama host should run with `OLLAMA_NUM_PARALLEL` at least equal to the nu
 
 ## Running the experiments
 
-`run_all.sh` drives everything. Each step checks the one before it, and re-running a step resumes from the caches.
-
-### 1. Smoke tests on this machine (before any GPU time)
+`run_all.sh` runs every experiment. Each finished stage leaves a Markdown report in `results/p3/<stage>.md`, and `results/p3/STATUS.md` shows every stage, including those that later plans implement (shown as pending).
 
 ```bash
-./run_all.sh local
+./run_all.sh all             # every implemented stage in order; finished stages are skipped
+./run_all.sh <stage>         # one stage: local, fetch-sopbench, replication, ...
+./run_all.sh status          # rebuild results/p3/STATUS.md
 ```
 
-It runs:
-- the unit tests and the linter;
-- a preview of the population rule;
-- the Ollama and digest checks;
-- `doctor`;
-- an end-to-end SpecDx run on the base specification (budget `LOCAL_BUDGET`);
-- every baseline once on that base with one model.
-
-The baseline check fails if an LLM call came close to the context window. Everything is written to a scratch directory, never to `work/`, `results/` or `experiments/`.
-
-### 2. The full pipeline on the GPU host
-
-SpecDx and PostgreSQL run on this machine. Ollama runs on the GPU host, reached through an SSH tunnel:
-
-```bash
-ssh -f -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-  -L 11435:localhost:11434 user@gpu-host
-export SPECDX_OLLAMA_URL=http://localhost:11435
-tmux new -s specdx                              # the pipeline takes days
-./run_all.sh all                                # or: ./run_all.sh all --yes
-```
-
-`all` runs these steps in order, in the foreground:
-
-| Step | What it does | Time |
-|---|---|---|
-| `g2` | admits the population from the cached capability screen and freezes it into `experiments/p2-gate.json` (committed); exit 3 if fewer than 2 families or 4 acting models | seconds |
-| `preflight` | tools, database, the append-only run cache, Ollama version and pinned model digests, workers | seconds |
-| `g3` | smoke run of the base specification at budget 60, then its checks: no queued timeout cached as behaviour, every population model has readings and accuracy ≥ 0.5 | hours |
-| `gate` | SpecDx on the base and the 20 development mutants; verdict PASSED / NOT PASSED in `results/p2-gate.md`. Before launching, `all` shows the measured seconds per run and asks for confirmation (`--yes` skips the question; answering no stops `all` with exit 0) | days |
-| `baselines-dev` | every baseline arm, on every population model, on the base and the development mutants | hours to days |
-| `freeze-baselines` | chooses each baseline's model, strategy and threshold on the development set only. Writes and commits `experiments/p3-baselines-prereg.{json,md}`, which records the sha256 of the gate configuration and gate result and a fingerprint of the baseline LLM cache | seconds |
-| `study` | SpecDx and the frozen baselines on the test mutants, run once | days |
-| `report` | `results/p3-report.md`: tables and statistics for the development set, and for the test set once it exists | seconds |
-
-If the gate is **NOT PASSED**, `all` still runs `baselines-dev` and the development report, freezes nothing, and exits 4: the test set stays locked.
-
-### 3. One step at a time
-
-```bash
-./run_all.sh g2 | preflight | g3 | gate [--yes] | baselines-dev | freeze-baselines | study | report
-./run_all.sh status        # running steps (pid, log tail), size of both caches, latest results
-```
-
-Run singly, the long steps (`gate`, `baselines-dev`, `study`) detach. Each writes a pid file and a log under `work/` (`work/p2-gate.*`, `work/p3-baselines-dev.*`, `work/p3-study.*`), so a closed terminal does not stop it. Pause and resume a detached step with `kill -STOP $(cat work/<step>.pid)` and `kill -CONT $(cat work/<step>.pid)`.
-
-### Exit status of `run_all.sh`
-
-| Code | Meaning |
-|---|---|
-| 0 | done (or `all` stopped because the gate launch was declined) |
-| 1 | a check failed; stop and report |
-| 2 | a usage or environment error |
-| 3 | the population stop rule (too few families or acting models) |
-| 4 | the test study is locked. Causes: the gate is not PASSED; the baseline pre-registration is not committed; the working tree has uncommitted changes; or the gate configuration or gate result changed since the freeze |
-
-### Integrity of the comparison
-
-- **The baselines run on SpecDx's own runs.** Every baseline reads the same specifications and, where it reads runs, the same cached SpecDx runs. The LLM-based baselines (BenchGuard, Who&When) call the same population models with the same digests, through a cached gateway.
-- **One scoring code.** Every method is scored by the same matching code, with the same differential against the base specification and the same set of scorable mutants.
-- **Choices are frozen on the development set.** Models, strategies and thresholds are chosen there and frozen before the test set runs. `specdx study` accepts only `experiments/p2-gate.json` and `experiments/p3-baselines-prereg.json`, both committed, on a clean tree.
-- **Two cost views.** Costs are counted in model requests (tokens and durations wherever recorded). Each method is reported at its native protocol (Table A), and SpecDx is also reported at each LLM baseline's cost, read from its anytime checkpoints (Table B).
-
-The baselines and how they are run are described in [`baseline/README.md`](baseline/README.md).
+See [docs/RUNNING.md](docs/RUNNING.md) §11 for the stage table and the exit codes. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
 
 ## The `specdx` command line
 
@@ -308,7 +241,7 @@ A gate or study headline is PASSED, NOT PASSED or INCOMPLETE (some specification
 | `nvidia-smi failed: … version mismatch` | the NVIDIA driver was updated without a reboot; reboot the GPU host before any run |
 | runs take many minutes each | check that `ollama ps` shows `100% GPU`; a model larger than the GPU runs partly on the CPU |
 | `local` fails with `near_ctx` | a baseline prompt plus its output budget reached the 16384-token context; report it before running the GPU steps |
-| `run_all.sh study` exits 4 | see the exit-status table: the gate must be PASSED, the pre-registration committed, the tree clean, and the gate files unchanged since the freeze |
+| `run_all.sh <stage>` exits 4 | a test split is locked; see `results/p3/<stage>.md` |
 
 ## Rules of the repository
 

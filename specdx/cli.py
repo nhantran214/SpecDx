@@ -184,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--results", type=Path,
                         default=Path(os.environ.get("P3_RESULTS", "results/p3")))
         sp.add_argument("--work", type=Path, default=Path(os.environ.get("P3_WORK", "work")))
+        if name == "status":
+            sp.add_argument("--done", metavar="STAGE", default=None,
+                            help="exit 0 if STAGE finished with exit code 0, else 1")
         if name != "status" and name != "local":
             sp.add_argument("--manifest", type=Path,
                             default=Path("experiments/p3-sopbench-trajectories.json"))
@@ -203,10 +206,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _p3(args: argparse.Namespace) -> int:
     from specdx.report import p3
-    from specdx.report.stages import run_stage, update_status
+    from specdx.report.stages import already_done, run_stage, update_status
 
     results, work = args.results, args.work
     if args.p3_command == "status":
+        if args.done is not None:
+            return 0 if already_done(args.done, results) else 1
         update_status(results, work)
         return 0
     command = "specdx p3 " + args.p3_command

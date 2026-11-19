@@ -159,56 +159,46 @@ The headline is PASSED, NOT PASSED or INCOMPLETE (a mutant could not run). After
 | `nvidia-smi failed: … Driver/library version mismatch` | The NVIDIA driver was updated without a reboot, and Ollama cannot use the GPU. Reboot the GPU host (or reload the `nvidia` kernel modules) before any run. |
 | Runs take many minutes each | Check that `ollama ps` shows `100% GPU` for the loaded model; a model larger than the GPU runs partly on the CPU. |
 
-## 11. P2b: G2, G3 and gate v3 on a 48 GB host
+## 11. P3: SOPBench and τ²-bench
 
-P2a (no GPU) froze the v3.1 parameters at G0 and passed G1; `experiments/p2-preregistration.md` holds every value. P2b runs on a 48 GB GPU reached over an SSH tunnel, with SpecDx and PostgreSQL on this machine.
-
-**G2, the population (no GPU, no run).** Re-admit the cached P1b screen under the 0.3 act rate, which must admit at least 2 families and at least 4 acting models, and freeze its population into the gate configuration:
+P3 runs every experiment from one script, `./run_all.sh`. Each finished stage writes a Markdown report to `results/p3/<stage>.md` (and its metadata to `<stage>.json`), and **`results/p3/STATUS.md`** is the dashboard: one row per stage with its status, verdict, key number and a link to the report. Stages that later plans implement (P3b, P3c, P3d) show as `pending (plan Px)`.
 
 ```bash
-.venv/bin/specdx screen --from results/p1b-screen.json --out results/p2-screen
-jq --slurpfile s results/p2-screen.json '.models_by_family = $s[0].population' \
-  experiments/p2-gate.json > work/p2-gate.json && mv work/p2-gate.json experiments/p2-gate.json
-.venv/bin/python -m pytest tests/test_preregistration_v3.py
+./run_all.sh all             # every implemented stage in order; skips stages already done
+./run_all.sh local           # one stage
+./run_all.sh status          # rebuild results/p3/STATUS.md
+less results/p3/STATUS.md
 ```
 
-Exit status 3 is the G2 stop rule of spec v3.1 §7: fewer than 2 families, or fewer than 4 acting models, were admitted. P2 then stops and reports. Otherwise commit `experiments/p2-gate.json` (`results/` is git-ignored; the screen stays on disk).
+`all` skips a stage whose recorded exit code is 0 (`specdx p3 status --done <stage>`), and stops at the first non-zero exit. A stage that is not implemented yet prints `<stage>: pending — implemented in plan <Px>` and exits 0. While a stage runs, `work/p3-<stage>.pid` holds its pid and STATUS.md shows `running`; the file is removed when the stage ends, however it ends. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
 
-**The tunnel and the host.** On the GPU host: Ollama 0.30.4 with `OLLAMA_NUM_PARALLEL=2`, `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_KEEP_ALIVE=-1`, and the population's models pulled. Here:
+| Stage | What it does | Plan | State | Report |
+|---|---|---|---|---|
+| `local` | Local checks and tests | P3a | implemented | `results/p3/local.md` |
+| `fetch-sopbench` | Fetch SOPBench data | P3a | implemented | `results/p3/fetch-sopbench.md` |
+| `replication` | Offline replication on SOPBench | P3a | implemented | `results/p3/replication.md` |
+| `s3-screen` | S3 screen | P3b | pending | `results/p3/s3-screen.md` |
+| `s3-dev` | S3 development runs | P3b | pending | `results/p3/s3-dev.md` |
+| `s3-calibrate` | S3 calibration | P3b | pending | `results/p3/s3-calibrate.md` |
+| `s3-gate` | S3 gate | P3b | pending | `results/p3/s3-gate.md` |
+| `s3-baselines-dev` | S3 baselines on dev | P3b | pending | `results/p3/s3-baselines-dev.md` |
+| `s2-screen` | S2 screen | P3c | pending | `results/p3/s2-screen.md` |
+| `s2-dev` | S2 development runs | P3c | pending | `results/p3/s2-dev.md` |
+| `s2-calibrate` | S2 calibration | P3c | pending | `results/p3/s2-calibrate.md` |
+| `s2-gate` | S2 gate | P3c | pending | `results/p3/s2-gate.md` |
+| `s2-baselines-dev` | S2 baselines on dev | P3c | pending | `results/p3/s2-baselines-dev.md` |
+| `freeze` | Freeze the preregistration | P3b | pending | `results/p3/freeze.md` |
+| `s3-test` | S3 test split | P3b | pending | `results/p3/s3-test.md` |
+| `s2-test` | S2 test split | P3c | pending | `results/p3/s2-test.md` |
+| `s2-real` | S2 real-subject runs | P3c | pending | `results/p3/s2-real.md` |
+| `ablations` | Ablations | P3d | pending | `results/p3/ablations.md` |
+| `status` | Status dashboard | P3a | implemented | `results/p3/status.md` |
 
-```bash
-ssh -f -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-  -L 11435:localhost:11434 user@gpu-host               # backgrounds itself; or use autossh -M 0
-export SPECDX_OLLAMA_URL=http://localhost:11435
-.venv/bin/specdx doctor --profile gpu48                 # digests must equal the cached runs'
-```
+Exit codes: 0 done; 1 a check failed; 2 a usage or environment error; 3 a screen stop; 4 a test split is locked.
 
-The gate runs for days, so the tunnel must outlive the login shell and must notice a stalled link: the keep-alive options drop a dead link within about 90 s, and a connection failure is not cached as model behaviour, so re-run the same command once the tunnel is back; finished runs come from the cache (§7). `--workers` must never exceed the host's `OLLAMA_NUM_PARALLEL` (here 2), because queued requests can time out and be cached as model behaviour (§4).
+Only `fetch-sopbench` uses the network (the pinned SOPBench commit on raw.githubusercontent.com). Nothing in P3a calls Ollama, a hosted model, or the database, and `work/runs.jsonl` is never opened. Every S3 result is labelled `provisional: V3Params calibrated on CASE-0031, recalibrated for S3 in P3b`. Later local SOPBench runs, whose results depend on set iteration order, must be started with `PYTHONHASHSEED=0`.
 
-**G3, the smoke run (hours).** The base specification at budget 60, then the P1b smoke checks (1)–(3) (plan `docs/superpowers/plans/2026-10-11-specdx-p1b.md`, Task 18 Step 5), the v3 reading check that replaces P1b's check (4), and θ_m ≥ 0.5 for every population model. Check (1) is refined by the pre-registration's G3 amendment 2: a cached ReadTimeout passes only when the GPU host's Ollama log shows that the cancelled request spent at least 90% of the 180 s timeout decoding (a runaway generation, not a wait). Pipe the host's log for the smoke run's window into `.venv/bin/python -m specdx.eval.ollama_log --timeouts N`, where N counts the cached ReadTimeout claims; `run_all.sh g3` does this over `GPU_SSH` (`journalctl -u ollama`) or `OLLAMA_LOG_CMD`. A timeout that is not a runaway, or one with no log to classify it, stops P2. Check (4) tests |θ − 0.75| < 1e-9, v2's prior mode, which v3's θ = σ(μ_α) = 0.731 for a model that never acts can never equal; the pre-registration's G3 amendment (2026-10-19) requires at least one reading for each population model instead:
-
-```bash
-jq '.budget = 60' experiments/p2-gate.json > work/p2-smoke.json
-SPECDX_WORK=/home/ethan/AILab/SpecDx/work .venv/bin/specdx run --variant base \
-  --config work/p2-smoke.json --out results/p2-smoke-base.json --workers 2 2> work/p2-smoke.log
-jq -r '.theta | to_entries[] | "\(.key)\t\(.value)\t"
-  + (if .value >= 0.5 then "ok" else "BELOW 0.5" end)' results/p2-smoke-base.json
-jq -r --slurpfile g experiments/p2-gate.json '. as $r | $g[0].models_by_family[][] as $m
-  | ([$r.cells[].readings[$m] // 0] | add // 0) as $n
-  | "\($m)\t\($n) readings\t" + (if $n > 0 then "ok" else "NO READINGS" end)' results/p2-smoke-base.json
-jq '{converged, iterations, fit_start}' results/p2-smoke-base.json
-```
-
-A model below 0.5, a `NO READINGS` line (a model that never acted, whose θ would otherwise pass vacuously) or a failed smoke check stops P2 before the gate (spec v3.1 §8.2, G3). `converged` is reported with the result, never a stop (§3.4; ruling F15). Report the measured seconds per run to the author before launching the gate.
-
-**Gate v3 (days).** Detached, resumable as in §6 and §7:
-
-```bash
-SPECDX_WORK=/home/ethan/AILab/SpecDx/work setsid nohup .venv/bin/specdx gate \
-  --config experiments/p2-gate.json --out results/p2-gate.json --workers 2 \
-  > work/p2-gate.log 2>&1 < /dev/null &
-echo $! > work/p2-gate.pid
-```
+The CASE-0031 steps (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`) are no longer in `run_all.sh`. Their `specdx` commands remain, and §12 and §13 are kept as the record of how they ran.
 
 ## 12. Reproducing G0 and G1 (P2a, CPU only)
 
