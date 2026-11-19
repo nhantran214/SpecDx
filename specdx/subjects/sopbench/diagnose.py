@@ -41,8 +41,11 @@ def diagnose_domain(
     domain: str, cd: S3CellData, models: Mapping[str, str], params: V3Params = DEFAULT_PARAMS
 ) -> S3Diagnosis:
     """Fit the anchored model, type its cells, and add each task's multi-check
-    contradictions: the soft minimal hitting sets of size ≥ 2 over the runs' V(b), weighted
-    by each run's faithful weight. models: model → family for the population."""
+    contradictions: the soft minimal hitting sets of size ≥ 2 over every run's V(b), clean
+    runs included, weighted by each run's faithful weight, as scores.hitting_candidates
+    does for diagnose_v3. Offline no candidate is refuted, so each is reported with the
+    hidden findings' note, and its witnesses are the runs whose V(b) meets it.
+    models: model → family for the population."""
     data = cd.data
     fit = fit_anchored(data.cells, data.readings, models=models, params=params)
     by_cell = data.by_cell()
@@ -55,12 +58,13 @@ def diagnose_domain(
     for r in data.readings:
         runs_of.setdefault(r.scenario, set()).add(r.run_key)
     for scenario in sorted(runs_of):
-        weighted = [(cd.violated[rk], fit.weights.get(rk, 0.0))
-                    for rk in sorted(runs_of[scenario]) if cd.violated[rk]]
+        keys = sorted(runs_of[scenario])
+        weighted = [(cd.violated[rk], fit.weights.get(rk, 0.0)) for rk in keys]
         for hitting, mass in soft_hitting_sets(weighted, tau=TAU, max_size=MAX_SIZE):
             if len(hitting) >= 2:
+                witnesses = tuple(rk for rk in keys if cd.violated[rk] & hitting)
                 defects.append(Defect("contradiction", tuple(sorted(hitting)), (scenario,),
-                                      (), mass))
+                                      witnesses, mass, OFFLINE))
     defects.sort(key=lambda d: (-d.score, d.key))
     raters = tuple(sorted({r.model for r in data.readings}))
     return S3Diagnosis(domain, raters, fit, defects)

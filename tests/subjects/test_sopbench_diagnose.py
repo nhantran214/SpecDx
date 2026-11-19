@@ -105,8 +105,24 @@ def test_two_checks_violated_together_by_most_runs_give_a_contradiction():
     assert len(found) == 1
     assert found[0].scenarios == (f"{DOMAIN}:0",)
     assert found[0].score == pytest.approx(1.0)
+    # No executor refutes it offline (ruling I2), and every run of the task meets the pair.
+    assert found[0].note == "refutation not attempted (offline)"
+    assert found[0].witnesses == tuple(sorted(f"{m}|{DOMAIN}|0" for m in RATERS))
     scores = [d.score for d in dx.defects]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_clean_runs_dilute_the_hitting_mass_so_disjoint_single_violations_give_none():
+    task = _task(0)
+    models = sorted(RATERS)
+    # Four clean runs and two runs that each violate a different single check: as in
+    # diagnose_v3, every run of the task enters the hitting sets (ruling I1), so the pair
+    # hits a third of the mass, not all of it.
+    runs = [_run(0, m) for m in models[:4]]
+    runs += [_run(0, models[4], db=False), _run(0, models[5], con=False)]
+    others = [_task(i) for i in range(1, 4)]
+    _, dx = _diagnose([task, *others], runs + _agreeing(others))
+    assert not [d for d in dx.defects if d.type == "contradiction"]
 
 
 def test_compose_splits_open_and_hosted_raters():
