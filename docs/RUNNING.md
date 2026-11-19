@@ -189,7 +189,7 @@ The gate runs for days, so the tunnel must outlive the login shell and must noti
 
 ```bash
 jq '.budget = 60' experiments/p2-gate.json > work/p2-smoke.json
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/specdx run --variant base \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work .venv/bin/specdx run --variant base \
   --config work/p2-smoke.json --out results/p2-smoke-base.json --workers 2 2> work/p2-smoke.log
 jq -r '.theta | to_entries[] | "\(.key)\t\(.value)\t"
   + (if .value >= 0.5 then "ok" else "BELOW 0.5" end)' results/p2-smoke-base.json
@@ -204,7 +204,7 @@ A model below 0.5, a `NO READINGS` line (a model that never acted, whose θ woul
 **Gate v3 (days).** Detached, resumable as in §6 and §7:
 
 ```bash
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work setsid nohup .venv/bin/specdx gate \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work setsid nohup .venv/bin/specdx gate \
   --config experiments/p2-gate.json --out results/p2-gate.json --workers 2 \
   > work/p2-gate.log 2>&1 < /dev/null &
 echo $! > work/p2-gate.pid
@@ -220,13 +220,13 @@ To reproduce, write to a scratch directory outside the repository's `work/` (the
 
 ```bash
 out=$(mktemp -d); echo "$out"
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python -m specdx.sim.calibrate \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work .venv/bin/python -m specdx.sim.calibrate \
   --out "$out/p2-calibration.json"                              # seconds
 .venv/bin/python -m specdx.sim.g0 run --calibration "$out/p2-calibration.json" \
   --out "$out/p2-g0" --params-out "$out/p2-g0-params.json"      # about 56 min (3354 s recorded); exit 0 PASS, 1 FAIL, 2 error
 .venv/bin/specdx simulate --sweep all --config "$out/p2-calibration.json" \
   --params "$out/p2-g0-params.json" --out "$out/p2-sim" > /dev/null   # about 20 min (1195 s recorded)
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work .venv/bin/python experiments/p2_replay.py \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work .venv/bin/python experiments/p2_replay.py \
   --out "$out/p2-g1.md"                                         # about 20 s; exit 0 PASS, 1 FAIL, 2 error
 ```
 
@@ -254,13 +254,13 @@ Before any GPU time, `./run_all.sh local` also runs every baseline arm on its sm
 The commands `run_all.sh` runs, for reference (`study` accepts only these two files):
 
 ```bash
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localhost:11435 \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work SPECDX_OLLAMA_URL=http://localhost:11435 \
   .venv/bin/specdx baselines --split dev --config experiments/p2-gate.json \
   --out results/p3-baselines-dev.json --workers 2
 .venv/bin/specdx freeze-baselines --from results/p3-baselines-dev.json \
   --out experiments/p3-baselines-prereg --cache work/baseline-llm.jsonl \
   --gate-config experiments/p2-gate.json --gate-result results/p2-gate.json
-SPECDX_WORK=/home/ethan/AILab/TonomyX-paper/work SPECDX_OLLAMA_URL=http://localhost:11435 \
+SPECDX_WORK=/home/ethan/AILab/SpecDx/work SPECDX_OLLAMA_URL=http://localhost:11435 \
   .venv/bin/specdx study --split test --config experiments/p2-gate.json \
   --baselines experiments/p3-baselines-prereg.json --out results/p3-study.json --workers 2
 .venv/bin/specdx report --dev results/p3-baselines-dev.json --test results/p3-study.json \

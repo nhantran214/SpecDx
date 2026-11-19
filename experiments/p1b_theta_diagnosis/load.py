@@ -14,7 +14,7 @@ from pathlib import Path
 
 SCRATCH = Path(__file__).resolve().parent
 os.environ["SPECDX_WORK"] = str(SCRATCH / "work")  # nothing defaults to the real work dir
-RUNS = Path("/home/ethan/AILab/TonomyX-paper/work/runs.jsonl")
+RUNS = Path("/home/ethan/AILab/SpecDx/work/runs.jsonl")
 
 from tonomyx.canon.pack import CanonPack  # noqa: E402
 

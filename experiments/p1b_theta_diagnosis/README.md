@@ -4,7 +4,7 @@ These are the analysis scripts behind `results/p1b-theta-diagnosis.md`. They wer
 
 ## Inputs and outputs
 
-- **Reads.** The P1 run cache at `/home/ethan/AILab/TonomyX-paper/work/runs.jsonl`, read-only. `load.py` uses lines up to 6505:
+- **Reads.** The P1 run cache at `/home/ethan/AILab/SpecDx/work/runs.jsonl`, read-only. `load.py` uses lines up to 6505:
   - the P1 base population;
   - the 60 smoke population runs, lines 6319–6505.
 - **Writes.** Only `data.pkl` and `work/`, next to the scripts. Both are git-ignored.
