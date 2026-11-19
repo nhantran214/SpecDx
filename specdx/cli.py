@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import os
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -173,12 +174,67 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--dev", type=Path, required=True)
     rp.add_argument("--test", type=Path)
     rp.add_argument("--out", type=Path, required=True)
+    p3 = sub.add_parser("p3", help="the P3 experiment stages (reports in results/p3)")
+    p3sub = p3.add_subparsers(dest="p3_command", required=True)
+    for name, text in (("fetch-sopbench", "download SOPBench's published trajectories"),
+                       ("replication", "offline replication of the S3 diagnosis"),
+                       ("local", "local tests, lint and a replication smoke"),
+                       ("status", "rebuild STATUS.md")):
+        sp = p3sub.add_parser(name, help=text)
+        sp.add_argument("--results", type=Path,
+                        default=Path(os.environ.get("P3_RESULTS", "results/p3")))
+        sp.add_argument("--work", type=Path, default=Path(os.environ.get("P3_WORK", "work")))
+        if name != "status" and name != "local":
+            sp.add_argument("--manifest", type=Path,
+                            default=Path("experiments/p3-sopbench-trajectories.json"))
+        if name == "fetch-sopbench":
+            sp.add_argument("--dest", type=Path, default=None,
+                            help="default: <work>/sopbench-output")
+        if name in ("replication", "local"):
+            sp.add_argument("--trajectories", type=Path, default=None,
+                            help="default: <work>/sopbench-output")
+        if name == "replication":
+            sp.add_argument("--domains", default=None, help="comma-separated; default: all")
+        if name == "local":
+            sp.add_argument("--manifest", type=Path,
+                            default=Path("experiments/p3-sopbench-trajectories.json"))
     return parser
+
+
+def _p3(args: argparse.Namespace) -> int:
+    from specdx.report import p3
+    from specdx.report.stages import run_stage, update_status
+
+    results, work = args.results, args.work
+    if args.p3_command == "status":
+        update_status(results, work)
+        return 0
+    command = "specdx p3 " + args.p3_command
+    traj = getattr(args, "trajectories", None) or work / "sopbench-output"
+    if args.p3_command == "fetch-sopbench":
+        dest = args.dest or work / "sopbench-output"
+
+        def stage():
+            return p3.fetch_stage(dest, args.manifest)
+    elif args.p3_command == "replication":
+        domains = [d.strip() for d in args.domains.split(",") if d.strip()] \
+            if args.domains else None
+
+        def stage():
+            return p3.replication_stage(manifest=args.manifest, trajectories=traj,
+                                        domains=domains)
+    else:
+        def stage():
+            return p3.local_stage(manifest=args.manifest, trajectories=traj)
+    return run_stage(args.p3_command, stage, command=command, results=results, work=work)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     _log_progress()
     args = build_parser().parse_args(argv)
+
+    if args.command == "p3":
+        return _p3(args)
 
     if args.command == "build-tell":
         from specdx.spec.tell import pdf_chunks

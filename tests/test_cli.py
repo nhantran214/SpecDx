@@ -625,3 +625,18 @@ def test_freeze_baselines_refuses_to_replace_a_frozen_preregistration_without_fo
     assert not out.with_suffix(".md").exists()
     assert main(["freeze-baselines", "--from", str(src), "--out", str(out), "--force"]) == 0
     assert out.with_suffix(".json").read_text() != "frozen" and out.with_suffix(".md").exists()
+
+
+def test_p3_subcommands_parse() -> None:
+    from specdx.cli import build_parser
+
+    parser = build_parser()
+    for argv, command in (
+        (["p3", "fetch-sopbench"], "fetch-sopbench"),
+        (["p3", "replication", "--domains", "library,bank"], "replication"),
+        (["p3", "local"], "local"),
+        (["p3", "status", "--results", "r"], "status"),
+    ):
+        args = parser.parse_args(argv)
+        assert (args.command, args.p3_command) == ("p3", command)
+    assert parser.parse_args(["p3", "replication", "--domains", "a,b"]).domains == "a,b"

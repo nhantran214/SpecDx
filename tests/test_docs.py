@@ -16,7 +16,7 @@ RUNNING = ROOT / "docs" / "RUNNING.md"
 def _subcommands(capsys) -> set[str]:
     with pytest.raises(SystemExit):
         main(["--help"])
-    match = re.search(r"\{([a-z,-]+)\}", capsys.readouterr().out)
+    match = re.search(r"\{([a-z0-9,-]+)\}", capsys.readouterr().out)
     assert match is not None
     return set(match.group(1).split(","))
 
