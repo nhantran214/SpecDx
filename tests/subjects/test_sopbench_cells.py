@@ -1,5 +1,5 @@
 from specdx.infer.cells import SATISFIED, VIOLATED
-from specdx.subjects.sopbench.cells import cell_id, cells_for, tell_for
+from specdx.subjects.sopbench.cells import cell_id, cells_for, prompt_variants, tell_for
 from specdx.subjects.sopbench.load import S3Run, S3Task
 
 
@@ -54,8 +54,9 @@ def test_violated_lists_only_the_checks_the_run_failed():
 
 
 def test_tell_has_one_chunk_per_task_and_counts_prompt_disagreements():
-    runs = [_run(0, "a", prompt="A\n\n B \n"), _run(0, "b", prompt="A\n\n B \n"),
-            _run(0, "c", prompt="other"), _run(1, "a", prompt="Z")]
+    # The first run's prompt is the minority render: T must come from the majority (I-3).
+    runs = [_run(0, "c", prompt="other"), _run(0, "a", prompt="A\n\n B \n"),
+            _run(0, "b", prompt="A\n\n B \n"), _run(1, "a", prompt="Z")]
     corpus, differ = tell_for("library", runs)
     assert differ == 1
     assert [c.id for c in corpus.chunks] == ["s3:library:0", "s3:library:1"]
@@ -63,3 +64,37 @@ def test_tell_has_one_chunk_per_task_and_counts_prompt_disagreements():
     assert c0.source == "sopbench"
     assert [(s.id, s.text) for s in c0.sentences] == [
         ("s3:library:0:00", "A"), ("s3:library:0:01", "B")]
+
+
+def test_clean_also_needs_the_outcome_reading_to_equal_its_anchor():
+    # Ruling I-6: a refusal of a should-succeed task deviates at an anchored value cell, so
+    # it violates that cell's golden clause and is not clean, even with every check met.
+    tasks = [_task(0, True), _task(1, False, "renew")]
+    runs = [_run(0, "refuser", ok=False), _run(0, "doer", ok=True),
+            _run(1, "refuser", ok=False), _run(1, "doer", ok=True)]
+    clean = {(r.run_key, r.cell.rsplit(":", 1)[1]): r.clean
+             for r in cells_for(tasks, runs).data.readings}
+    assert not clean[("refuser|library|0", "outcome")]
+    assert not clean[("refuser|library|0", "db_match")]
+    assert clean[("doer|library|0", "outcome")]
+    assert clean[("refuser|library|1", "process")]
+    assert not clean[("doer|library|1", "constraints")]
+
+
+def test_prompt_variants_are_decided_per_run_by_frequency_within_each_task():
+    # Ruling I-3: the most common prompt of a task is variant 0; the others follow by
+    # decreasing frequency, ties broken by the string; one model may see several renders.
+    runs = [_run(0, "a", prompt="old"), _run(0, "b", prompt="new"),
+            _run(0, "c", prompt="new"), _run(0, "d", prompt="y"), _run(0, "e", prompt="x"),
+            _run(1, "a", prompt="new"), _run(1, "b", prompt="old"), _run(1, "c", prompt="old")]
+    v = prompt_variants(runs)
+    assert v == {"a|library|0": 1, "b|library|0": 0, "c|library|0": 0, "d|library|0": 3,
+                 "e|library|0": 2, "a|library|1": 1, "b|library|1": 0, "c|library|1": 0}
+    data = cells_for([_task(0), _task(1)], runs).data
+    assert {(r.run_key, r.variant) for r in data.readings} == set(v.items())
+
+
+def test_cells_for_takes_variants_decided_over_a_larger_population():
+    runs = [_run(0, "a", prompt="old"), _run(0, "b", prompt="new")]
+    data = cells_for([_task(0)], runs[:1], variants={"a|library|0": 1}).data
+    assert {r.variant for r in data.readings} == {1}

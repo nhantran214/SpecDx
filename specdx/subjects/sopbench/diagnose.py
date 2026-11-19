@@ -45,7 +45,14 @@ def diagnose_domain(
     runs included, weighted by each run's faithful weight, as scores.hitting_candidates
     does for diagnose_v3. Offline no candidate is refuted, so each is reported with the
     hidden findings' note, and its witnesses are the runs whose V(b) meets it.
-    models: model → family for the population."""
+
+    Three offline adaptations of diagnose_v3, all ruled: (I1) hitting sets over every run;
+    (I2) unrefuted contradictions reported with the offline note; and (M-1) no
+    observability stage and no ``_note``. S3 cells have no steps (``steps=()``), so v3's
+    observability stage would type every finding UNOBSERVABLE and ``_note`` would fail on
+    ``steps[0]``; but every run without a tool error reads all four cells of its task, so
+    every cell is observed and the stage has nothing to decide.
+    models: model → family for the population (canonical model names)."""
     data = cd.data
     fit = fit_anchored(data.cells, data.readings, models=models, params=params)
     by_cell = data.by_cell()

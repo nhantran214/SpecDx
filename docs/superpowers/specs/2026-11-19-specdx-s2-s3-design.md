@@ -372,7 +372,8 @@ A subject's failure stops that subject's later stages only; the other subject co
 | `s3:<domain>:<task>:process` | constraint | satisfied, violated | satisfied | `dirgraph_satisfied` |
 
 - The outcome cell carries the SOP reading. A vague or wrong constraint splits the population between doing the action and refusing it, which is the ambiguity signal on a binary cell.
-- A run is `clean` when its three constraint cells are satisfied.
+- A run is `clean` when its three constraint cells are satisfied and its outcome reading equals the outcome cell's anchor: clean = db_match ∧ constraints ∧ process ∧ (outcome reading = anchor).
+  - *Amended 2026-11-20 (P3a final review, I-6).* The first text omitted the outcome conjunct. By v3's weak-check rule (v3 design §5.4: the behaviour must satisfy **every clause of C** relevant at the item; `Reading.clean` in `specdx/infer/cells.py`), a reading that deviates at an anchored value cell violates that cell's golden clause, so the run is not clean. Without the conjunct, a refusal of a should-succeed task passes all three replayed checks and every such outcome cell became a weak check.
 - V(b) is the set of a run's violated constraint cells.
 - `no_tool_call_error` is the agent's error, not the specification's. A run with `no_tool_call_error` false is excluded from readings and counted.
 - T is the rendered system prompt that SOPBench stores per run (`interactions[i].prompt`), split into sentences. It is identical across models for the same task.

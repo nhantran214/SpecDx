@@ -2,6 +2,8 @@
 anchored model at the default V3Params (ruling F2): the asserted types are what the model
 really does there. The S3CellData come from hand-built tasks and runs through cells_for."""
 
+import json
+
 import pytest
 
 from specdx.subjects.sopbench.cells import S3CellData, cell_id, cells_for
@@ -12,7 +14,8 @@ from specdx.subjects.sopbench.diagnose import (
     compose,
     diagnose_domain,
 )
-from specdx.subjects.sopbench.load import S3Run, S3Task
+from specdx.subjects.sopbench.load import S3Run, S3Task, load_runs, load_tasks
+from specdx.subjects.sopbench.trajectories import parse_name
 
 DOMAIN = "library"
 # Six raters from three families.
@@ -135,3 +138,26 @@ def test_compose_splits_open_and_hosted_raters():
         "gpt-4o", "gpt-4o-mini", "gemini-2.5-pro", "gemini-2.5-flash"}
     with pytest.raises(ValueError, match="composition"):
         compose(runs, "closed")
+
+
+def test_a_fireworks_file_loads_as_its_open_weight_model(tmp_path):
+    # Ruling I-1: the rater is the canonical name, so a provider's copy of llama3.1-70b or
+    # qwen2.5-72b counts as open-weight in every domain.
+    task = load_tasks("library")[0]
+    record = {"task": {"user_prompt": task.user_prompt, "user_goal": task.user_goal,
+                       "action_should_succeed": task.should_succeed,
+                       "user_known": task.user_known,
+                       "constraint_parameters": task.constraint_parameters},
+              "interactions": [{"prompt": "P"}],
+              "evaluations": [{"action_successfully_called": True, "database_match": True,
+                               "constraint_not_violated": True, "dirgraph_satisfied": True,
+                               "no_tool_call_error": True}]}
+    runs = []
+    for model, family in (("qwen2.5-72b-it-fireworks", "qwen"), ("gpt-4o", "openai")):
+        path = tmp_path / f"{model}.json"
+        path.write_text(json.dumps([record]))
+        name = parse_name(f"output/library/ast_{model}-mode_fc-dep_full-fmt_structured-"
+                          "tool_full-shuffle_False.json", 1)
+        runs += load_runs(path, name, family, [task])[0]
+    assert [r.model for r in compose(runs, "open")] == ["qwen2.5-72b-instruct"]
+    assert [r.model for r in compose(runs, "hosted")] == ["gpt-4o"]

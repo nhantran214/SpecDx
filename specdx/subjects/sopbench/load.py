@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from specdx.subjects.sopbench import SOPBENCH_DIR
@@ -17,15 +17,23 @@ class TrajectoryMismatch(ValueError):
 
 @dataclass(frozen=True)
 class S3Task:
+    """One task of a domain file. user_known and constraint_parameters are kept, as parsed,
+    only to check a trajectory record's alignment (they take no part in hashing)."""
+
     domain: str
     index: int
     user_goal: str
     should_succeed: bool
     user_prompt: str
+    user_known: object = field(default=None, hash=False)
+    constraint_parameters: object = field(default=None, hash=False)
 
 
 @dataclass(frozen=True)
 class S3Run:
+    """One published run. model is the canonical model name (TrajectoryName.canonical), so a
+    provider's copy of the same weights is the same rater (ruling I-1)."""
+
     domain: str
     task: int
     model: str
@@ -62,9 +70,21 @@ def load_tasks(domain: str, root: Path = SOPBENCH_DIR) -> list[S3Task]:
                     user_goal=goal,
                     should_succeed=bool(t["action_should_succeed"]),
                     user_prompt=t["user_prompt"],
+                    user_known=t["user_known"],
+                    constraint_parameters=t["constraint_parameters"],
                 )
             )
     return tasks
+
+
+def _aligned(rec_task: dict, task: S3Task) -> bool:
+    """A record belongs to its task when every identifying field agrees. user_prompt alone is
+    not enough: university tasks 0-6 share one prompt but differ in their label (ruling I-5)."""
+    return (rec_task["user_prompt"] == task.user_prompt
+            and rec_task["user_goal"] == task.user_goal
+            and bool(rec_task["action_should_succeed"]) == task.should_succeed
+            and rec_task["user_known"] == task.user_known
+            and rec_task["constraint_parameters"] == task.constraint_parameters)
 
 
 def load_runs(
@@ -81,7 +101,7 @@ def load_runs(
     runs: list[S3Run] = []
     missing = 0
     for i, (rec, task) in enumerate(zip(records, tasks, strict=True)):
-        if rec["task"]["user_prompt"] != task.user_prompt:
+        if not _aligned(rec["task"], task):
             raise TrajectoryMismatch(f"{path}: record {i} does not match task {i}")
         if not rec.get("evaluations"):
             missing += 1
@@ -91,7 +111,7 @@ def load_runs(
             S3Run(
                 domain=task.domain,
                 task=task.index,
-                model=name.model,
+                model=name.canonical,
                 family=family,
                 mode=name.mode,
                 succeeded=bool(ev["action_successfully_called"]),

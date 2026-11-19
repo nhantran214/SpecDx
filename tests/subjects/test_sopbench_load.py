@@ -10,7 +10,11 @@ from specdx.subjects.sopbench.load import (
     load_runs,
     load_tasks,
 )
-from specdx.subjects.sopbench.trajectories import TrajectoryError, TrajectoryName
+from specdx.subjects.sopbench.trajectories import (
+    TrajectoryError,
+    TrajectoryName,
+    parse_name,
+)
 
 
 def _name() -> TrajectoryName:
@@ -20,11 +24,17 @@ def _name() -> TrajectoryName:
     )
 
 
-def _record(task: S3Task, evaluations: list[dict]) -> dict:
+def _task_fields(task: S3Task) -> dict:
+    return {"user_prompt": task.user_prompt, "user_goal": task.user_goal,
+            "action_should_succeed": task.should_succeed, "user_known": task.user_known,
+            "constraint_parameters": task.constraint_parameters}
+
+
+def _record(task: S3Task, evaluations: list[dict], **task_over) -> dict:
     return {
         "domain": task.domain,
         "setup": {},
-        "task": {"user_prompt": task.user_prompt},
+        "task": _task_fields(task) | task_over,
         "interactions": [{"prompt": f"P{task.index}", "interaction": [], "database": {}}],
         "evaluations": evaluations,
     }
@@ -97,3 +107,46 @@ def test_an_empty_file_raises_trajectory_error(tmp_path):
     for body in ("", "{}", "not json"):
         with pytest.raises(TrajectoryError):
             load_runs(_write(tmp_path, body), _name(), "openai", tasks)
+
+
+def test_a_run_is_keyed_by_the_canonical_model_name(tmp_path):
+    # Ruling I-1: a fireworks file is the same weights as the -instruct model.
+    tasks = load_tasks("library")[:1]
+    name = parse_name("output/library/ast_llama3.1-70b-it-fireworks-mode_fc-dep_full-"
+                      "fmt_structured-tool_full-shuffle_False.json", 1)
+    (run,), _ = load_runs(_write(tmp_path, [_record(tasks[0], [_eval()])]), name, "meta",
+                          tasks)
+    assert run.model == "llama3.1-70b-instruct"
+    assert run.run_key == "llama3.1-70b-instruct|library|0"
+
+
+def test_load_tasks_keeps_the_alignment_fields():
+    raw = json.loads((SOPBENCH_DIR / "data" / "university_tasks.json").read_text())
+    first = next(iter(raw.values()))[0]
+    t = load_tasks("university")[0]
+    assert t.user_known == first["user_known"]
+    assert t.constraint_parameters == first["constraint_parameters"]
+
+
+def test_a_shift_inside_a_block_of_identical_prompts_raises_mismatch(tmp_path):
+    # Ruling I-5: university tasks 0-6 share one user_prompt; only task 0 should succeed.
+    tasks = load_tasks("university")[:7]
+    assert len({t.user_prompt for t in tasks}) == 1
+    assert [t.should_succeed for t in tasks] == [True] + [False] * 6
+    recs = [_record(t, [_eval()]) for t in tasks]
+    recs[0], recs[1] = recs[1], recs[0]
+    with pytest.raises(TrajectoryMismatch):
+        load_runs(_write(tmp_path, recs), _name(), "openai", tasks)
+
+
+@pytest.mark.parametrize("field", ["action_should_succeed", "user_known",
+                                   "constraint_parameters", "user_goal"])
+def test_each_alignment_field_is_compared(tmp_path, field):
+    tasks = load_tasks("library")[:2]
+    recs = [_record(tasks[0], [_eval()]), _record(tasks[1], [_eval()])]
+    recs[1]["task"][field] = {"action_should_succeed": not tasks[1].should_succeed,
+                              "user_known": {"other": 1},
+                              "constraint_parameters": {"other": 1},
+                              "user_goal": "other_goal"}[field]
+    with pytest.raises(TrajectoryMismatch, match="record 1"):
+        load_runs(_write(tmp_path, recs), _name(), "openai", tasks)
