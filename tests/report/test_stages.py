@@ -1,0 +1,81 @@
+import json
+import os
+
+from specdx.report import stages
+from specdx.report.stages import STAGES, StageOutcome, already_done, run_stage, update_status
+
+
+def fake_git(args):
+    return " M file.py\n" if args[0] == "status" else "abc1234\n"
+
+
+def _run(tmp_path, name, fn, **kw):
+    return run_stage(
+        name, fn, command=f"specdx p3 {name}", results=tmp_path / "res",
+        work=tmp_path / "work", git=fake_git, **kw,
+    )
+
+
+def test_run_stage_writes_header_rows_and_body(tmp_path):
+    code = _run(
+        tmp_path, "local",
+        lambda: StageOutcome(0, "PASS", "42", "hello body", {"a": 1}),
+        subject="s", split="dev",
+    )
+    assert code == 0
+    text = (tmp_path / "res" / "local.md").read_text()
+    for row in ("Started", "Ended", "Duration", "Commit", "Command", "Exit code",
+                "Subject", "Split", "Verdict"):
+        assert f"| {row} |" in text
+    assert "PASS" in text and "abc1234 (dirty)" in text
+    assert "## Results" in text and "hello body" in text
+    assert json.loads((tmp_path / "res" / "local.data.json").read_text()) == {"a": 1}
+    assert json.loads((tmp_path / "res" / "local.json").read_text())["exit_code"] == 0
+    assert (tmp_path / "res" / "STATUS.md").exists()
+
+
+def test_an_exception_becomes_exit_2_with_the_traceback_in_the_report(tmp_path):
+    def boom():
+        raise ValueError("kaboom-marker")
+
+    assert _run(tmp_path, "local", boom) == 2
+    text = (tmp_path / "res" / "local.md").read_text()
+    assert "kaboom-marker" in text and "FAIL" in text and "Traceback" in text
+
+
+def test_already_done_only_after_exit_0(tmp_path):
+    res = tmp_path / "res"
+    assert not already_done("local", res)
+    _run(tmp_path, "local", lambda: StageOutcome(1, "FAIL", "", "x"))
+    assert not already_done("local", res)
+    _run(tmp_path, "local", lambda: StageOutcome(0, "PASS", "", "x"))
+    assert already_done("local", res)
+
+
+def test_status_lists_every_stage_in_order_with_pending_for_later_plans(tmp_path):
+    _run(tmp_path, "local", lambda: StageOutcome(0, "PASS", "7", "x"))
+    path = update_status(tmp_path / "res", tmp_path / "work")
+    text = path.read_text()
+    assert "| Stage | Plan | Status | Verdict | Key number | Ended | Duration | Report |" in text
+    pos = [text.index(f"| {s.name} |") for s in STAGES]
+    assert pos == sorted(pos)
+    assert "pending (plan P3b)" in text and "pending (plan P3d)" in text
+    assert "not run" in text and "done" in text
+
+
+def test_status_shows_running_for_a_live_pid_file(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "p3-replication.pid").write_text(str(os.getpid()))
+    (work / "p3-fetch-sopbench.pid").write_text("999999999")
+    text = update_status(tmp_path / "res", work).read_text()
+    lines = text.splitlines()
+    rep = next(x for x in lines if x.startswith("| replication |"))
+    fetch = next(x for x in lines if x.startswith("| fetch-sopbench |"))
+    assert "running" in rep and "running" not in fetch
+
+
+def test_stage_names_unique_and_default_git_runs():
+    assert len({s.name for s in STAGES}) == len(STAGES) == 19
+    sha, state = stages.git_state()
+    assert state in ("clean", "dirty") and sha
