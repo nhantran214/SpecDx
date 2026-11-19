@@ -170,7 +170,7 @@ P3 runs every experiment from one script, `./run_all.sh`. Each finished stage wr
 less results/p3/STATUS.md
 ```
 
-`all` skips a stage whose recorded exit code is 0 (`specdx p3 status --done <stage>`), and stops at the first non-zero exit. A stage that is not implemented yet prints `<stage>: pending — implemented in plan <Px>` and exits 0. While a stage runs, `work/p3-<stage>.pid` holds its pid and STATUS.md shows `running`; the file is removed when the stage ends, however it ends. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
+`all` skips a stage whose recorded exit code is 0 (`specdx p3 status --done <stage>`), and stops at the first non-zero exit. The skip ignores the commit: when a done stage was recorded at another commit than HEAD, `specdx p3 status` (and so `run_all.sh`) prints a warning, and deleting `results/p3/<stage>.json` makes the stage run again. A stage that is not implemented yet prints `<stage>: pending — implemented in plan <Px>` and exits 0. While a stage runs, `work/p3-<stage>.pid` holds its pid and STATUS.md shows `running`; the file is removed when the stage ends, however it ends. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
 
 | Stage | What it does | Plan | State | Report |
 |---|---|---|---|---|
@@ -223,6 +223,8 @@ SPECDX_WORK=/home/ethan/AILab/SpecDx/work .venv/bin/python experiments/p2_replay
 Each output should equal the committed file: `cmp "$out/p2-calibration.json" results/p2-calibration.json`; for G0, `diff <(jq -S 'del(.seconds, .calibration)' "$out/p2-g0.json") <(jq -S 'del(.seconds, .calibration)' results/p2-g0.json)` (the run time and the calibration path differ by construction); `diff "$out/p2-g1.md" results/p2-g1.md`. The G1 replay uses the frozen `V3Params` in the code, so it is the same at any later commit.
 
 ## 13. The comparison study (baselines)
+
+> **Historical.** This section records how the CASE-0031 comparison study was meant to run. The `run_all.sh` steps it names (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`, and `all --yes`) no longer exist: `./run_all.sh` now drives the P3 stages of §11. The `specdx` commands at the end of this section still exist.
 
 Once the gate (§11) has finished, P3 compares SpecDx with the baselines (B1 to B5, the truth-inference arms and JEST, and the gate's secondary arms B2-naive and B3-2PL, untuned). `run_all.sh` drives it; each step checks the one before it.
 

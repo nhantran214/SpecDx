@@ -195,6 +195,22 @@ def already_done(name: str, results: Path) -> bool:
     return meta is not None and meta.get("exit_code") == 0
 
 
+def stale_commit(name: str, results: Path, git: GitFn | None = None) -> tuple[str, str] | None:
+    """(recorded commit, HEAD) when ``name`` is done but was recorded at another commit than
+    HEAD, else None. already_done ignores the commit, so callers warn with this (M-3)."""
+    meta = _meta(name, results)
+    if meta is None or meta.get("exit_code") != 0:
+        return None
+    head, _ = git_state(git)
+    recorded = str(meta.get("commit") or "unknown")
+    return None if recorded == head else (recorded, head)
+
+
+def stale_warning(name: str, recorded: str, head: str, results: Path) -> str:
+    return (f"warning: {name} was recorded at commit {recorded}, HEAD is {head}; delete "
+            f"{results / (name + '.json')} to run it again")
+
+
 def _pid_alive(pid_file: Path) -> bool:
     try:
         pid = int(pid_file.read_text().strip())
@@ -229,6 +245,8 @@ def update_status(results: Path, work: Path) -> Path:
             report = f"[{fname}]({fname})"
         if not st.implemented:
             status = f"pending (plan {st.plan})"
+        elif st.name == "status":
+            status = "n/a offline"  # the dashboard writes no metadata of its own (M-7)
         elif _pid_alive(work / f"p3-{st.name}.pid"):
             status = "running"
         elif meta is None:

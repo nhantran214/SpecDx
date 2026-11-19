@@ -82,7 +82,8 @@ def study_guard(root: Path, gate_json: Path, prereg_json: Path,
         except ValueError:
             return f"{path} is outside {root}, so it cannot be committed there"
         if git("ls-files", "--error-unmatch", rel).returncode != 0:
-            hint = ": run ./run_all.sh freeze-baselines" if path == prereg_json else ""
+            hint = (": run `specdx freeze-baselines` (docs/RUNNING.md §13)"
+                    if path == prereg_json else "")
             return f"{rel} is not committed{hint}"
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
         return "the working tree has uncommitted changes"
@@ -206,10 +207,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _p3(args: argparse.Namespace) -> int:
     from specdx.report import p3
-    from specdx.report.stages import already_done, run_stage, update_status
+    from specdx.report.stages import (
+        STAGES,
+        already_done,
+        run_stage,
+        stale_commit,
+        stale_warning,
+        update_status,
+    )
 
     results, work = args.results, args.work
     if args.p3_command == "status":
+        names = [args.done] if args.done is not None else [s.name for s in STAGES]
+        for name in names:
+            if (stale := stale_commit(name, results)) is not None:
+                print(stale_warning(name, *stale, results), file=sys.stderr)
         if args.done is not None:
             return 0 if already_done(args.done, results) else 1
         update_status(results, work)

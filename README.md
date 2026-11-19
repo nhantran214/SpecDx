@@ -240,7 +240,7 @@ A gate or study headline is PASSED, NOT PASSED or INCOMPLETE (some specification
 | `pdftotext` not found | install poppler, or copy `work/tell/` from a machine that built it |
 | `nvidia-smi failed: … version mismatch` | the NVIDIA driver was updated without a reboot; reboot the GPU host before any run |
 | runs take many minutes each | check that `ollama ps` shows `100% GPU`; a model larger than the GPU runs partly on the CPU |
-| `local` fails with `near_ctx` | a baseline prompt plus its output budget reached the 16384-token context; report it before running the GPU steps |
+| `run_all.sh local` fails | pytest, ruff or the library replication smoke failed; the tail of each is in `results/p3/local.md` |
 | `run_all.sh <stage>` exits 4 | a test split is locked; see `results/p3/<stage>.md` |
 
 ## Rules of the repository

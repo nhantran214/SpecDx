@@ -200,6 +200,8 @@ def test_study_refuses_an_uncommitted_preregistration(tmp_path) -> None:
     pre.write_text("{}")
     reason = study_guard(tmp_path, gate, pre)
     assert reason and "commit" in reason
+    # run_all.sh no longer has a freeze-baselines step; the hint names the specdx command.
+    assert "run_all.sh" not in reason and "specdx freeze-baselines" in reason
 
 
 def test_the_new_commands_parse() -> None:

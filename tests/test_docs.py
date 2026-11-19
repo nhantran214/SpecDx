@@ -101,6 +101,37 @@ def test_p3_status_done_reflects_the_stage_metadata(tmp_path) -> None:
     assert main(args) == 0
 
 
+def test_p3_status_warns_when_a_done_stage_was_recorded_at_another_commit(
+        tmp_path, capsys) -> None:
+    # M-3: `run_all.sh all` skips a done stage; after new commits that result is stale.
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "replication.json").write_text(json.dumps({"exit_code": 0, "commit": "0000000"}))
+    args = ["p3", "status", "--results", str(results), "--work", str(tmp_path / "w")]
+    assert main([*args, "--done", "replication"]) == 0
+    err = capsys.readouterr().err
+    assert "warning: replication was recorded at commit 0000000" in err
+    assert main(args) == 0
+    assert "warning: replication was recorded at commit 0000000" in capsys.readouterr().err
+
+
+def test_the_old_run_all_steps_are_marked_historical() -> None:
+    section = RUNNING.read_text(encoding="utf-8").split("## 13.", 1)[1].split("\n## ", 1)[0]
+    banner = section.split("\n\n", 2)[1]
+    assert banner.startswith("> **Historical.**") and "no longer exist" in banner
+
+
+def test_the_readme_troubleshooting_row_matches_the_local_stage() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "`local` fails with `near_ctx`" not in readme
+    assert "`run_all.sh local` fails" in readme
+
+
+def test_running_guide_warns_about_stale_results() -> None:
+    text = RUNNING.read_text(encoding="utf-8")
+    assert "recorded at another commit" in text
+
+
 def test_running_guide_describes_p3() -> None:
     text = RUNNING.read_text(encoding="utf-8")
     assert "P3: SOPBench and \u03c4\u00b2-bench" in text

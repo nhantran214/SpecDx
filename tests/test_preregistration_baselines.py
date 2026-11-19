@@ -28,7 +28,7 @@ def test_values_fixed_by_the_spec() -> None:
     assert freeze.FIXED["untuned"] == ["b2_naive", "b3_2pl", "b5_mus", "dawid_skene", "glad"]
 
 
-@pytest.mark.skipif(not DOC.exists(), reason="frozen by `run_all.sh freeze-baselines`")
+@pytest.mark.skipif(not DOC.exists(), reason="frozen by `specdx freeze-baselines`")
 def test_the_frozen_choices_match_their_markdown_and_the_fixed_values() -> None:
     doc = json.loads(DOC.read_text(encoding="utf-8"))
     body = freeze.canonical_json(doc)

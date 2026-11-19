@@ -2,7 +2,14 @@ import json
 import os
 
 from specdx.report import stages
-from specdx.report.stages import STAGES, StageOutcome, already_done, run_stage, update_status
+from specdx.report.stages import (
+    STAGES,
+    StageOutcome,
+    already_done,
+    run_stage,
+    stale_commit,
+    update_status,
+)
 
 
 def fake_git(args):
@@ -79,3 +86,23 @@ def test_stage_names_unique_and_default_git_runs():
     assert len({s.name for s in STAGES}) == len(STAGES) == 19
     sha, state = stages.git_state()
     assert state in ("clean", "dirty") and sha
+
+
+def test_the_status_row_reads_n_a_offline(tmp_path):
+    # M-7: `p3 status` writes no metadata of its own, so "not run" would always show.
+    text = update_status(tmp_path / "res", tmp_path / "work").read_text()
+    row = next(x for x in text.splitlines() if x.startswith("| status |"))
+    assert row.startswith("| status | P3a | n/a offline |")
+
+
+def test_stale_commit_names_a_done_stage_recorded_at_another_commit(tmp_path):
+    # M-3: the skip-when-done rule ignores the commit, so a stale result must be flagged.
+    res = tmp_path / "res"
+    _run(tmp_path, "local", lambda: StageOutcome(0, "PASS", "", "x"))
+    assert stale_commit("local", res, git=fake_git) is None
+    meta = json.loads((res / "local.json").read_text())
+    (res / "local.json").write_text(json.dumps(meta | {"commit": "fff0000"}))
+    assert stale_commit("local", res, git=fake_git) == ("fff0000", "abc1234")
+    (res / "local.json").write_text(json.dumps(meta | {"commit": "fff0000", "exit_code": 1}))
+    assert stale_commit("local", res, git=fake_git) is None
+    assert stale_commit("replication", res, git=fake_git) is None
