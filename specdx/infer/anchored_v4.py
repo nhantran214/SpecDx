@@ -398,11 +398,10 @@ def _posterior(
                            best.attractor, float(log_lr)), marginal
 
 
-# --- The outer fit (design v4 §3.3–§3.5; ruling T2-U) ---
+# --- The outer fit (design v4 §3.3–§3.5; ruling T2-U′: every cell enters the updates) ---
 
 _NEWTON_TOL = 1e-10
 _NEWTON_MAX = 50
-_FLIPS_TO_FREEZE = 3  # see _em: in, out, in, out → out for good
 
 
 @dataclass
@@ -410,9 +409,8 @@ class AnchoredFitV4:
     """v3's AnchoredFit fields with their meanings (alpha, theta = σ(α), family_effect,
     cells, weights, converged, iterations, params, start, starts), with v4's per-cell
     posteriors. weights: w_b per run key, the mean faithful probability over the cells the
-    behaviour read (undetermined cells included, as in v3). starts: each start's StartFit,
-    its score the composite profiled log posterior (_score). excluded: for the kept start,
-    the number of cells left out of the α and β_g update at each iteration (ruling T2-U)."""
+    behaviour read, as in v3. starts: each start's StartFit, its score the composite
+    profiled log posterior (_score)."""
 
     alpha: dict[str, float]
     theta: dict[str, float]
@@ -424,12 +422,11 @@ class AnchoredFitV4:
     params: V4Params
     start: str = "t3"
     starts: dict[str, StartFit] = field(default_factory=dict)
-    excluded: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class _Pairs:
-    """The M-step's data, one row j per (determined cell c, non-empty candidate set A).
+    """The M-step's data, one row j per (cell c, non-empty candidate set A).
     inside[j, m], total[j, m]: model m's composite-weighted readings at c that fall in A, and
     all of them; weight: post(A) at c; prec: w̄_c/cell_sd², with w̄_c the mean composite
     weight of c's readings; group: c's difficulty group; lo, hi: c's β_c box (T1-L′)."""
@@ -474,16 +471,15 @@ def _m_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
               − P_j·(β_c − β_g)²/2,
 
     with ω_j = post(A) and P_j = w̄_c/cell_sd² (_Pairs), the box fixed at the E-step's α.
-    When every reading of a cell weighs the same and no cell is left out (T2-U), Q is, up to
-    a constant, the EM minoriser of _score's objective at the current point (Jensen over A
-    with post(A) held fixed, then β_c re-profiled, which only raises it), so an EM iteration
-    cannot lower that score; otherwise it is the same step on the composite objective of
-    the cells used. A reading is faithful exactly when it lies in A (errors live outside
-    A), so the faithful probability r = Σ_A post(A)·1[y ∈ A] enters as these posterior-
-    weighted successes, and under ∅ neither α nor β_g enters the likelihood, so ∅
-    contributes no row. Each h_j is jointly concave in (α, β_c, β_g), so its partial
-    maximum over β_c in a box is concave in (α, β_g) and so is Q: Newton steps with step
-    halving reach the unique maximum.
+    When every reading of a cell weighs the same, Q is, up to a constant, the EM minoriser
+    of _score's objective at the current point (Jensen over A with post(A) held fixed, then
+    β_c re-profiled, which only raises it), so an EM iteration cannot lower that score;
+    otherwise it is the same step on the composite objective. A reading is faithful
+    exactly when it lies in A (errors live outside A), so the faithful probability r =
+    Σ_A post(A)·1[y ∈ A] enters as these posterior-weighted successes, and under ∅ neither
+    α nor β_g enters the likelihood, so ∅ contributes no row. Each h_j is jointly concave
+    in (α, β_c, β_g), so its partial maximum over β_c in a box is concave in (α, β_g) and
+    so is Q: Newton steps with step halving reach the unique maximum.
 
     The gradient follows by the envelope theorem at β*_j: ∂Q/∂α_m = Σ_j ω_j·(in_jm −
     tot_jm·p_jm) − (α_m − μ_α)/σ_α² and ∂Q/∂β_g = Σ_{j∈g} ω_j·P_j·(β*_j − β_g) − β_g/beta_sd².
@@ -603,9 +599,9 @@ def _prepare(used: list[Cell], by_cell: Mapping[str, Sequence[Reading]], names: 
 
 
 def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
-            ) -> tuple[list[CellPosteriorV4], np.ndarray, np.ndarray]:
-    """Every cell's profiled posterior and log marginal at (α, β_g), its readings unweighted,
-    and which cells are determined (|log_lr| ≥ tau_u)."""
+            ) -> tuple[list[CellPosteriorV4], np.ndarray]:
+    """Every cell's profiled posterior and log marginal at (α, β_g), its readings
+    unweighted."""
     abilities = dict(zip(data.names, alpha.tolist(), strict=True))
     posts: list[CellPosteriorV4] = []
     marginals = np.zeros(len(data.cells))
@@ -613,15 +609,15 @@ def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
         post, marginals[c] = _posterior(cell, data.values[c], data.counts[c], abilities,
                                         float(beta[data.group[c]]), params)
         posts.append(post)
-    determined = np.array([abs(post.log_lr) >= params.tau_u for post in posts], dtype=bool)
-    return posts, marginals, determined
+    return posts, marginals
 
 
-def _pairs(data: _Data, posts: Sequence[CellPosteriorV4], used: np.ndarray, alpha: np.ndarray,
+def _pairs(data: _Data, posts: Sequence[CellPosteriorV4], alpha: np.ndarray,
            params: V4Params) -> _Pairs:
-    """The M-step's rows: every non-empty candidate set of every cell in used, weighted by
-    its posterior mass (rows of zero mass dropped), with the cell's β_c box at α."""
-    weight = np.array([posts[c].sets[key] if used[c] else 0.0
+    """The M-step's rows: every non-empty candidate set of every cell, undetermined cells
+    included (ruling T2-U′), weighted by its posterior mass (rows of zero mass dropped),
+    with the cell's β_c box at α."""
+    weight = np.array([posts[c].sets[key]
                        for c, key in zip(data.row_cell.tolist(), data.row_key, strict=True)])
     boxes = np.array([_box(alpha[data.present[c]]) for c in range(len(data.cells))])
     keep = weight > 0
@@ -642,37 +638,20 @@ def _score(data: _Data, marginals: np.ndarray, alpha: np.ndarray, beta: np.ndarr
 
 
 def _em(data: _Data, alpha: np.ndarray, params: V4Params, tol: float, max_iter: int,
-        ) -> tuple[np.ndarray, np.ndarray, bool, int, tuple[int, ...]]:
+        ) -> tuple[np.ndarray, np.ndarray, bool, int]:
     """EM from one start, every β_g = 0: α, β_g, whether the largest change in α and β_g fell
-    below tol, the iterations used, and the cells left out of the update at each iteration.
-
-    Ruling T2-U leaves out the cells undetermined at the current α. Being undetermined is a
-    step function of α, so a cell near the threshold can flip in and out on alternate
-    iterations (the update moves α across its threshold) and EM never settles. A cell whose
-    status has changed _FLIPS_TO_FREEZE times is left out from then on: the conservative
-    side of T2-U, and each cell can then change only finitely often, so the left-out set
-    settles and EM converges as with a fixed set."""
+    below tol, and the iterations used. Every cell enters every update (ruling T2-U′:
+    leaving out cells by their observed |log_lr| selects on the outcome and widened α)."""
     beta = np.zeros(int(data.group.max()) + 1)
-    excluded: list[int] = []
-    flips = np.zeros(len(data.cells), dtype=int)
-    frozen = np.zeros(len(data.cells), dtype=bool)
-    previous: np.ndarray | None = None
     for iterations in range(1, max_iter + 1):
-        posts, _, determined = _e_step(data, alpha, beta, params)
-        if previous is not None:
-            flips += determined != previous
-            frozen |= flips >= _FLIPS_TO_FREEZE
-        previous = determined
-        used = determined & ~frozen
-        excluded.append(int((~used).sum()))
-        new_alpha, new_beta = _m_step(_pairs(data, posts, used, alpha, params), alpha, beta,
-                                      params)
+        posts, _ = _e_step(data, alpha, beta, params)
+        new_alpha, new_beta = _m_step(_pairs(data, posts, alpha, params), alpha, beta, params)
         moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
                     float(np.max(np.abs(new_beta - beta), initial=0.0)))
         alpha, beta = new_alpha, new_beta
         if moved < tol:
-            return alpha, beta, True, iterations, tuple(excluded)
-    return alpha, beta, False, max_iter, tuple(excluded)
+            return alpha, beta, True, iterations
+    return alpha, beta, False, max_iter
 
 
 def _setup(
@@ -705,18 +684,17 @@ def fit_v4(
 ) -> AnchoredFitV4:
     """α and β_g by v3's multi-start EM (§3.5) around v4's per-cell profiles, deterministic.
     Each iteration profiles every cell at the current (α, β_g), its readings unweighted
-    (§3.3), then updates α and β_g together (_m_step) on the cells whose |log_lr| ≥ tau_u
-    (ruling T2-U; a cell that keeps flipping across tau_u is left out for good, see _em),
-    each reading weighted 1/k in its act group (run key, scenario) of k readings. EM runs
-    from T3's median start and from each common α in STARTS; the fixed
-    point with the best _score is kept (ties to the earlier start). With no determined cell
-    α stays at μ_α and β_g at 0. models: model → family for the whole population; a model
-    without readings keeps α = μ_α. Cells without readings are left out. composite=False
-    weighs every reading 1 (the no-composite-weights ablation, §6.4)."""
+    (§3.3), then updates α and β_g together (_m_step) on every cell, undetermined ones
+    included (ruling T2-U′), each reading weighted 1/k in its act group (run key,
+    scenario) of k readings. EM runs from T3's median start and from each common α in
+    STARTS; the fixed point with the best _score is kept (ties to the earlier start).
+    models: model → family for the whole population; a model without readings keeps
+    α = μ_α. Cells without readings are left out. composite=False weighs every reading 1
+    (the no-composite-weights ablation, §6.4)."""
     family, data, t3 = _setup(cells, readings, models, params, composite)
     names = sorted(family)
     alpha = np.full(len(names), params.mu_alpha)
-    converged, iterations, start, excluded = True, 0, "t3", ()
+    converged, iterations, start = True, 0, "t3"
     scores: dict[str, StartFit] = {}
     posts: list[CellPosteriorV4] = []
     reads: list[tuple[str, int, str]] = []
@@ -725,13 +703,13 @@ def fit_v4(
         starts = [("t3", t3)] + [(f"alpha={a}", np.full(len(names), a)) for a in STARTS]
         best = -np.inf
         for label, alpha0 in starts:
-            a, b, ok, n, trace = _em(data, alpha0, params, tol, max_iter)
-            fitted, marginals, _ = _e_step(data, a, b, params)
+            a, b, ok, n = _em(data, alpha0, params, tol, max_iter)
+            fitted, marginals = _e_step(data, a, b, params)
             score = _score(data, marginals, a, b, params)
             scores[label] = StartFit(score, ok, n)
             if not posts or score > best:
                 best, start = score, label
-                alpha, converged, iterations, excluded = a, ok, n, trace
+                alpha, converged, iterations = a, ok, n
                 posts = fitted
     sums: dict[str, list[float]] = {}
     for key, c, value in reads:
@@ -746,4 +724,4 @@ def fit_v4(
         alphas, {m: float(1 / (1 + np.exp(-a))) for m, a in alphas.items()}, effect,
         {post.cell: post for post in posts},
         {k: sum(v) / len(v) for k, v in sorted(sums.items())}, converged, iterations, params,
-        start, scores, excluded)
+        start, scores)

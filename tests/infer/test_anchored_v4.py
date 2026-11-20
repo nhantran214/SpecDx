@@ -1,5 +1,5 @@
 """The v4 per-cell profile likelihood (design v4 §3, §5.1; ruling T1-L) and the v4 outer fit
-(§3.3–§3.5; ruling T2-U). Every brief test uses V4Params()."""
+(§3.3–§3.5; ruling T2-U′). Every brief test uses V4Params()."""
 
 import dataclasses
 import math
@@ -23,14 +23,12 @@ from specdx.infer.anchored_v4 import (
     SetFit,
     V4Params,
     _data_loglik,
-    _em,
     _encode_counts,
     _m_step,
     _Pairs,
     _profile,
     _profiled_beta,
     _q_objective,
-    _setup,
     fit_v4,
     profile_cell,
     profile_sets,
@@ -366,7 +364,6 @@ def test_recovers_ability_order_with_shared_errors() -> None:
     fit = fit_v4(cells, readings, models=models, params=P4)
     assert isinstance(fit, AnchoredFitV4)
     assert _order(fit.theta) == ["m0", "m1", "m2", "m3"]
-    # A cell here flips across tau_u on alternate iterations until _em freezes it out.
     assert fit.converged
 
 
@@ -395,7 +392,8 @@ def test_composite_weights_damp_correlated_groups() -> None:
     damped = fit_v4(copies, four, models=models, params=P4)
     for m in models:
         assert damped.alpha[m] == pytest.approx(single.alpha[m], abs=1e-3)
-    assert damped.weights == pytest.approx(single.weights, abs=1e-9)
+    # Equal up to EM's stopping point (tol 1e-6 on α; the copies may stop one step later).
+    assert damped.weights == pytest.approx(single.weights, abs=1e-6)
     # Without the weights the four copies count four times and the abilities move.
     loud = fit_v4(copies, four, models=models, params=P4, composite=False)
     assert max(abs(loud.alpha[m] - single.alpha[m]) for m in models) > 1e-3
@@ -417,50 +415,25 @@ def test_fit_reports_convergence_and_start() -> None:
     assert set(fit.family_effect) == set(models.values())
     assert set(fit.weights) == {r.run_key for r in readings}
     assert all(0.0 <= w <= 1.0 for w in fit.weights.values())
-    assert len(fit.excluded) == fit.iterations
     # Not converging within max_iter is reported, never silent.
     short = fit_v4(cells, readings, models=models, params=P4, max_iter=1)
     assert not short.converged and short.iterations == 1
 
 
-def _unanimous(cells: int, models: dict[str, str], value: str = "a", per: int = 5,
-               ) -> tuple[dict[str, Cell], list[Reading]]:
-    """Anchored cells (anchor d) every model always reads as `value`, in a difficulty group
-    of their own: undetermined for any α (T5), whether value is d or not."""
-    out = {f"u{value}{c}": Cell(f"u{value}{c}", "value", "d", f"ku{value}{c}", "ug", "ug",
-                                ("step",)) for c in range(cells)}
-    readings = [Reading(cid, f"{m}|{cid}|{k}", m, family, f"s{k}", value)
-                for cid in out for m, family in models.items() for k in range(per)]
-    return out, readings
-
-
-def test_all_undetermined_data_returns_the_ability_prior() -> None:
-    # Ruling T2-U: a cell with |log_lr| < tau_u carries no ability information, so data made
-    # only of such cells leave α at its prior mean, and the fit still returns.
+def test_all_undetermined_data_still_returns_a_fit() -> None:
+    # Anchored cells every model always reads as a (anchor d): undetermined for any α (T5).
+    # Ruling T2-U′ keeps them in the updates; the fit still returns, converged, and since
+    # every model reads alike no ability is told apart from another.
     models = {"m0": "f0", "m1": "f1", "m2": "f2"}
-    cells, readings = _unanimous(6, models)
+    cells = {f"u{c}": Cell(f"u{c}", "value", "d", f"ku{c}", "ug", "ug", ("step",))
+             for c in range(6)}
+    readings = [Reading(cid, f"{m}|{cid}|{k}", m, family, f"s{k}", "a")
+                for cid in cells for m, family in models.items() for k in range(5)]
     fit = fit_v4(cells, readings, models=models, params=P4)
     assert fit.converged
-    for m in models:
-        assert fit.alpha[m] == pytest.approx(P4.mu_alpha, abs=1e-9)
-    assert all(n == len(cells) for n in fit.excluded)
+    assert all(math.isfinite(a) for a in fit.alpha.values())
+    assert max(fit.alpha.values()) - min(fit.alpha.values()) < 1e-9
     assert all(abs(post.log_lr) < P4.tau_u for post in fit.cells.values())
-
-
-def test_undetermined_cells_leave_the_ability_updates_unchanged() -> None:
-    # Ruling T2-U: from the same start, adding undetermined cells (in a difficulty group of
-    # their own) moves no ability. (From fit_v4's own starts they would: T3's median start
-    # reads every anchored cell, and EM's fixed point depends on its start.)
-    cells, readings, models = _small()
-    _, base, start = _setup(cells, readings, models, P4, True)
-    extra_cells, extra = _unanimous(10, models)
-    _, more, _ = _setup(cells | extra_cells, readings + extra, models, P4, True)
-    assert base is not None and more is not None
-    alpha, _, ok, _, trace = _em(base, start, P4, 1e-6, 200)
-    alpha_more, _, ok_more, _, trace_more = _em(more, start, P4, 1e-6, 200)
-    assert ok and ok_more
-    assert alpha_more == pytest.approx(alpha, abs=1e-9)
-    assert trace_more == tuple(n + len(extra_cells) for n in trace)
 
 
 def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
