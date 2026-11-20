@@ -37,6 +37,24 @@ class S3Diagnosis:
     defects: list[Defect]
 
 
+def contradictions(cd: S3CellData, weights: Mapping[str, float]) -> list[Defect]:
+    """The soft minimal hitting sets of size >= 2 per task, as unrefuted (offline)
+    contradictions. weights: run_key -> faithful weight of the fit."""
+    out: list[Defect] = []
+    runs_of: dict[str, set[str]] = {}
+    for r in cd.data.readings:
+        runs_of.setdefault(r.scenario, set()).add(r.run_key)
+    for scenario in sorted(runs_of):
+        keys = sorted(runs_of[scenario])
+        weighted = [(cd.violated[rk], weights.get(rk, 0.0)) for rk in keys]
+        for hitting, mass in soft_hitting_sets(weighted, tau=TAU, max_size=MAX_SIZE):
+            if len(hitting) >= 2:
+                witnesses = tuple(rk for rk in keys if cd.violated[rk] & hitting)
+                out.append(Defect("contradiction", tuple(sorted(hitting)), (scenario,),
+                                  witnesses, mass, OFFLINE))
+    return out
+
+
 def diagnose_domain(
     domain: str, cd: S3CellData, models: Mapping[str, str], params: V3Params = DEFAULT_PARAMS
 ) -> S3Diagnosis:
@@ -61,17 +79,7 @@ def diagnose_domain(
         scenarios = tuple(sorted({r.scenario for r in by_cell[f.cell]}))
         defects.append(Defect(f.type, (f.cell,), scenarios, f.witnesses, f.score,
                               OFFLINE if f.type == "hidden" else "", f.subtype))
-    runs_of: dict[str, set[str]] = {}
-    for r in data.readings:
-        runs_of.setdefault(r.scenario, set()).add(r.run_key)
-    for scenario in sorted(runs_of):
-        keys = sorted(runs_of[scenario])
-        weighted = [(cd.violated[rk], fit.weights.get(rk, 0.0)) for rk in keys]
-        for hitting, mass in soft_hitting_sets(weighted, tau=TAU, max_size=MAX_SIZE):
-            if len(hitting) >= 2:
-                witnesses = tuple(rk for rk in keys if cd.violated[rk] & hitting)
-                defects.append(Defect("contradiction", tuple(sorted(hitting)), (scenario,),
-                                      witnesses, mass, OFFLINE))
+    defects.extend(contradictions(cd, fit.weights))
     defects.sort(key=lambda d: (-d.score, d.key))
     raters = tuple(sorted({r.model for r in data.readings}))
     return S3Diagnosis(domain, raters, fit, defects)
