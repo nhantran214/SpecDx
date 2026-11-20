@@ -122,7 +122,7 @@ class CellPosteriorV4(CellPosterior):
     lam: float
     attractor: str | None
     log_lr: float
-    set_fits: dict[frozenset[str], SetFit] = field(default_factory=dict)
+    set_fits: dict[frozenset[str], SetFit]
 
 
 def _xlog(n: float, x: float) -> float:

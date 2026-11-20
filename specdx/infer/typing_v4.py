@@ -33,13 +33,10 @@ DEFECT_TYPES_V4 = ("hidden", "ambiguity", "weak")
 def _shared(cell: Cell, post: CellPosteriorV4, params: V4Params) -> CellFinding | None:
     if cell.anchor is None:
         return None
-    key = frozenset({cell.anchor})
-    if key in post.set_fits:
-        lam, attractor = post.set_fits[key].lam, post.set_fits[key].attractor
-    elif post.map_set == key:
-        lam, attractor = post.lam, post.attractor
-    else:
+    fit = post.set_fits.get(frozenset({cell.anchor}))
+    if fit is None:
         return None
+    lam, attractor = fit.lam, fit.attractor
     if lam < params.tau_lambda:
         return None
     return CellFinding(cell.id, SHARED, lam, "", (attractor,) if attractor else ())

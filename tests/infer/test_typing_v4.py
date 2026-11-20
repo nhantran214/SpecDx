@@ -58,6 +58,7 @@ def test_unanimous_cell_is_undetermined_only() -> None:
 def test_shared_error_cell_is_reported_as_shared_not_hidden() -> None:
     post = profile_cell(ANCHORED, VALUES, SHARED_COUNTS, RATERS, 0.0, P4)
     found = _type(ANCHORED, post, SHARED_COUNTS)
+    assert post.log_lr <= -P4.tau_u  # rule (ii) fires, not rule (iii)
     assert [f.type for f in found] == [SHARED]
     assert found[0].values == ("a",) and found[0].score == pytest.approx(post.lam)
     assert post.lam >= P4.tau_lambda
@@ -112,3 +113,43 @@ def test_profile_cell_exposes_every_set_fit() -> None:
     post = profile_cell(ANCHORED, VALUES, SHARED_COUNTS, RATERS, 0.0, P4)
     assert F({"d"}) in post.set_fits and F() in post.set_fits
     assert post.set_fits[post.map_set].lam == post.lam
+
+
+# Real posteriors found by a seeded random search over abilities, counts and beta_g.
+def _real(counts: dict, abilities: dict, beta_g: float) -> tuple[CellPosteriorV4, list[Reading]]:
+    post = profile_cell(ANCHORED, VALUES, counts, abilities, beta_g, P4)
+    return post, _readings(ANCHORED, counts)
+
+
+def _type_real(post: CellPosteriorV4, readings: list[Reading]) -> list[CellFinding]:
+    return type_cells_v4({"c": ANCHORED}, _fit(post), {"c": readings}, P4)
+
+
+def test_rule_iii_reports_shared_when_the_statistic_is_defect_side_but_the_map_is_d() -> None:
+    counts = {"m0": {"d": 5}, "m1": {"d": 4, "b": 1}, "m2": {"d": 10}, "m3": {"d": 20},
+              "m4": {"d": 5}, "m5": {"d": 1, "b": 4}}
+    abilities = dict(zip(counts, (-1.1212, 2.3130, -1.0386, 2.2276, 2.0691, 1.2682),
+                         strict=True))
+    post, readings = _real(counts, abilities, -0.7745)
+    assert post.log_lr >= P4.tau_u and post.map_set == {"d"}
+    assert post.lam >= P4.tau_lambda
+    found = _type_real(post, readings)
+    assert SHARED in _kinds(found)
+    assert next(f for f in found if f.type == SHARED).score == pytest.approx(post.lam)
+
+
+def test_rule_iii_with_a_weak_attractor_reports_no_shared() -> None:
+    counts = {"m0": {"d": 16, "a": 1, "b": 3}, "m1": {"d": 17, "a": 1, "b": 2}}
+    post, readings = _real(counts, {"m0": 0.3021, "m1": 3.1417}, -0.2956)
+    assert post.log_lr >= P4.tau_u and post.map_set == {"d"}
+    assert post.lam < P4.tau_lambda
+    assert SHARED not in _kinds(_type_real(post, readings))
+
+
+def test_rule_ii_on_a_real_posterior_whose_map_is_a_defect_form() -> None:
+    # The prior-bearing MAP is the pair {d, a} while the prior-free statistic says no defect:
+    # the posterior must not type a defect.
+    counts = {"m0": {"d": 11, "a": 9}, "m1": {"d": 5}}
+    post, readings = _real(counts, {"m0": 1.9371, "m1": 3.5357}, -1.9284)
+    assert post.log_lr <= -P4.tau_u and post.map_set == {"d", "a"}
+    assert not _kinds(_type_real(post, readings)) & set(DEFECT_TYPES_V4)
