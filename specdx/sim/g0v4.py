@@ -33,10 +33,12 @@ import argparse
 import dataclasses
 import itertools
 import json
+import math
 import sys
 import time
 import traceback
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,6 +68,23 @@ PLANTED_ARMS: tuple[str, ...] = ("homogeneous", "saturated")
 PASS, FAIL = "PASS", "FAIL"
 PARAMS_FILE = Path(__file__).resolve().parents[2] / "experiments" / "p4-s3-v4-params.json"
 _EPS = 1e-9
+WILSON_Z = 1.96
+
+
+def wilson_upper(k: int, n: int, z: float = WILSON_Z) -> float:
+    """The upper end of the Wilson score interval for k successes in n trials (n >= 1)."""
+    p = k / n
+    centre = p + z * z / (2 * n)
+    spread = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return min(1.0, (centre + spread) / (1 + z * z / n))
+
+
+def _pmap(fn: Callable[[Any], Any], items: Sequence[Any], jobs: int) -> list[Any]:
+    """fn over items, in input order, in `jobs` processes (jobs <= 1: in this one)."""
+    if jobs <= 1 or len(items) <= 1:
+        return [fn(x) for x in items]
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        return list(pool.map(fn, items))
 
 
 def prior_settings(grid: dict[str, Sequence[Any]] | None = None) -> list[V4Params]:
@@ -160,6 +179,9 @@ def metrics_of(tallies: dict[str, ArmTally]) -> dict[str, Any]:
     """The numbers the criteria read, from the per-arm tallies."""
     base, shared = tallies["base"], tallies["shared"]
     return {"shared_fp": shared.shared_rate, "shared_determined": shared.shared_determined,
+            "shared_hidden": shared.shared_hidden,
+            "shared_fp_upper": (wilson_upper(shared.shared_hidden, shared.shared_determined)
+                                if shared.shared_determined else None),
             "hidden_f1": base.f1["hidden"], "ambiguity_f1": base.f1["ambiguity"],
             "undetermined": base.undetermined_rate,
             "planted_undetermined": {a: tallies[a].planted_rate for a in PLANTED_ARMS},
@@ -167,11 +189,17 @@ def metrics_of(tallies: dict[str, ArmTally]) -> dict[str, Any]:
 
 
 def judge(metrics: dict[str, Any], v3: dict[str, float]) -> dict[str, Any]:
-    """The three criteria of §6.1 (inclusive bounds, to 1e-9)."""
-    return {"1": metrics["shared_fp"] <= SHARED_FP_MAX + _EPS,
+    """The three criteria of §6.1 (inclusive bounds, to 1e-9; ruling G0-V). Criterion 1: the
+    Wilson 95% upper bound of the hidden rate among determined shared cells, pooled over the
+    replicates, is at most 0.1; with no determined shared cell it is not evaluable and fails.
+    Criterion 3 likewise fails on an arm with no planted cell."""
+    upper = (wilson_upper(metrics["shared_hidden"], metrics["shared_determined"])
+             if metrics["shared_determined"] else None)
+    return {"1": upper is not None and upper <= SHARED_FP_MAX + _EPS,
             "2": {"hidden": metrics["hidden_f1"] >= v3["hidden_f1"] - F1_MARGIN - _EPS,
                   "ambiguity": metrics["ambiguity_f1"] >= v3["ambiguity_f1"] - F1_MARGIN - _EPS},
-            "3": {a: metrics["planted_undetermined"][a] >= UNDETERMINED_MIN - _EPS
+            "3": {a: metrics["planted"][a] > 0
+                  and metrics["planted_undetermined"][a] >= UNDETERMINED_MIN - _EPS
                   for a in PLANTED_ARMS}}
 
 
@@ -219,10 +247,17 @@ def make_specs(base: SimConfig, replicates: int, offset: int = 0) -> dict[str, l
                   for i in range(replicates)] for arm in ARMS}
 
 
-def fit_arms(specs: dict[str, list[SimSpec]], prior: V4Params
+def _fit_one(task: tuple[SimSpec, V4Params]) -> AnchoredFitV4:
+    spec, prior = task
+    return fit_v4(spec.cells, spec.readings, models=spec.models, params=prior)
+
+
+def fit_arms(specs: dict[str, list[SimSpec]], prior: V4Params, jobs: int = 1
              ) -> dict[str, list[AnchoredFitV4]]:
-    return {arm: [fit_v4(s.cells, s.readings, models=s.models, params=prior)
-                  for s in specs[arm]] for arm in ARMS}
+    """One fit per (arm, replicate), in `jobs` processes; the order is the input's."""
+    tasks = [(s, prior) for arm in ARMS for s in specs[arm]]
+    flat = iter(_pmap(_fit_one, tasks, jobs))
+    return {arm: [next(flat) for _ in specs[arm]] for arm in ARMS}
 
 
 def tally_at(specs: dict[str, list[SimSpec]], fits: dict[str, list[AnchoredFitV4]],
@@ -240,26 +275,29 @@ def objective_of(tallies: dict[str, ArmTally]) -> float:
     return sum(sum(t.f1.values()) / len(TYPES) for t in tallies.values()) / len(tallies)
 
 
-def v3_reference(specs: dict[str, list[SimSpec]], v3: V3Params | None = None
+def _v3_one(task: tuple[str, SimSpec, V3Params]) -> tuple[dict[str, Counts], int, int]:
+    arm, spec, v3 = task
+    fit: AnchoredFit = fit_anchored(spec.cells, spec.readings, models=spec.models, params=v3)
+    found = type_cells(spec.cells, fit, by_cell(spec), v3)
+    if arm == "base":
+        return typed_counts(((f.cell, f.type) for f in found), spec.truth), 0, 0
+    hidden = {f.cell for f in found if f.type == "hidden"}
+    shared = [c for c, t in spec.truth.items() if t.shared]
+    return {}, len(shared), sum(c in hidden for c in shared)
+
+
+def v3_reference(specs: dict[str, list[SimSpec]], v3: V3Params | None = None, jobs: int = 1
                  ) -> dict[str, Any]:
     """v3 on the same specifications: hidden and ambiguity F1 on the ordinary arm, and the
     share of the shared arm's shared cells it types hidden (v3 never abstains)."""
     v3 = v3 or V3Params()
     counts = {t: Counts() for t in TYPES}
     hit = total = 0
-    for arm in ("base", "shared"):
-        for spec in specs[arm]:
-            fit: AnchoredFit = fit_anchored(spec.cells, spec.readings, models=spec.models,
-                                            params=v3)
-            found = type_cells(spec.cells, fit, by_cell(spec), v3)
-            if arm == "base":
-                for t, c in typed_counts(((f.cell, f.type) for f in found), spec.truth).items():
-                    counts[t].add(c)
-            else:
-                hidden = {f.cell for f in found if f.type == "hidden"}
-                shared = [c for c, t in spec.truth.items() if t.shared]
-                total += len(shared)
-                hit += sum(c in hidden for c in shared)
+    tasks = [(arm, spec, v3) for arm in ("base", "shared") for spec in specs[arm]]
+    for by, n, k in _pmap(_v3_one, tasks, jobs):
+        for t, c in by.items():
+            counts[t].add(c)
+        total, hit = total + n, hit + k
     return {"hidden_f1": counts["hidden"].f1, "ambiguity_f1": counts["ambiguity"].f1,
             "weak_f1": counts["weak"].f1, "shared_hidden": hit / total if total else 0.0,
             "shared_cells": total}
@@ -270,8 +308,8 @@ def _readings(specs: dict[str, list[SimSpec]]) -> dict[str, list[dict[str, list[
 
 
 def search(base: SimConfig, replicates: int = REPLICATES,
-           grid: dict[str, Sequence[Any]] | None = None, progress: Any = None
-           ) -> tuple[Candidate, list[Candidate], dict[str, Any]]:
+           grid: dict[str, Sequence[Any]] | None = None, progress: Any = None,
+           jobs: int = 1) -> tuple[Candidate, list[Candidate], dict[str, Any]]:
     """Fit every prior setting once per replicate and arm, type at every threshold setting
     on the same fits, judge the criteria, and choose. Returns the chosen candidate, all of
     them and v3's reference numbers."""
@@ -279,10 +317,10 @@ def search(base: SimConfig, replicates: int = REPLICATES,
         raise ValueError("replicates must be at least 1")
     specs = make_specs(base, replicates)
     mine = _readings(specs)
-    v3 = v3_reference(specs)
+    v3 = v3_reference(specs, jobs=jobs)
     candidates: list[Candidate] = []
     for n, prior in enumerate(prior_settings(grid)):
-        fits = fit_arms(specs, prior)
+        fits = fit_arms(specs, prior, jobs)
         nonconverged = {arm: sum(not f.converged for f in fits[arm]) for arm in ARMS}
         for tau_u, tau_h, tau_a in thresholds(grid):
             params = dataclasses.replace(prior, tau_u=tau_u, tau_h=tau_h, tau_a=tau_a)
@@ -298,12 +336,12 @@ def search(base: SimConfig, replicates: int = REPLICATES,
     return choose(candidates), candidates, v3
 
 
-def held_out(base: SimConfig, params: V4Params, replicates: int) -> dict[str, Any]:
+def held_out(base: SimConfig, params: V4Params, replicates: int, jobs: int = 1) -> dict[str, Any]:
     """The chosen parameters on the next `replicates` seeds, reported and not judged."""
     specs = make_specs(base, replicates, offset=replicates)
-    fits = fit_arms(specs, params)
+    fits = fit_arms(specs, params, jobs)
     tallies = tally_at(specs, fits, params, _readings(specs))
-    v3 = v3_reference(specs)
+    v3 = v3_reference(specs, jobs=jobs)
     metrics = metrics_of(tallies)
     return {"metrics": metrics, "v3": v3, "criteria": judge(metrics, v3),
             "arms": {a: t.f1 for a, t in tallies.items()},
@@ -317,20 +355,25 @@ def _yes(ok: bool) -> str:
 
 def _criteria_lines(metrics: dict[str, Any], v3: dict[str, Any],
                     criteria: dict[str, Any]) -> list[str]:
-    pu = metrics["planted_undetermined"]
+    pu, planted = metrics["planted_undetermined"], metrics["planted"]
+    upper = metrics.get("shared_fp_upper")
+    bound = "not evaluable" if upper is None else f"Wilson upper {upper:.3f}"
     return [
         "| criterion | value | bar | holds |", "|---|---:|---:|---|",
         f"| 1. hidden false-positive rate on shared cells, determined "
-        f"(n = {metrics['shared_determined']}) | {metrics['shared_fp']:.3f} "
-        f"(v3: {v3['shared_hidden']:.3f}) | <= {SHARED_FP_MAX} | {_yes(criteria['1'])} |",
+        f"(n = {metrics['shared_determined']}) | {metrics['shared_fp']:.3f}, {bound} "
+        f"(v3: {v3['shared_hidden']:.3f}) | upper bound <= {SHARED_FP_MAX} "
+        f"| {_yes(criteria['1'])} |",
         f"| 2. ordinary hidden F1 | {metrics['hidden_f1']:.3f} (v3: {v3['hidden_f1']:.3f}) "
         f"| >= v3 - {F1_MARGIN} | {_yes(criteria['2']['hidden'])} |",
         f"| 2. ordinary ambiguity F1 | {metrics['ambiguity_f1']:.3f} "
         f"(v3: {v3['ambiguity_f1']:.3f}) | >= v3 - {F1_MARGIN} "
         f"| {_yes(criteria['2']['ambiguity'])} |",
-        f"| 3. homogeneous: planted and shared cells undetermined | {pu['homogeneous']:.3f} "
+        f"| 3. homogeneous: planted and shared cells undetermined "
+        f"(n = {planted['homogeneous']}) | {pu['homogeneous']:.3f} "
         f"| >= {UNDETERMINED_MIN} | {_yes(criteria['3']['homogeneous'])} |",
-        f"| 3. saturated: planted and shared cells undetermined | {pu['saturated']:.3f} "
+        f"| 3. saturated: planted and shared cells undetermined "
+        f"(n = {planted['saturated']}) | {pu['saturated']:.3f} "
         f"| >= {UNDETERMINED_MIN} | {_yes(criteria['3']['saturated'])} |",
         "", f"Undetermined rate on the ordinary arm: {metrics['undetermined']:.3f}."]
 
@@ -357,6 +400,16 @@ def render(result: dict[str, Any]) -> str:
               f"| {chosen['undetermined'][arm]:.3f} |" for arm, f in chosen["arms"].items()]
     lines += ["", "## Held-out replicates (reported, not judged)", ""]
     lines += _criteria_lines(hold["metrics"], hold["v3"], hold["criteria"])
+    if failed(hold["criteria"]):
+        lines += ["", "WARNING: the chosen candidate fails on the held-out replicates: "
+                  + ", ".join(failed(hold["criteria"])) + "."]
+    est = result.get("estimate")
+    if est:
+        lines += ["", "## Cost estimate (from the first fits, before the run)", "",
+                  f"One v4 fit {est['v4_fit_s']:.1f} s, one v3 fit {est['v3_fit_s']:.1f} s, "
+                  f"{est['v4_fits']} v4 and {est['v3_fits']} v3 fits, {est['jobs']} job(s): "
+                  f"estimated {est['total_s']:.0f} s ({est['total_s'] / 3600:.2f} h); "
+                  f"measured {result['seconds']:.0f} s."]
     lines += ["", "## Fits that did not converge (selection, chosen prior setting)", "",
               ", ".join(f"{a}: {n}" for a, n in chosen["nonconverged"].items()) or "none"]
     return "\n".join(lines) + "\n"
@@ -366,21 +419,47 @@ def params_dict(p: V4Params) -> dict[str, float]:
     return dataclasses.asdict(p)
 
 
+def estimate_cost(config: SimConfig, replicates: int,
+                  grid: dict[str, Sequence[Any]] | None, jobs: int) -> dict[str, Any]:
+    """Time the first v4 fit and the first v3 fit and extrapolate the whole run: one v4 fit
+    per (prior, arm, replicate) plus the held-out fits of the chosen prior, and v3 fits on
+    the base and shared arms of both replicate sets. Perfect speed-up over `jobs`."""
+    if replicates < 1:
+        raise ValueError("replicates must be at least 1")
+    spec = generate(dataclasses.replace(config, arm=ARMS[0]))
+    t = time.monotonic()
+    _fit_one((spec, prior_settings(grid)[0]))
+    v4 = time.monotonic() - t
+    t = time.monotonic()
+    _v3_one((ARMS[0], spec, V3Params()))
+    v3 = time.monotonic() - t
+    n4 = (len(prior_settings(grid)) + 1) * len(ARMS) * replicates
+    n3 = 2 * 2 * replicates
+    return {"v4_fit_s": v4, "v3_fit_s": v3, "v4_fits": n4, "v3_fits": n3, "jobs": jobs,
+            "total_s": (n4 * v4 + n3 * v3) / max(1, jobs)}
+
+
 def run_g0v4(config: SimConfig, out: Path, *, replicates: int = REPLICATES,
-             grid: dict[str, Sequence[Any]] | None = None) -> int:
+             grid: dict[str, Sequence[Any]] | None = None, jobs: int = 1) -> int:
     """Run G0v4 and write `out`.json and `out`.md. Returns 0 PASS, 1 FAIL, 2 error. It
-    never freezes: `freeze_v4` is called on a PASS by the caller."""
+    never freezes: `freeze_v4` is called on a PASS by the caller. jobs: processes for the
+    fits; the output does not depend on it (apart from the timing fields)."""
     try:
         started = time.monotonic()
         total = len(prior_settings(grid))
+        estimate = estimate_cost(config, replicates, grid, jobs)
+        print(f"G0v4: estimated {estimate['total_s']:.0f} s "
+              f"({estimate['total_s'] / 3600:.2f} h) with {jobs} job(s)", file=sys.stderr)
         chosen, candidates, v3 = search(
             config, replicates, grid,
-            progress=lambda n: print(f"G0v4: {n}/{total} prior settings", file=sys.stderr))
-        hold = held_out(config, chosen.params, replicates)
+            progress=lambda n: print(f"G0v4: {n}/{total} prior settings", file=sys.stderr),
+            jobs=jobs)
+        hold = held_out(config, chosen.params, replicates, jobs)
         result = {
             "verdict": PASS if chosen.passes else FAIL, "replicates": replicates,
             "settings": total, "thresholds": len(thresholds(grid)),
-            "seconds": time.monotonic() - started, "base": dataclasses.asdict(config),
+            "seconds": time.monotonic() - started, "estimate": estimate, "jobs": jobs,
+            "base": dataclasses.asdict(config),
             "chosen": {"params": params_dict(chosen.params), "objective": chosen.objective,
                        "arms": chosen.arms, "metrics": chosen.metrics,
                        "undetermined": chosen.undetermined,
@@ -414,12 +493,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--out", type=Path, required=True)
     run.add_argument("--replicates", type=int, default=REPLICATES)
+    run.add_argument("--jobs", type=int, default=1)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("result", type=Path)
     freeze.add_argument("--path", type=Path, default=PARAMS_FILE)
     args = parser.parse_args(argv)
     if args.cmd == "run":
-        code = run_g0v4(load_config(args.config), args.out, replicates=args.replicates)
+        code = run_g0v4(load_config(args.config), args.out, replicates=args.replicates,
+                        jobs=args.jobs)
         if code == 0:
             print("PASS: freeze with `python -m specdx.sim.g0v4 freeze`", file=sys.stderr)
         return code
