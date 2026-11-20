@@ -115,11 +115,14 @@ class CellPosteriorV4(CellPosterior):
     meaning), with beta, lam and attractor from the MAP set's SetFit and error the MAP set's
     error distribution over the values and OTHER (zero on the set). log_lr: the prior-free
     profile log-likelihood ratio of §5.1, the best defect form's maximised likelihood minus
-    the best no-defect form's ({d_c} on an anchored cell, any single value otherwise)."""
+    the best no-defect form's ({d_c} on an anchored cell, any single value otherwise).
+    set_fits: every candidate set's SetFit (∅ as frozenset()), so typing can read the {d_c}
+    set's λ and attractor when it is not the MAP set (ruling T3-N)."""
 
     lam: float
     attractor: str | None
     log_lr: float
+    set_fits: dict[frozenset[str], SetFit] = field(default_factory=dict)
 
 
 def _xlog(n: float, x: float) -> float:
@@ -395,7 +398,7 @@ def _posterior(
     else:
         error = {v: float(eps[k]) for k, v in enumerate(slots)}
     return CellPosteriorV4(cell.id, cell.anchor, values, sets, best.beta, error, best.lam,
-                           best.attractor, float(log_lr)), marginal
+                           best.attractor, float(log_lr), fits), marginal
 
 
 # --- The outer fit (design v4 §3.3–§3.5; ruling T2-U′: every cell enters the updates) ---
