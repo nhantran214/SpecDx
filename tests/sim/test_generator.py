@@ -2,9 +2,11 @@
 
 import math
 from collections import Counter
+from dataclasses import replace
 
 import numpy as np
 
+from specdx.sim.baselines import by_cell
 from specdx.sim.generator import SimConfig, generate
 
 BIG = SimConfig(alphas=(2.0, 0.0), act=(1.0, 1.0), columns=200, defect_rate=0.3, seed=1)
@@ -115,3 +117,64 @@ def test_difficulty_is_one_per_column_unless_the_within_group_arm_spreads_it() -
 
     assert spread(0.0) == 0.0
     assert 0.3 < spread(0.5) < 0.7  # the within-group arm of spec v3.1 §8.1
+
+
+def test_shared_arm_plants_hard_cells_with_one_attractor() -> None:
+    config = SimConfig(
+        alphas=(3.0, 2.0), act=(1.0, 1.0), columns=30, pooled_share=0.0, constraint_share=0.0,
+        anchored_share=1.0, defect_rate=0.0, beta_sd=0.0, arm="shared", shared_share=1.0,
+        scenarios=2, variants=4, seeds=6, seed=7)
+    spec = generate(config)
+    assert all(t.shared for t in spec.truth.values())
+    assert all(abs(b - 2.0) < 1e-12 for b in spec.betas.values())
+    shares = []
+    for cid, rs in by_cell(spec).items():
+        errs = Counter(r.value for r in rs if r.value != spec.cells[cid].anchor)
+        if sum(errs.values()) >= 8:
+            shares.append(max(errs.values()) / sum(errs.values()))
+    assert shares
+    assert min(shares) > 0.4  # λ ≥ 0.5 pulls the errors to one value, plus noise
+    base = generate(replace(config, arm="base"))
+    assert not any(t.shared for t in base.truth.values())
+    none = generate(replace(config, shared_share=0.0))
+    assert not any(t.shared for t in none.truth.values())
+
+
+def test_homogeneous_arm_equalises_alpha() -> None:
+    spec = generate(SimConfig(alphas=(3.0, -1.0), arm="homogeneous", seed=1))
+    assert spec.alphas == {"m0": 1.0, "m1": 1.0}
+
+
+def test_alpha_spread_scales_about_the_mean() -> None:
+    spec = generate(SimConfig(alphas=(3.0, -1.0), alpha_spread=0.5, seed=1))
+    assert spec.alphas == {"m0": 2.0, "m1": 0.0}
+
+
+def test_saturated_arm_makes_planted_cells_unanimous() -> None:
+    spec = generate(SimConfig(alphas=(2.0, -1.0, 0.0), act=(1.0, 1.0, 1.0), columns=80,
+                              defect_rate=0.5, arm="saturated", constraint_share=0.0,
+                              anchored_share=1.0, seed=3))
+    planted = [c for c, t in spec.truth.items() if t.hidden]
+    assert planted
+    values: dict[str, set[str]] = {c: set() for c in planted}
+    for r in spec.readings:
+        if r.cell in values:
+            values[r.cell].add(r.value)
+    assert all(len(v) == 1 for v in values.values())
+    assert all(v != {spec.cells[c].anchor} for c, v in values.items())
+
+
+def test_act_group_shares_one_draw() -> None:
+    def faithful_counts(group: int) -> set[int]:
+        spec = generate(SimConfig(
+            alphas=(0.0,), act=(1.0,), columns=4, items=1, pooled_share=0.0, constraint_share=0.0,
+            anchored_share=1.0, defect_rate=0.0, beta_sd=0.0, scenarios=2, variants=10, seeds=10,
+            act_group=group, seed=2))
+        faithful: dict[str, int] = {}
+        for r in spec.readings:
+            ok = r.value == spec.cells[r.cell].anchor
+            faithful[r.run_key] = faithful.get(r.run_key, 0) + ok
+        return set(faithful.values())
+
+    assert faithful_counts(4) <= {0, 4}
+    assert len(faithful_counts(1)) > 2

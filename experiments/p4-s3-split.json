@@ -1,0 +1,14 @@
+{
+  "seed": 20261120,
+  "dev": [
+    "healthcare",
+    "hotel",
+    "online_market"
+  ],
+  "held_out": [
+    "bank",
+    "dmv",
+    "library",
+    "university"
+  ]
+}

@@ -19,7 +19,7 @@ import numpy as np
 
 from specdx.infer.cells import SATISFIED, VIOLATED, Cell, Reading
 
-ARMS: tuple[str, ...] = ("base", "a3", "a5")
+ARMS: tuple[str, ...] = ("base", "a3", "a5", "shared", "homogeneous", "saturated")
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,13 @@ class SimConfig:
     kappa_true: float = 30.0
     arm: str = "base"
     seed: int = 0
+    # v4 arms. shared_share (arm "shared" only): the share of non-defect anchored columns that
+    # are hard, with one attractor. act_group: cells read by one run in groups of this size
+    # share one faithful-or-error draw. alpha_spread: the abilities spread about their mean
+    # by this factor (1.0: as given).
+    shared_share: float = 0.3
+    act_group: int = 1
+    alpha_spread: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,7 @@ class Truth:
     hidden: bool
     ambiguity: bool
     weak: bool
+    shared: bool = False
 
 
 @dataclass
@@ -120,6 +128,12 @@ def generate(config: SimConfig) -> SimSpec:
     rng = np.random.default_rng(config.seed)
     models = {f"m{i}": f"f{i}" for i in range(len(config.alphas))}
     alphas = {f"m{i}": float(a) for i, a in enumerate(config.alphas)}
+    if config.arm == "homogeneous":
+        mean = sum(alphas.values()) / len(alphas)
+        alphas = dict.fromkeys(alphas, mean)
+    elif config.alpha_spread != 1.0:
+        mean = sum(alphas.values()) / len(alphas)
+        alphas = {m: mean + config.alpha_spread * (a - mean) for m, a in alphas.items()}
     strongest = max(alphas, key=lambda m: alphas[m])
     cells: dict[str, Cell] = {}
     truth: dict[str, Truth] = {}
@@ -127,6 +141,7 @@ def generate(config: SimConfig) -> SimSpec:
     errors: dict[str, dict[str, np.ndarray]] = {}
     guess: dict[str, str] = {}
     vocabs: dict[str, tuple[str, ...]] = {}
+    fixed: dict[str, str] = {}  # saturated arm: the one value every model reads
     layout: dict[tuple[int, int], list[str]] = {}  # (item, scenario) → cells read there
     for col in range(config.columns):
         constraint = rng.random() < config.constraint_share
@@ -136,6 +151,10 @@ def generate(config: SimConfig) -> SimSpec:
         form, admitted = _plant(rng, config, vocab, anchored)
         tendency = rng.dirichlet(np.full(len(vocab), config.error_conc))
         group_beta = float(rng.normal(0.0, config.beta_sd))
+        hard = None
+        if (config.arm == "shared" and anchored and form == "none"
+                and rng.random() < config.shared_share):
+            hard = (vocab[1 + int(rng.integers(len(vocab) - 1))], float(rng.uniform(0.5, 1.0)))
         item = col % config.items
         group = f"col{col:03d}"
         for s in ([-1] if pooled else range(config.scenarios)):
@@ -144,12 +163,22 @@ def generate(config: SimConfig) -> SimSpec:
                               vocab[0] if anchored else None,
                               f"clause:{cid}" if anchored else None, group, group, (f"i{item}",))
             truth[cid] = Truth(form, admitted, anchored and admitted != (vocab[0],),
-                               len(admitted) == 2, not anchored and len(admitted) == 1)
+                               len(admitted) == 2, not anchored and len(admitted) == 1,
+                               hard is not None)
             betas[cid] = group_beta + config.beta_within * float(rng.normal())
+            if hard is not None:
+                betas[cid] += 2.0
             # Floored: numpy's Dirichlet returns NaN for vanishing parameters.
             base = rng.dirichlet(np.maximum(config.kappa_true * tendency, 0.01))
             errors[cid] = {m: (rng.dirichlet(np.full(len(vocab), 0.3)) if config.arm == "a3"
                                else base) for m in models}
+            if hard is not None:
+                attractor, lam = hard
+                pull = np.array([1.0 if x == attractor else 0.0 for x in vocab])
+                errors[cid] = dict.fromkeys(
+                    models, (1.0 - lam) * np.full(len(vocab), 1.0 / len(vocab)) + lam * pull)
+            if config.arm == "saturated" and truth[cid].hidden:
+                fixed[cid] = admitted[-1] if admitted else vocab[1]
             guess[cid] = vocab[int(rng.integers(len(vocab)))]
             vocabs[cid] = vocab
             for scenario in (range(config.scenarios) if pooled else [s]):
@@ -165,11 +194,19 @@ def generate(config: SimConfig) -> SimSpec:
                         if rng.random() >= act:
                             continue
                         mine: list[tuple[str, str]] = []
-                        for cid in layout.get((item, scenario), []):
+                        cids = layout.get((item, scenario), [])
+                        draw = 0.0
+                        for n, cid in enumerate(cids):
+                            if config.act_group > 1 and n % config.act_group == 0:
+                                draw = float(rng.random())  # one draw for the whole group
+                            if cid in fixed:
+                                mine.append((cid, fixed[cid]))
+                                continue
                             p = 1.0 / (1.0 + math.exp(-(a - betas[cid])))
                             mine.append((cid, _read(rng, truth[cid].admitted, vocabs[cid],
                                                     errors[cid][m], p, guess[cid],
-                                                    config.arm == "a5", m == strongest)))
+                                                    config.arm == "a5", m == strongest,
+                                                    draw if config.act_group > 1 else None)))
                         clean = all(value == cells[cid].anchor for cid, value in mine
                                     if cells[cid].anchor is not None)
                         readings += [Reading(cid, key, m, models[m], f"s{scenario}", value,
@@ -179,12 +216,14 @@ def generate(config: SimConfig) -> SimSpec:
 
 
 def _read(rng: np.random.Generator, admitted: tuple[str, ...], vocab: tuple[str, ...],
-          eps: np.ndarray, p: float, guess: str, a5: bool, strongest: bool) -> str:
+          eps: np.ndarray, p: float, guess: str, a5: bool, strongest: bool,
+          u: float | None = None) -> str:
     """One reading under §3.2. In the A5 arm, at a silent cell the strongest model reads
-    one guessed value with its accuracy (domain knowledge where T says nothing)."""
-    if admitted and rng.random() < p:
+    one guessed value with its accuracy (domain knowledge where T says nothing). u: the
+    group's shared faithful-or-error draw (act groups), else a fresh one."""
+    if admitted and (rng.random() if u is None else u) < p:
         return admitted[int(rng.integers(len(admitted)))]
-    if not admitted and a5 and strongest and rng.random() < p:
+    if not admitted and a5 and strongest and (rng.random() if u is None else u) < p:
         return guess
     outside = np.array([0.0 if x in admitted else e for x, e in zip(vocab, eps, strict=True)])
     if outside.sum() <= 0:
