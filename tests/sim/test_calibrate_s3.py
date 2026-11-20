@@ -2,10 +2,18 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from specdx.sim.calibrate import CalibrationError
-from specdx.sim.calibrate_s3 import SPLIT_FILE, SPLIT_SEED, calibrate_s3, load_split, split_domains
+from specdx.sim.calibrate_s3 import (
+    SPLIT_FILE,
+    SPLIT_SEED,
+    SPREAD_FLOOR,
+    calibrate_s3,
+    load_split,
+    split_domains,
+)
 from specdx.sim.generator import generate
 from specdx.subjects.sopbench import DOMAINS
 from specdx.subjects.sopbench.cells import cells_for
@@ -62,3 +70,15 @@ def test_calibrate_s3_has_no_fallback_without_development_data() -> None:
     runs = [_run("bank", 0, "m", True)]
     with pytest.raises(CalibrationError):
         calibrate_s3([cells_for(tasks, runs)], runs, dev=("library",))
+
+
+def test_a_near_homogeneous_panel_is_widened_to_the_spread_floor() -> None:
+    models = ("a", "b", "c", "d", "e")
+    tasks = [S3Task("library", i, f"goal{i}", True, "P") for i in range(101)]
+    # Rater k fails its own block of 20 tasks (21 for the last): about 0.8 accuracy each.
+    runs = [_run("library", t.index, m, ok=not (20 * k <= t.index < 20 * k + 20 + (k == 4)))
+            for t in tasks for k, m in enumerate(models)]
+    config = calibrate_s3([cells_for(tasks, runs)], runs, dev=("library",))
+    spread = float(np.std(config.alphas))
+    assert 0.0 < spread < SPREAD_FLOOR
+    assert math.isclose(config.alpha_spread * spread, SPREAD_FLOOR, rel_tol=1e-9)

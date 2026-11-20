@@ -152,9 +152,11 @@ def generate(config: SimConfig) -> SimSpec:
         tendency = rng.dirichlet(np.full(len(vocab), config.error_conc))
         group_beta = float(rng.normal(0.0, config.beta_sd))
         hard = None
-        if (config.arm == "shared" and anchored and form == "none"
+        if (config.arm in ("shared", "saturated") and anchored and form == "none"
                 and rng.random() < config.shared_share):
-            hard = (vocab[1 + int(rng.integers(len(vocab) - 1))], float(rng.uniform(0.5, 1.0)))
+            attractor = vocab[1 + int(rng.integers(len(vocab) - 1))]
+            # Saturated: λ = 1, and every model reads the attractor.
+            hard = (attractor, 1.0 if config.arm == "saturated" else float(rng.uniform(0.5, 1.0)))
         item = col % config.items
         group = f"col{col:03d}"
         for s in ([-1] if pooled else range(config.scenarios)):
@@ -177,7 +179,9 @@ def generate(config: SimConfig) -> SimSpec:
                 pull = np.array([1.0 if x == attractor else 0.0 for x in vocab])
                 errors[cid] = dict.fromkeys(
                     models, (1.0 - lam) * np.full(len(vocab), 1.0 / len(vocab)) + lam * pull)
-            if config.arm == "saturated" and truth[cid].hidden:
+            if config.arm == "saturated" and hard is not None:
+                fixed[cid] = hard[0]
+            elif config.arm == "saturated" and truth[cid].hidden:
                 fixed[cid] = admitted[-1] if admitted else vocab[1]
             guess[cid] = vocab[int(rng.integers(len(vocab)))]
             vocabs[cid] = vocab
@@ -207,10 +211,17 @@ def generate(config: SimConfig) -> SimSpec:
                                                     errors[cid][m], p, guess[cid],
                                                     config.arm == "a5", m == strongest,
                                                     draw if config.act_group > 1 else None)))
-                        clean = all(value == cells[cid].anchor for cid, value in mine
-                                    if cells[cid].anchor is not None)
-                        readings += [Reading(cid, key, m, models[m], f"s{scenario}", value,
-                                             clean, v) for cid, value in mine]
+                        # With act groups a chunk is its own run, so (run_key, scenario) is
+                        # the group of k cells that share one draw (S3: one run per task).
+                        size = config.act_group if config.act_group > 1 else max(len(mine), 1)
+                        for start in range(0, len(mine), size):
+                            part = mine[start:start + size]
+                            rkey = (f"{key}|i{item}|c{start // size}"
+                                    if config.act_group > 1 else key)
+                            clean = all(value == cells[cid].anchor for cid, value in part
+                                        if cells[cid].anchor is not None)
+                            readings += [Reading(cid, rkey, m, models[m], f"s{scenario}", value,
+                                                 clean, v) for cid, value in part]
     readings.sort(key=lambda r: (r.cell, r.run_key))
     return SimSpec(config, cells, readings, truth, models, alphas, betas)
 

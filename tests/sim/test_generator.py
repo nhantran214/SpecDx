@@ -134,6 +134,10 @@ def test_shared_arm_plants_hard_cells_with_one_attractor() -> None:
             shares.append(max(errs.values()) / sum(errs.values()))
     assert shares
     assert min(shares) > 0.4  # λ ≥ 0.5 pulls the errors to one value, plus noise
+    assert sum(shares) / len(shares) >= 0.5
+    for cid, rs in by_cell(spec).items():
+        errs = Counter(r.value for r in rs if r.value != spec.cells[cid].anchor)
+        assert spec.cells[cid].anchor not in errs  # the attractor is never d
     base = generate(replace(config, arm="base"))
     assert not any(t.shared for t in base.truth.values())
     none = generate(replace(config, shared_share=0.0))
@@ -151,12 +155,14 @@ def test_alpha_spread_scales_about_the_mean() -> None:
 
 
 def test_saturated_arm_makes_planted_cells_unanimous() -> None:
-    spec = generate(SimConfig(alphas=(2.0, -1.0, 0.0), act=(1.0, 1.0, 1.0), columns=80,
-                              defect_rate=0.5, arm="saturated", constraint_share=0.0,
-                              anchored_share=1.0, seed=3))
-    planted = [c for c, t in spec.truth.items() if t.hidden]
-    assert planted
-    values: dict[str, set[str]] = {c: set() for c in planted}
+    spec = generate(SimConfig(alphas=(2.0, -1.0, 0.0), act=(1.0, 1.0, 1.0), columns=120,
+                              defect_rate=0.3, arm="saturated", constraint_share=0.0,
+                              anchored_share=1.0, shared_share=0.5, seed=3))
+    defects = [c for c, t in spec.truth.items() if t.hidden]
+    shared = [c for c, t in spec.truth.items() if t.shared]
+    assert defects and shared
+    assert not set(defects) & set(shared)
+    values: dict[str, set[str]] = {c: set() for c in defects + shared}
     for r in spec.readings:
         if r.cell in values:
             values[r.cell].add(r.value)
@@ -178,3 +184,36 @@ def test_act_group_shares_one_draw() -> None:
 
     assert faithful_counts(4) <= {0, 4}
     assert len(faithful_counts(1)) > 2
+
+
+def test_act_group_run_key_and_scenario_form_groups_of_k() -> None:
+    spec = generate(SimConfig(
+        alphas=(1.0, 0.0), act=(1.0, 1.0), columns=40, items=10, pooled_share=0.0,
+        scenarios=2, variants=2, seeds=2, act_group=4, seed=5))
+    sizes = Counter((r.run_key, r.scenario) for r in spec.readings)
+    assert set(sizes.values()) == {4}
+
+
+def test_v3_arms_are_bit_identical_to_the_pre_p4_generator() -> None:
+    import hashlib
+
+    def digest(spec) -> str:
+        rows = sorted((r.cell, r.run_key, r.model, r.family, r.scenario, r.value, r.clean,
+                       r.variant) for r in spec.readings)
+        payload = repr((rows, sorted(spec.betas.items()), sorted(spec.alphas.items())))
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    # Digests computed from the generator at 4a02373, before the v4 arms.
+    golden = {
+        ("base", 0): "3de971c3ffee62d4c3bc3d13e3b4ca652ac34f85bc6f25ca307b2d778b318374",
+        ("base", 1): "85d4e7b1af58d6965433565cef75fd2fd5976a28c7d38adbe000a3c3f77b98b4",
+        ("base", 2): "6aaf86c974047524ce3de4a0495d73155ca12b260f0eabe59d17dfb7b26177c2",
+        ("a3", 0): "595260efa9492d766de7d9498592a78b8aad5863738ad792feacfe8deb8b3286",
+        ("a3", 1): "d54799c8e754bd1ad4b600692a0f28e2e25c8332e01b4d20e42a6bb14bf73298",
+        ("a3", 2): "612721fc755436c35d07586d83e71a06537f38aad678a8c6257a3a615c736c5b",
+        ("a5", 0): "3b51d4d123a49cefd204f43fc60b809d2940053aa9f37c31ac34592b59331477",
+        ("a5", 1): "28a87ce11896017476ba7cb47d6e71804d473aef0a8004a063442a0cd9165d06",
+        ("a5", 2): "1a9fa709bba3c326f9c9131425e5abf1bc90c48679500a8e628f9393fba51274",
+    }
+    for (arm, seed), expected in golden.items():
+        assert digest(generate(SimConfig(arm=arm, seed=seed))) == expected, (arm, seed)
