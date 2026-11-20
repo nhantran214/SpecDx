@@ -37,8 +37,11 @@ import numpy as np
 from specdx.infer.anchored import K_MAX, KAPPA, OTHER, SETS, CellPosterior, set_log_prior
 from specdx.infer.cells import Cell
 
-# Ruling T1-L: log_lr maximises each set's likelihood over β_c in β_g ± BETA_BOX.
-BETA_BOX = 6.0
+# Ruling T1-L′: β_c is maximised over the box [min α − BOX_MARGIN, max α + BOX_MARGIN], α over
+# the raters present at the cell, in log_lr and in the posterior alike. The box does not
+# depend on β_g, so neither does log_lr (T5: a unanimous deviation is undecidable whatever
+# β_g is).
+BOX_MARGIN = 10.0
 _STEP_TOL = 1e-10
 _MAX_ITER = 200
 
@@ -78,8 +81,9 @@ class V4Params:
 class SetFit:
     """One candidate set's profiled log posterior: the data log-likelihood plus the log
     densities of β_c under N(β_g, cell_sd²), of λ under its Beta prior (A ≠ ∅) or of ε
-    under the flat pool's Dirichlet (∅), at their joint maximum. beta, lam, attractor: the
-    maximiser; attractor None when λ = 0 (δ_e carries no weight) and always under ∅."""
+    under the flat pool's Dirichlet (∅), at their joint maximum (β_c within BOX_MARGIN of
+    the raters' abilities, ruling T1-L′). beta, lam, attractor: the maximiser; attractor
+    None when λ = 0 (δ_e carries no weight) and always under ∅."""
 
     loglik: float
     beta: float
@@ -141,6 +145,14 @@ def _beta_part(inside: np.ndarray, outside: np.ndarray, a: np.ndarray,
     with np.errstate(invalid="ignore"):
         return (np.where(inside > 0, inside * _log_sigmoid(eta), 0.0)
                 + np.where(outside > 0, outside * _log_sigmoid(-eta), 0.0)).sum(axis=1)
+
+
+def _box(present: np.ndarray) -> tuple[float, float]:
+    """Ruling T1-L′'s β_c box from the abilities of the raters present at the cell; with no
+    reading, nothing depends on β_c and the box is ±BOX_MARGIN."""
+    if not present.size:
+        return -BOX_MARGIN, BOX_MARGIN
+    return float(present.min()) - BOX_MARGIN, float(present.max()) + BOX_MARGIN
 
 
 def _argmax_beta(inside: np.ndarray, total: np.ndarray, a: np.ndarray, centre: float,
@@ -247,6 +259,7 @@ def _empty_fit(per_slot: np.ndarray, beta_g: float, params: V4Params) -> tuple[S
     k = len(per_slot)
     eps = (per_slot + KAPPA / k) / (per_slot.sum() + KAPPA)
     data = sum(_xlog(float(per_slot[i]), float(eps[i])) for i in range(k))
+    # Ledger addendum to T1-L: the Dirichlet(1 + κ·u) kernel, v3's estimator.
     dirichlet = (math.lgamma(k + KAPPA) - k * math.lgamma(1 + KAPPA / k)
                  + sum(KAPPA / k * math.log(float(x)) for x in eps))
     beta_prior = -0.5 * math.log(2 * math.pi * params.cell_sd ** 2)
@@ -258,7 +271,7 @@ def _profile(
     alpha: Mapping[str, float], beta_g: float, params: V4Params,
 ) -> tuple[dict[frozenset[str], SetFit], dict[frozenset[str], float], np.ndarray]:
     """Per candidate set: its SetFit (the profiled log posterior) and its prior-free profile
-    log-likelihood (β_c ∈ β_g ± BETA_BOX, λ ∈ [0, 1], e free; ∅ at the flat pool's ε,
+    log-likelihood (β_c in the box of T1-L′, λ ∈ [0, 1], e free; ∅ at the flat pool's ε,
     which is the Dirichlet's part of what ∅ means and so stays); and ∅'s ε over the slots.
     A set whose outside holds only OTHER has no attractor and λ does not enter its
     likelihood; its profile still takes λ's prior at its mode, as for any set, and reports
@@ -273,10 +286,9 @@ def _profile(
     inside = member @ table.T  # [S, M]
     outside = total[None, :] - inside
     prec = 1.0 / params.cell_sd ** 2
-    spread = float(total.sum()) / prec + 1.0  # the posterior's root lies within ±N/prec
-    beta_map = _argmax_beta(inside, total, a, beta_g, prec, beta_g - spread, beta_g + spread)
-    beta_box = _argmax_beta(inside, total, a, beta_g, 0.0, beta_g - BETA_BOX,
-                            beta_g + BETA_BOX)
+    lo, hi = _box(a[total > 0])
+    beta_map = _argmax_beta(inside, total, a, beta_g, prec, lo, hi)
+    beta_box = _argmax_beta(inside, total, a, beta_g, 0.0, lo, hi)
     data_map = _beta_part(inside, outside, a, beta_map)
     data_box = _beta_part(inside, outside, a, beta_box)
     beta_prior = (-(beta_map - beta_g) ** 2 * prec / 2
@@ -304,7 +316,7 @@ def _profile(
                       + _lambda_part(errs, n_e, lam_free, e is not None))
     empty, data, eps = _empty_fit(per_slot, beta_g, params)
     fits[frozenset()] = empty
-    likes[frozenset()] = data
+    likes[frozenset()] = data  # ledger addendum to T1-L: ∅ enters log_lr at its pool ε
     return fits, likes, eps
 
 

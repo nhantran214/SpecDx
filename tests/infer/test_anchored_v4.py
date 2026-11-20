@@ -17,7 +17,7 @@ from specdx.infer.anchored import (
     fit_anchored,
 )
 from specdx.infer.anchored_v4 import (
-    BETA_BOX,
+    BOX_MARGIN,
     CellPosteriorV4,
     SetFit,
     V4Params,
@@ -104,6 +104,22 @@ def test_unanimous_deviation_is_undetermined() -> None:
     assert abs(post.log_lr) < V4Params().tau_u
 
 
+_POPULATION = {f"r{i:02d}": float(x)
+               for i, x in enumerate(np.random.default_rng(20261120).normal(1.0, 1.0, 30))}
+
+
+@pytest.mark.parametrize("raters", [RATERS, _POPULATION], ids=["4-raters", "30-raters"])
+@pytest.mark.parametrize("beta_g", [-2.0, -1.0, 0.0, 1.0, 2.0])
+def test_unanimous_is_undetermined_for_any_beta_g(raters: dict[str, float],
+                                                  beta_g: float) -> None:
+    # Ruling T1-L′: T5 makes a unanimous deviation undecidable whatever β_g is, so log_lr's
+    # box is relative to the raters present and log_lr does not depend on β_g.
+    counts = {m: {"a": 20} for m in raters}
+    values = candidate_values("d", ["a"])
+    post = profile_cell(ANCHORED, values, counts, raters, beta_g, P4)
+    assert abs(post.log_lr) < V4Params().tau_u
+
+
 def test_empty_set_keeps_flat_pool_and_no_attractor() -> None:
     fits = profile_sets(ANCHORED, ("d", "a", "b"), MIS_KEY, RATERS, 0.0, P4)
     empty = fits[frozenset()]
@@ -120,32 +136,47 @@ def _xlog(n: np.ndarray, x: np.ndarray) -> np.ndarray:
         return np.where(n > 0, n * np.log(x), 0.0)
 
 
+def _joint_grid(table: np.ndarray, a: np.ndarray, s: tuple[int, ...], n: int, beta_g: float,
+                priors: bool, e: int | None) -> float:
+    """An independent brute force of one non-empty set at a fixed attractor e (None: none):
+    the full reading likelihood P(k | m, β_c, λ) evaluated on a joint 2-D (β_c, λ) mesh over
+    the box [min α − BOX_MARGIN, max α + BOX_MARGIN] × [0, 1], 121 × 101 points, then three
+    zooms of 201 × 201 points around the mesh maximum (±2 mesh steps each), so the last steps
+    are below 1e-4 in β_c and 1e-5 in λ. With priors, the N(β_g, 1) and Beta(1, 3) log
+    densities (V4Params() defaults) are added on the mesh."""
+    inside = np.array([k in s for k in range(n + 1)])
+    outside = int((~inside).sum())
+    lo, hi = float(a.min()) - BOX_MARGIN, float(a.max()) + BOX_MARGIN
+
+    def loglik(betas: np.ndarray, lams: np.ndarray) -> np.ndarray:
+        p = 1.0 / (1.0 + np.exp(-(a[None, :] - betas[:, None])))  # [B, M]
+        hot = np.arange(n + 1) == e
+        err = (1 - lams)[:, None] / outside + lams[:, None] * hot[None, :]  # [L, K]
+        prob = np.where(inside[None, None, None, :], p[:, None, :, None] / len(s),
+                        (1 - p)[:, None, :, None] * err[None, :, None, :])  # [B, L, M, K]
+        out = _xlog(table[None, None, :, :], prob).sum(axis=(2, 3))
+        if priors:
+            out = (out - ((betas - beta_g) ** 2 / 2 + 0.5 * math.log(2 * math.pi))[:, None]
+                   + math.log(3.0) + _xlog(np.full_like(lams, 2.0), 1 - lams)[None, :])
+        return out
+
+    betas, lams = np.linspace(lo, hi, 121), np.linspace(0.0, 1.0, 101)
+    best = -math.inf
+    for _ in range(4):
+        mesh = loglik(betas, lams)
+        i, j = np.unravel_index(int(np.argmax(mesh)), mesh.shape)
+        best = max(best, float(mesh[i, j]))
+        db, dl = 2 * (betas[1] - betas[0]), 2 * (lams[1] - lams[0])
+        betas = np.linspace(max(lo, betas[i] - db), min(hi, betas[i] + db), 201)
+        lams = np.linspace(max(0.0, lams[j] - dl), min(1.0, lams[j] + dl), 201)
+    return best
+
+
 def _grid_max(table: np.ndarray, a: np.ndarray, s: tuple[int, ...], n: int, beta_g: float,
               priors: bool) -> float:
-    """An independent brute-force profile of one non-empty set on a fine grid: β_c (step
-    8e-4) and λ (step 5e-5), every attractor; with priors, the N(β_g, 1) and Beta(1, 3)
-    log densities (V4Params() defaults), else β_c in the box β_g ± BETA_BOX."""
-    inside = np.array([k in s for k in range(n + 1)])
-    faithful, errors = table[:, inside].sum(axis=1), table[:, ~inside].sum(axis=1)
-    width = 8.0 if priors else BETA_BOX
-    betas = np.linspace(beta_g - width, beta_g + width, 20001)
-    p = 1.0 / (1.0 + np.exp(-(a[None, :] - betas[:, None])))
-    beta_part = (_xlog(faithful, p / len(s)) + _xlog(errors, 1.0 - p)).sum(axis=1)
-    if priors:
-        beta_part = beta_part - (betas - beta_g) ** 2 / 2 - 0.5 * math.log(2 * math.pi)
-    lams = np.linspace(0.0, 1.0, 20001)
-    slots = [k for k in range(n + 1) if not inside[k]]
-    per_slot = table.sum(axis=0)
-    best = -math.inf
-    for e in [k for k in slots if k < n] or [None]:
-        lam_part = np.zeros_like(lams)
-        for k in slots:
-            prob = (1 - lams) / len(slots) + (lams if k == e else 0.0)
-            lam_part = lam_part + _xlog(np.full_like(lams, per_slot[k]), prob)
-        if priors:
-            lam_part = lam_part + math.log(3.0) + _xlog(np.full_like(lams, 2.0), 1 - lams)
-        best = max(best, float(beta_part.max() + lam_part.max()))
-    return best
+    """The joint grid's maximum over every attractor (or none, when only OTHER is outside s)."""
+    choices = [k for k in range(n) if k not in s] or [None]
+    return max(_joint_grid(table, a, s, n, beta_g, priors, e) for e in choices)
 
 
 @pytest.mark.parametrize("data", ["mis", "shared"])
