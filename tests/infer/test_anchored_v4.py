@@ -1,5 +1,5 @@
-"""The v4 per-cell profile likelihood (design v4 §3, §5.1; ruling T1-L). Every brief test uses
-V4Params()."""
+"""The v4 per-cell profile likelihood (design v4 §3, §5.1; ruling T1-L) and the v4 outer fit
+(§3.3–§3.5; ruling T2-U). Every brief test uses V4Params()."""
 
 import dataclasses
 import math
@@ -18,12 +18,20 @@ from specdx.infer.anchored import (
 )
 from specdx.infer.anchored_v4 import (
     BOX_MARGIN,
+    AnchoredFitV4,
     CellPosteriorV4,
     SetFit,
     V4Params,
     _data_loglik,
+    _em,
     _encode_counts,
+    _m_step,
+    _Pairs,
     _profile,
+    _profiled_beta,
+    _q_objective,
+    _setup,
+    fit_v4,
     profile_cell,
     profile_sets,
 )
@@ -312,3 +320,172 @@ def test_v3_is_untouched() -> None:
     assert set(fit.weights) == set(V3_WEIGHTS)
     for k, w in V3_WEIGHTS.items():
         assert fit.weights[k] == pytest.approx(w, abs=1e-12)
+
+
+# --- Task 2: the v4 outer fit ---
+
+ALPHAS4 = (3.0, 2.0, 1.0, 0.0)
+
+
+def _shared_data(alphas: tuple[float, ...] = ALPHAS4, cells: int = 200, shared: float = 0.3,
+                 per: int = 10, groups: int = 20, seed: int = 20261120,
+                 ) -> tuple[dict[str, Cell], list[Reading], dict[str, str]]:
+    """A hand-built shared-error arm (ruling G1: Task 4's simulator arm comes later). Each
+    anchored cell c has vocabulary d, v1, v2, v3, true set {d} and difficulty β_c = β_g +
+    N(0, 1) with β_g ~ N(0, 1) per group. The hardest `shared` share of the cells carry a
+    shared error: errors are (1 − λ)·flat + λ·δ_v1 with λ ~ U(0.5, 1); elsewhere errors are
+    flat. Each model reads each cell `per` times, every reading its own act group."""
+    rng = np.random.default_rng(seed)
+    models = {f"m{i}": f"f{i}" for i in range(len(alphas))}
+    group_beta = rng.normal(0.0, 1.0, groups)
+    betas = group_beta[np.arange(cells) % groups] + rng.normal(0.0, 1.0, cells)
+    hard = set(np.argsort(-betas)[:round(shared * cells)].tolist())
+    out: dict[str, Cell] = {}
+    readings: list[Reading] = []
+    for c in range(cells):
+        cid, group = f"c{c:03d}", f"g{c % groups:02d}"
+        out[cid] = Cell(cid, "value", "d", f"k{c}", group, group, ("step",))
+        lam = float(rng.uniform(0.5, 1.0)) if c in hard else 0.0
+        err = np.full(3, (1.0 - lam) / 3)
+        err[0] += lam
+        for (m, family), a in zip(models.items(), alphas, strict=True):
+            p = 1.0 / (1.0 + math.exp(-(a - betas[c])))
+            for k in range(per):
+                value = ("d" if rng.random() < p
+                         else ("v1", "v2", "v3")[int(rng.choice(3, p=err))])
+                readings.append(Reading(cid, f"{m}|{cid}|{k}", m, family, f"s{k}", value))
+    return out, readings, models
+
+
+def _order(theta: dict[str, float]) -> list[str]:
+    return sorted(theta, key=lambda m: -theta[m])
+
+
+def test_recovers_ability_order_with_shared_errors() -> None:
+    cells, readings, models = _shared_data()
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert isinstance(fit, AnchoredFitV4)
+    assert _order(fit.theta) == ["m0", "m1", "m2", "m3"]
+    # A cell here flips across tau_u on alternate iterations until _em freezes it out.
+    assert fit.converged
+
+
+def _small() -> tuple[dict[str, Cell], list[Reading], dict[str, str]]:
+    return _shared_data(alphas=(2.5, 1.0, -0.5), cells=30, per=6, groups=5, seed=7)
+
+
+def test_composite_weights_do_not_change_single_cell_groups() -> None:
+    cells, readings, models = _small()
+    assert len({(r.run_key, r.scenario) for r in readings}) == len(readings)
+    weighted = fit_v4(cells, readings, models=models, params=P4)
+    plain = fit_v4(cells, readings, models=models, params=P4, composite=False)
+    assert weighted.alpha == plain.alpha
+    assert weighted.weights == plain.weights
+    assert weighted.start == plain.start
+
+
+def test_composite_weights_damp_correlated_groups() -> None:
+    cells, readings, models = _small()
+    single = fit_v4(cells, readings, models=models, params=P4)
+    # Every reading copied into k = 4 identical cells of one difficulty group, keeping its
+    # run key and scenario: one act read four times.
+    copies = {f"{cid}#{i}": dataclasses.replace(cell, id=f"{cid}#{i}")
+              for cid, cell in cells.items() for i in range(4)}
+    four = [dataclasses.replace(r, cell=f"{r.cell}#{i}") for r in readings for i in range(4)]
+    damped = fit_v4(copies, four, models=models, params=P4)
+    for m in models:
+        assert damped.alpha[m] == pytest.approx(single.alpha[m], abs=1e-3)
+    assert damped.weights == pytest.approx(single.weights, abs=1e-9)
+    # Without the weights the four copies count four times and the abilities move.
+    loud = fit_v4(copies, four, models=models, params=P4, composite=False)
+    assert max(abs(loud.alpha[m] - single.alpha[m]) for m in models) > 1e-3
+
+
+def test_fit_reports_convergence_and_start() -> None:
+    cells, readings, models = _small()
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert fit.converged and fit.iterations >= 1
+    assert set(fit.starts) == {"t3", "alpha=0.0", "alpha=1.0", "alpha=2.0", "alpha=3.0"}
+    assert fit.start in fit.starts
+    assert fit.starts[fit.start].score == max(s.score for s in fit.starts.values())
+    assert fit.starts[fit.start].iterations == fit.iterations
+    assert fit.params is P4
+    assert set(fit.cells) == set(cells)
+    assert all(isinstance(post, CellPosteriorV4) for post in fit.cells.values())
+    for m, a in fit.alpha.items():
+        assert fit.theta[m] == pytest.approx(1.0 / (1.0 + math.exp(-a)))
+    assert set(fit.family_effect) == set(models.values())
+    assert set(fit.weights) == {r.run_key for r in readings}
+    assert all(0.0 <= w <= 1.0 for w in fit.weights.values())
+    assert len(fit.excluded) == fit.iterations
+    # Not converging within max_iter is reported, never silent.
+    short = fit_v4(cells, readings, models=models, params=P4, max_iter=1)
+    assert not short.converged and short.iterations == 1
+
+
+def _unanimous(cells: int, models: dict[str, str], value: str = "a", per: int = 5,
+               ) -> tuple[dict[str, Cell], list[Reading]]:
+    """Anchored cells (anchor d) every model always reads as `value`, in a difficulty group
+    of their own: undetermined for any α (T5), whether value is d or not."""
+    out = {f"u{value}{c}": Cell(f"u{value}{c}", "value", "d", f"ku{value}{c}", "ug", "ug",
+                                ("step",)) for c in range(cells)}
+    readings = [Reading(cid, f"{m}|{cid}|{k}", m, family, f"s{k}", value)
+                for cid in out for m, family in models.items() for k in range(per)]
+    return out, readings
+
+
+def test_all_undetermined_data_returns_the_ability_prior() -> None:
+    # Ruling T2-U: a cell with |log_lr| < tau_u carries no ability information, so data made
+    # only of such cells leave α at its prior mean, and the fit still returns.
+    models = {"m0": "f0", "m1": "f1", "m2": "f2"}
+    cells, readings = _unanimous(6, models)
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert fit.converged
+    for m in models:
+        assert fit.alpha[m] == pytest.approx(P4.mu_alpha, abs=1e-9)
+    assert all(n == len(cells) for n in fit.excluded)
+    assert all(abs(post.log_lr) < P4.tau_u for post in fit.cells.values())
+
+
+def test_undetermined_cells_leave_the_ability_updates_unchanged() -> None:
+    # Ruling T2-U: from the same start, adding undetermined cells (in a difficulty group of
+    # their own) moves no ability. (From fit_v4's own starts they would: T3's median start
+    # reads every anchored cell, and EM's fixed point depends on its start.)
+    cells, readings, models = _small()
+    _, base, start = _setup(cells, readings, models, P4, True)
+    extra_cells, extra = _unanimous(10, models)
+    _, more, _ = _setup(cells | extra_cells, readings + extra, models, P4, True)
+    assert base is not None and more is not None
+    alpha, _, ok, _, trace = _em(base, start, P4, 1e-6, 200)
+    alpha_more, _, ok_more, _, trace_more = _em(more, start, P4, 1e-6, 200)
+    assert ok and ok_more
+    assert alpha_more == pytest.approx(alpha, abs=1e-9)
+    assert trace_more == tuple(n + len(extra_cells) for n in trace)
+
+
+def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
+    # The M-step maximises Q(α, β_g) = Σ_j ω_j·max_{β_c}[Σ_m in·log σ(α − β_c) + (tot − in)·
+    # log σ(β_c − α) − P_j·(β_c − β_g)²/2] + the α and β_g log priors: its gradient vanishes
+    # there, and each β_g is its pairs' profiled β_c shrunk under N(0, beta_sd²).
+    rng = np.random.default_rng(3)
+    j, m, g = 40, 3, 4
+    total = rng.integers(0, 8, (j, m)).astype(float) * rng.choice([0.25, 1.0], (j, 1))
+    inside = np.floor(total * rng.uniform(0, 1, (j, m)))
+    pairs = _Pairs(inside, total, rng.uniform(0.1, 1.0, j), rng.uniform(0.25, 1.0, j),
+                   np.arange(j) % g, np.full(j, -12.0), np.full(j, 12.0))
+    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)
+    best = _q_objective(pairs, alpha, beta, P4)
+    h = 1e-5
+    for i in range(m + g):
+        step = np.zeros(m + g)
+        step[i] = h
+        up = _q_objective(pairs, alpha + step[:m], beta + step[m:], P4)
+        down = _q_objective(pairs, alpha - step[:m], beta - step[m:], P4)
+        assert (up - down) / (2 * h) == pytest.approx(0.0, abs=1e-5)
+        assert up <= best + 1e-12 and down <= best + 1e-12
+    star = _profiled_beta(pairs, alpha, beta)
+    for k in range(g):
+        mine = pairs.group == k
+        weight = pairs.weight[mine] * pairs.prec[mine]
+        expected = (weight * star[mine]).sum() / (weight.sum() + 1.0 / P4.beta_sd ** 2)
+        assert beta[k] == pytest.approx(expected, abs=1e-8)
