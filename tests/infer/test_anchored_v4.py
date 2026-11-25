@@ -435,6 +435,109 @@ def test_all_undetermined_data_still_returns_a_fit() -> None:
     assert all(math.isfinite(a) for a in fit.alpha.values())
     assert max(fit.alpha.values()) - min(fit.alpha.values()) < 1e-9
     assert all(abs(post.log_lr) < P4.tau_u for post in fit.cells.values())
+    # EM has more than one fixed point on these data: the start with the best score is the
+    # one kept, and the common ability stays within a few prior sds of μ_α.
+    assert fit.starts[fit.start].score == max(s.score for s in fit.starts.values())
+    assert all(abs(a - P4.mu_alpha) < 3 * P4.sigma_alpha for a in fit.alpha.values())
+
+
+def _moving_pairs() -> _Pairs:
+    rng = np.random.default_rng(11)
+    total = rng.integers(1, 6, (12, 3)).astype(float)
+    inside = np.floor(total * rng.uniform(0, 1, (12, 3)))
+    return _Pairs(inside, total, np.ones(12), np.ones(12), np.arange(12) % 2,
+                  np.full(12, -12.0), np.full(12, 12.0))
+
+
+def test_the_line_search_never_takes_a_step_that_lowers_q(monkeypatch) -> None:
+    # Task 2 Minor 5: when no step size down to the floor raises Q, the M-step stops where
+    # it is instead of taking the floor-sized step.
+    from specdx.infer import anchored_v4
+
+    pairs = _moving_pairs()
+    start_a, start_b = np.zeros(3), np.zeros(2)
+
+    def lower_everywhere(p, a, b, params, cell_beta=True):
+        return -1.0 if (np.array_equal(a, start_a) and np.array_equal(b, start_b)) else -1.1
+
+    monkeypatch.setattr(anchored_v4, "_q_objective", lower_everywhere)
+    alpha, beta = _m_step(pairs, start_a.copy(), start_b.copy(), P4)[:2]
+    assert np.array_equal(alpha, start_a) and np.array_equal(beta, start_b)
+
+
+def test_the_line_search_tolerance_is_relative_to_q(monkeypatch) -> None:
+    # Task 10 Minor 1: a drop in Q at float noise (1e-14 of |Q|) is no reason to halve the
+    # step: the Newton steps go through and reach the true maximiser.
+    from specdx.infer import anchored_v4
+
+    pairs = _moving_pairs()
+    want_a, want_b = _m_step(pairs, np.zeros(3), np.zeros(2), P4)[:2]
+    calls = [0]
+
+    def noisy(p, a, b, params, cell_beta=True):
+        # Every evaluation comes out 1e-8 below the one before: noise, not a real descent.
+        calls[0] += 1
+        return 1e6 - 1e-8 * calls[0]
+
+    monkeypatch.setattr(anchored_v4, "_q_objective", noisy)
+    alpha, beta = _m_step(pairs, np.zeros(3), np.zeros(2), P4)[:2]
+    assert alpha == pytest.approx(want_a, abs=1e-6) and beta == pytest.approx(want_b, abs=1e-6)
+
+
+def test_an_m_step_that_hits_its_newton_cap_is_reported(monkeypatch) -> None:
+    # Task 2 Minor 6: the inner Newton loop's cap is never silent.
+    from specdx.infer import anchored_v4
+
+    cells, readings, models = _small()
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert fit.m_step_capped == 0
+    monkeypatch.setattr(anchored_v4, "_NEWTON_MAX", 1)
+    capped = fit_v4(cells, readings, models=models, params=P4, max_iter=3)
+    assert capped.m_step_capped > 0
+
+
+def test_the_fit_exposes_the_group_difficulties() -> None:
+    # Task 2 Minor 8: β_g per difficulty group, for a later posterior at the fitted values.
+    cells, readings, models = _small()
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert set(fit.beta_g) == {c.group for c in cells.values()}
+    post = profile_cell(cells["c000"], fit.cells["c000"].values,
+                        _counts_of(readings, "c000"), fit.alpha,
+                        fit.beta_g[cells["c000"].group], P4)
+    assert post.sets == pytest.approx(fit.cells["c000"].sets, abs=1e-12)
+
+
+def _counts_of(readings: list[Reading], cid: str) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for r in readings:
+        if r.cell == cid:
+            row = out.setdefault(r.model, {})
+            row[r.value] = row.get(r.value, 0) + 1
+    return out
+
+
+def test_the_fit_converges_with_mixed_act_group_sizes() -> None:
+    # Task 2 Minor 1: act groups of 1, 2 and 3 readings in one fit (as S3's missing cells
+    # give); EM still converges and the abilities keep their order.
+    cells, readings, models = _shared_data(alphas=(2.5, 1.0, -0.5), cells=60, per=6,
+                                           groups=6, seed=9)
+    mixed = [dataclasses.replace(r, run_key=f"{r.model}|g{i // (1 + i % 3)}", scenario="s")
+             for i, r in enumerate(readings)]
+    assert len({len([1 for r in mixed if (r.run_key, r.scenario) == key])
+                for key in {(r.run_key, r.scenario) for r in mixed}}) >= 2
+    fit = fit_v4(cells, mixed, models=models, params=P4)
+    assert fit.converged
+    assert _order(fit.theta) == ["m0", "m1", "m2"]
+
+
+def test_the_v3_view_maps_every_field_by_name() -> None:
+    from specdx.infer.anchored_v4 import _v3_view
+
+    p = V4Params(pi=0.11, s_mis=0.5, s_amb=0.2, s_empty=0.3, beta_sd=1.7, mu_alpha=0.3,
+                 sigma_alpha=1.9, tau_h=0.61, tau_a=0.41, tau_w=0.81)
+    assert _v3_view(p) == V3Params(pi=0.11, s_mis=0.5, s_amb=0.2, s_empty=0.3, beta_sd=1.7,
+                                   mu_alpha=0.3, sigma_alpha=1.9, tau_h=0.61, tau_a=0.41,
+                                   tau_w=0.81)
 
 
 def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
@@ -447,7 +550,7 @@ def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
     inside = np.floor(total * rng.uniform(0, 1, (j, m)))
     pairs = _Pairs(inside, total, rng.uniform(0.1, 1.0, j), rng.uniform(0.25, 1.0, j),
                    np.arange(j) % g, np.full(j, -12.0), np.full(j, 12.0))
-    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)
+    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)[:2]
     best = _q_objective(pairs, alpha, beta, P4)
     h = 1e-5
     for i in range(m + g):
@@ -543,7 +646,7 @@ def test_cell_beta_false_m_step_maximises_the_group_only_objective() -> None:
     inside = np.floor(total * rng.uniform(0, 1, (j, m)))
     pairs = _Pairs(inside, total, rng.uniform(0.1, 1.0, j), rng.uniform(0.25, 1.0, j),
                    np.arange(j) % g, np.full(j, -12.0), np.full(j, 12.0))
-    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4, cell_beta=False)
+    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4, cell_beta=False)[:2]
     best = _q_objective(pairs, alpha, beta, P4, cell_beta=False)
     h = 1e-5
     for i in range(m + g):
@@ -556,7 +659,7 @@ def test_cell_beta_false_m_step_maximises_the_group_only_objective() -> None:
     assert np.array_equal(_profiled_beta(pairs, alpha, beta, cell_beta=False),
                           beta[pairs.group])
     # It is not the free-β_c optimum.
-    free_alpha, free_beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)
+    free_alpha, free_beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)[:2]
     assert not np.allclose(free_beta, beta, atol=1e-6)
 
 

@@ -456,6 +456,8 @@ def _posterior(
 
 _NEWTON_TOL = 1e-10
 _NEWTON_MAX = 50
+_Q_RTOL = 1e-12  # the line search's tolerance on Q, relative to max(1, |Q|)
+_STEP_FLOOR = 1e-8  # the smallest step fraction the line search tries
 
 
 @dataclass
@@ -464,7 +466,9 @@ class AnchoredFitV4:
     cells, weights, converged, iterations, params, start, starts), with v4's per-cell
     posteriors. weights: w_b per run key, the mean faithful probability over the cells the
     behaviour read, as in v3. starts: each start's StartFit, its score the composite
-    profiled log posterior (_score)."""
+    profiled log posterior (_score). beta_g: the kept start's difficulty per group (the β_g
+    at which its cells were profiled). m_step_capped: how many of the kept start's M-steps
+    stopped at the Newton cap instead of converging (0 when none did)."""
 
     alpha: dict[str, float]
     theta: dict[str, float]
@@ -476,6 +480,8 @@ class AnchoredFitV4:
     params: V4Params
     start: str = "t3"
     starts: dict[str, StartFit] = field(default_factory=dict)
+    beta_g: dict[str, float] = field(default_factory=dict)
+    m_step_capped: int = 0
 
 
 @dataclass(frozen=True)
@@ -520,8 +526,10 @@ def _q_objective(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
 
 
 def _m_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
-            params: V4Params, cell_beta: bool = True) -> tuple[np.ndarray, np.ndarray]:
-    """The α and β_g update: the exact maximiser of
+            params: V4Params, cell_beta: bool = True,
+            ) -> tuple[np.ndarray, np.ndarray, bool]:
+    """The α and β_g update, and whether its Newton loop hit _NEWTON_MAX (reported by the
+    fit, never silent): the exact maximiser of
 
         Q(α, β_g) = Σ_j ω_j·max_{β_c ∈ box_j} h_j(α, β_c, β_g) + log N(α; μ_α, σ_α²)
                     + log N(β_g; 0, beta_sd²),
@@ -553,75 +561,103 @@ def _m_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
     α_m)]. With p = σ(α − β_g) and info = tot·p(1 − p): ∂Q/∂α_m = Σ_j ω_j·(in − tot·p) −
     (α_m − μ_α)/σ_α², ∂Q/∂β_g = Σ_{j∈g} ω_j·(tot·p − in) summed over m − β_g/beta_sd²,
     ∂²Q/∂α_m² = −Σ_j ω_j·info_jm − 1/σ_α², ∂²Q/∂α_m∂β_g = Σ_{j∈g} ω_j·info_jm, and
-    ∂²Q/∂β_g² = −Σ_{j∈g} ω_j·Σ_m info_jm − 1/beta_sd². The same Schur step applies."""
+    ∂²Q/∂β_g² = −Σ_{j∈g} ω_j·Σ_m info_jm − 1/beta_sd². The same Schur step applies.
+
+    Both cases share one Newton loop (_newton_step): it stops when a step moves no parameter
+    by _NEWTON_TOL, or when no step down to _STEP_FLOOR keeps Q (to a tolerance relative to
+    |Q|), and then the point is left where it is."""
     groups = beta.size
+    system_of = _system if cell_beta else _system_group_only
     for _ in range(_NEWTON_MAX):
-        if not cell_beta:
-            w = pairs.weight
-            p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - beta[pairs.group][:, None])))
-            info = pairs.total * p * (1 - p)
-            miss = pairs.total * p - pairs.inside
-            g_a = (-(w[:, None] * miss).sum(axis=0)
-                   - (alpha - params.mu_alpha) / params.sigma_alpha ** 2)
-            g_b = (np.bincount(pairs.group, w * miss.sum(axis=1), groups)
-                   - beta / params.beta_sd ** 2)
-            h_aa = (-np.diag((w[:, None] * info).sum(axis=0))
-                    - np.eye(alpha.size) / params.sigma_alpha ** 2)
-            h_ba = np.zeros((groups, alpha.size))
-            np.add.at(h_ba, pairs.group, w[:, None] * info)
-            h_bb = (np.bincount(pairs.group, -w * info.sum(axis=1), groups)
-                    - 1 / params.beta_sd ** 2)
-            h_ab = h_ba.T
-            schur = h_aa - (h_ab / h_bb) @ h_ba
-            d_a = np.linalg.solve(schur, -g_a + (h_ab / h_bb) @ g_b)
-            d_b = (-g_b - h_ba @ d_a) / h_bb
-            before = _q_objective(pairs, alpha, beta, params, False)
-            t = 1.0
-            while t > 1e-8 and _q_objective(pairs, alpha + t * d_a, beta + t * d_b, params,
-                                            False) < before - 1e-12:
-                t /= 2
-            alpha, beta = alpha + t * d_a, beta + t * d_b
-            if max(float(np.max(np.abs(t * d_a), initial=0.0)),
-                   float(np.max(np.abs(t * d_b), initial=0.0))) < _NEWTON_TOL:
-                break
-            continue
-        star = _profiled_beta(pairs, alpha, beta)
-        w = pairs.weight
-        p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - star[:, None])))
-        info = pairs.total * p * (1 - p)
-        free = (star > pairs.lo) & (star < pairs.hi)
-        coup = np.where(free, w / (info.sum(axis=1) + pairs.prec), 0.0)
-        g_a = ((w[:, None] * (pairs.inside - pairs.total * p)).sum(axis=0)
-               - (alpha - params.mu_alpha) / params.sigma_alpha ** 2)
-        g_b = (np.bincount(pairs.group, w * pairs.prec * (star - beta[pairs.group]), groups)
-               - beta / params.beta_sd ** 2)
-        h_aa = (-np.diag((w[:, None] * info).sum(axis=0)) + (info * coup[:, None]).T @ info
-                - np.eye(alpha.size) / params.sigma_alpha ** 2)
-        h_ba = np.zeros((groups, alpha.size))
-        np.add.at(h_ba, pairs.group, info * (pairs.prec * coup)[:, None])
-        h_bb = (np.bincount(pairs.group, -w * pairs.prec + coup * pairs.prec ** 2, groups)
-                - 1 / params.beta_sd ** 2)
-        h_ab = h_ba.T
-        schur = h_aa - (h_ab / h_bb) @ h_ba
-        d_a = np.linalg.solve(schur, -g_a + (h_ab / h_bb) @ g_b)
-        d_b = (-g_b - h_ba @ d_a) / h_bb
-        before = _q_objective(pairs, alpha, beta, params)
-        t = 1.0
-        while t > 1e-8 and _q_objective(pairs, alpha + t * d_a, beta + t * d_b,
-                                        params) < before - 1e-12:
-            t /= 2
-        alpha, beta = alpha + t * d_a, beta + t * d_b
-        if max(float(np.max(np.abs(t * d_a), initial=0.0)),
-               float(np.max(np.abs(t * d_b), initial=0.0))) < _NEWTON_TOL:
-            break
-    return alpha, beta
+        system = system_of(pairs, alpha, beta, params, groups)
+        step = _newton_step(pairs, alpha, beta, params, cell_beta, *system)
+        if step is None:
+            return alpha, beta, False
+        alpha, beta, moved = step
+        if moved < _NEWTON_TOL:
+            return alpha, beta, False
+    return alpha, beta, True
+
+
+def _system(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
+            groups: int) -> tuple[np.ndarray, ...]:
+    """The gradient (g_a, g_b) and the Hessian blocks (h_aa, h_ba, h_bb diagonal) of Q with
+    β_c profiled out (see _m_step)."""
+    star = _profiled_beta(pairs, alpha, beta)
+    w = pairs.weight
+    p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - star[:, None])))
+    info = pairs.total * p * (1 - p)
+    free = (star > pairs.lo) & (star < pairs.hi)
+    coup = np.where(free, w / (info.sum(axis=1) + pairs.prec), 0.0)
+    g_a = ((w[:, None] * (pairs.inside - pairs.total * p)).sum(axis=0)
+           - (alpha - params.mu_alpha) / params.sigma_alpha ** 2)
+    g_b = (np.bincount(pairs.group, w * pairs.prec * (star - beta[pairs.group]), groups)
+           - beta / params.beta_sd ** 2)
+    h_aa = (-np.diag((w[:, None] * info).sum(axis=0)) + (info * coup[:, None]).T @ info
+            - np.eye(alpha.size) / params.sigma_alpha ** 2)
+    h_ba = np.zeros((groups, alpha.size))
+    np.add.at(h_ba, pairs.group, info * (pairs.prec * coup)[:, None])
+    h_bb = (np.bincount(pairs.group, -w * pairs.prec + coup * pairs.prec ** 2, groups)
+            - 1 / params.beta_sd ** 2)
+    return g_a, g_b, h_aa, h_ba, h_bb
+
+
+def _system_group_only(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
+                       groups: int) -> tuple[np.ndarray, ...]:
+    """_system for cell_beta=False, where β_c ≡ β_g (see _m_step)."""
+    w = pairs.weight
+    p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - beta[pairs.group][:, None])))
+    info = pairs.total * p * (1 - p)
+    miss = pairs.total * p - pairs.inside
+    g_a = (-(w[:, None] * miss).sum(axis=0)
+           - (alpha - params.mu_alpha) / params.sigma_alpha ** 2)
+    g_b = (np.bincount(pairs.group, w * miss.sum(axis=1), groups)
+           - beta / params.beta_sd ** 2)
+    h_aa = (-np.diag((w[:, None] * info).sum(axis=0))
+            - np.eye(alpha.size) / params.sigma_alpha ** 2)
+    h_ba = np.zeros((groups, alpha.size))
+    np.add.at(h_ba, pairs.group, w[:, None] * info)
+    h_bb = (np.bincount(pairs.group, -w * info.sum(axis=1), groups)
+            - 1 / params.beta_sd ** 2)
+    return g_a, g_b, h_aa, h_ba, h_bb
+
+
+def _q_tolerance(q: float) -> float:
+    """How far Q may fall in a line-search trial and still count as no lower: float noise,
+    relative to |Q| (an absolute 1e-12 is below Q's own rounding once |Q| is large)."""
+    return _Q_RTOL * max(1.0, abs(q))
+
+
+def _newton_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
+                 cell_beta: bool, g_a: np.ndarray, g_b: np.ndarray, h_aa: np.ndarray,
+                 h_ba: np.ndarray, h_bb: np.ndarray,
+                 ) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """One Newton step solved through the β_g block's Schur complement, then halved until Q
+    is no lower (to _q_tolerance). Returns the new (α, β_g) and the largest move, or None when
+    no step down to _STEP_FLOOR keeps Q: the point is then left as it is, never moved to a
+    lower Q (Task 2 Minor 5)."""
+    h_ab = h_ba.T
+    schur = h_aa - (h_ab / h_bb) @ h_ba
+    d_a = np.linalg.solve(schur, -g_a + (h_ab / h_bb) @ g_b)
+    d_b = (-g_b - h_ba @ d_a) / h_bb
+    before = _q_objective(pairs, alpha, beta, params, cell_beta)
+    floor = before - _q_tolerance(before)
+    t = 1.0
+    while _q_objective(pairs, alpha + t * d_a, beta + t * d_b, params, cell_beta) < floor:
+        t /= 2
+        if t <= _STEP_FLOOR:
+            return None
+    moved = max(float(np.max(np.abs(t * d_a), initial=0.0)),
+                float(np.max(np.abs(t * d_b), initial=0.0)))
+    return alpha + t * d_a, beta + t * d_b, moved
 
 
 @dataclass
 class _Data:
     """The fit's fixed inputs. Per cell: its values (v3's candidate values), its readings'
     unweighted counts (profile_cell's input), which models read it, its difficulty group and
-    its mean composite weight. Per (cell, non-empty set) row: the composite-weighted counts
+    its mean composite weight; group_names: the groups, sorted, indexed by group. Per (cell,
+    non-empty set) row: the composite-weighted counts
     inside the set and in all, and the set's key. reads: each reading as (run key, cell,
     value), for the behaviour weights."""
 
@@ -631,6 +667,7 @@ class _Data:
     counts: list[dict[str, dict[str, int]]]
     present: np.ndarray
     group: np.ndarray
+    group_names: list[str]
     mean_weight: np.ndarray
     row_cell: np.ndarray
     row_key: list[frozenset[str]]
@@ -640,11 +677,12 @@ class _Data:
 
 
 def _v3_view(params: V4Params) -> V3Params:
-    """v3's parameters inside V4Params: what _encode (the prior over sets) and _t3_alpha (μ_α)
-    read."""
-    return V3Params(params.pi, params.s_mis, params.s_amb, params.s_empty, params.beta_sd,
-                    params.mu_alpha, params.sigma_alpha, params.tau_h, params.tau_a,
-                    params.tau_w)
+    """v3's parameters inside V4Params, field by field: what _encode (the prior over sets) and
+    _t3_alpha (μ_α) read."""
+    return V3Params(pi=params.pi, s_mis=params.s_mis, s_amb=params.s_amb,
+                    s_empty=params.s_empty, beta_sd=params.beta_sd, mu_alpha=params.mu_alpha,
+                    sigma_alpha=params.sigma_alpha, tau_h=params.tau_h, tau_a=params.tau_a,
+                    tau_w=params.tau_w)
 
 
 def _prepare(used: list[Cell], by_cell: Mapping[str, Sequence[Reading]], names: list[str],
@@ -687,7 +725,8 @@ def _prepare(used: list[Cell], by_cell: Mapping[str, Sequence[Reading]], names: 
     m = len(names)
     return _Data(
         used, names, values, counts, present,
-        np.array([group_names.index(c.group) for c in used], dtype=int), mean_weight,
+        np.array([group_names.index(c.group) for c in used], dtype=int), group_names,
+        mean_weight,
         np.array(row_cell, dtype=int), row_key,
         np.array(inside).reshape(-1, m), np.array(total).reshape(-1, m), reads)
 
@@ -735,21 +774,24 @@ def _score(data: _Data, marginals: np.ndarray, alpha: np.ndarray, beta: np.ndarr
 
 def _em(data: _Data, alpha: np.ndarray, params: V4Params, tol: float, max_iter: int,
         profile: bool = True, cell_beta: bool = True,
-        ) -> tuple[np.ndarray, np.ndarray, bool, int]:
+        ) -> tuple[np.ndarray, np.ndarray, bool, int, int]:
     """EM from one start, every β_g = 0: α, β_g, whether the largest change in α and β_g fell
-    below tol, and the iterations used. Every cell enters every update (ruling T2-U′:
-    leaving out cells by their observed |log_lr| selects on the outcome and widened α)."""
+    below tol, the iterations used, and how many M-steps hit their Newton cap. Every cell
+    enters every update (ruling T2-U′: leaving out cells by their observed |log_lr| selects
+    on the outcome and widened α)."""
     beta = np.zeros(int(data.group.max()) + 1)
+    capped = 0
     for iterations in range(1, max_iter + 1):
         posts, _ = _e_step(data, alpha, beta, params, profile, cell_beta)
-        new_alpha, new_beta = _m_step(_pairs(data, posts, alpha, params), alpha, beta, params,
-                                      cell_beta)
+        new_alpha, new_beta, hit = _m_step(_pairs(data, posts, alpha, params), alpha, beta,
+                                           params, cell_beta)
+        capped += hit
         moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
                     float(np.max(np.abs(new_beta - beta), initial=0.0)))
         alpha, beta = new_alpha, new_beta
         if moved < tol:
-            return alpha, beta, True, iterations
-    return alpha, beta, False, max_iter
+            return alpha, beta, True, iterations, capped
+    return alpha, beta, False, max_iter, capped
 
 
 def _setup(
@@ -793,11 +835,14 @@ def fit_v4(
     candidate set's likelihood is taken at the MAP set's (β_c, λ, e), E-step and final
     posteriors alike (see _plug_in). cell_beta=False is the no-per-cell-β ablation: β_c ≡ β_g
     in the profiles and in the M-step (no β_c of its own, with the β_g gradient taken
-    directly)."""
+    directly). The kept start's β_g per group and the number of its M-steps that stopped at
+    the Newton cap are reported (beta_g, m_step_capped)."""
     family, data, t3 = _setup(cells, readings, models, params, composite)
     names = sorted(family)
     alpha = np.full(len(names), params.mu_alpha)
     converged, iterations, start = True, 0, "t3"
+    beta_g: dict[str, float] = {}
+    capped = 0
     scores: dict[str, StartFit] = {}
     posts: list[CellPosteriorV4] = []
     reads: list[tuple[str, int, str]] = []
@@ -806,13 +851,14 @@ def fit_v4(
         starts = [("t3", t3)] + [(f"alpha={a}", np.full(len(names), a)) for a in STARTS]
         best = -np.inf
         for label, alpha0 in starts:
-            a, b, ok, n = _em(data, alpha0, params, tol, max_iter, profile, cell_beta)
+            a, b, ok, n, hit = _em(data, alpha0, params, tol, max_iter, profile, cell_beta)
             fitted, marginals = _e_step(data, a, b, params, profile, cell_beta)
             score = _score(data, marginals, a, b, params)
             scores[label] = StartFit(score, ok, n)
             if not posts or score > best:
                 best, start = score, label
-                alpha, converged, iterations = a, ok, n
+                alpha, converged, iterations, capped = a, ok, n, hit
+                beta_g = {g: float(b[i]) for i, g in enumerate(data.group_names)}
                 posts = fitted
     sums: dict[str, list[float]] = {}
     for key, c, value in reads:
@@ -827,4 +873,4 @@ def fit_v4(
         alphas, {m: float(1 / (1 + np.exp(-a))) for m, a in alphas.items()}, effect,
         {post.cell: post for post in posts},
         {k: sum(v) / len(v) for k, v in sorted(sums.items())}, converged, iterations, params,
-        start, scores)
+        start, scores, beta_g, capped)
