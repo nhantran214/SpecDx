@@ -147,6 +147,16 @@ def test_running_guide_describes_p4a_and_smoke_mode() -> None:
     assert "results/p3/smoke/" in text and "48 GB host" in text
 
 
+def test_running_guide_documents_the_official_p4a_run() -> None:
+    text = RUNNING.read_text(encoding="utf-8")
+    section = text.split("### The official P4a run on the 48 GB host", 1)[1].split("\n## ", 1)[0]
+    assert "specdx p3 s3-g0v4 --results results/p3 --work work --jobs" in section
+    assert "results: P4a — frozen v4 parameters for S3 (G0v4)" in section
+    assert "./run_all.sh s3-witness s3-v4 s3-placebo" in section
+    assert "results/p3/*.md" in section
+    assert "never results" in section and "280 v4 fits" in section
+
+
 def test_run_all_usage_documents_smoke_mode(tmp_path) -> None:
     usage = _run_all(tmp_path).stdout
     assert "./run_all.sh smoke" in usage and "P4_SMOKE" in usage

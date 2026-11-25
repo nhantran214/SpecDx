@@ -218,6 +218,26 @@ less results/p3/smoke/STATUS.md
 
 Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, one held-out domain and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done. `smoke` runs all four stages even when one fails, prints a summary (stage, exit code, verdict) and exits with the largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the smoke placebo uses one held-out domain, so it always ends FAIL (1). `P4_SMOKE` must be unset, empty, `0` or `1`; any other value exits 2. Smoke mode applies to the P4a stages only, so `P4_SMOKE=1 ./run_all.sh <other stage>` exits 2, pending stages included.
 
+### The official P4a run on the 48 GB host
+
+Official P4a results come only from the 48 GB host. The smoke output under `results/p3/smoke/` is never results: do not cite, freeze or commit it. In order:
+
+```bash
+# 1. G0v4 on the development domains. run_all.sh has no --jobs option, so call the stage
+#    directly to parallelise the fits (N = the host's cores, 20 was used for the estimate below).
+.venv/bin/specdx p3 s3-g0v4 --results results/p3 --work work --jobs N
+# 2. Only on PASS: commit the frozen parameters, on that host.
+git add experiments/p4-s3-v4-params.json
+git commit -m "results: P4a — frozen v4 parameters for S3 (G0v4)"
+# 3. The remaining stages (or ./run_all.sh all, which skips s3-g0v4 once it is recorded done).
+./run_all.sh s3-witness s3-v4 s3-placebo
+# 4. Send results/p3/*.md back for review.
+```
+
+A G0v4 FAIL (exit 1) freezes nothing, and the later stages then exit 2 for want of parameters; send `results/p3/s3-g0v4.md` back instead of continuing.
+
+G0v4 cost. The official grid is 6 prior settings (3 `cell_sd` x 2 `lambda_prior`; the 27 threshold settings are scored afterwards at no fit cost) and 10 replicates per arm over 4 arms: (6 + 1 held-out) x 4 x 10 = 280 v4 fits and 40 v3 fits. The smoke on this machine measured 729 s per v4 fit and 100 s per v3 fit, so the run costs about 208,000 s of CPU, 58 hours, and about 2.9 hours at `--jobs 20` if the speed-up is perfect. This exceeds 2 hours. It is not a safe figure: the smoke estimated 623 s at `--jobs 20` and took 3,724 s (6 times more), so allow up to about 17 hours, and read the stage's own "estimated" line on stderr first (it costs about 14 minutes of sequential fits).
+
 The CASE-0031 steps (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`) are no longer in `run_all.sh`. Their `specdx` commands remain, and §12 and §13 are kept as the record of how they ran.
 
 ## 12. Reproducing G0 and G1 (P2a, CPU only)
