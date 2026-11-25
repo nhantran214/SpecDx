@@ -443,9 +443,11 @@ def placebo_stage(
     for domain in held:
         tasks, runs = data[domain]
         models = _models(runs)
-        outcomes.append(placebo(domain, tasks, runs, models, params, V3Params(), list(seeds)))
         cd = _cells(domain, tasks, runs)
         dx = diagnose_domain_v4(domain, cd, models, load_raw_tasks(domain, tasks_root), params)
+        # The diagnosis's fit is the real v4 fit: the placebo does not fit the real data again.
+        outcomes.append(placebo(domain, tasks, runs, models, params, V3Params(), list(seeds),
+                                real_fit=dx.fit))
         unanimous[domain] = unanimous_fates(cd, dx)
     verdict, evaluable, over = placebo_verdict(outcomes)
     rows = []
@@ -465,17 +467,24 @@ def placebo_stage(
             f"Evaluable domains: {', '.join(evaluable) or 'none'}."
             + (f" Over the bound: {', '.join(over)}." if over else ""), "",
             "## Placebo per domain", "",
-            "Counts are typed defects (hidden, ambiguity, weak) on cells whose readings "
-            "differ, before witnesses. Placebo columns are the mean over the seeds; a ratio "
-            "is the mean placebo count over the real count.", ""]
+            "Counts are cells: the changeable cells (cells whose readings differ) that carry "
+            "at least one typed defect (hidden, ambiguity or weak), each cell counted once, "
+            "before witnesses. A placebo shuffles the act vectors among each task's runs "
+            "without a tool error (a tool-error run gives no reading and keeps its own "
+            "record), so every task's readings, and the changeable cells, are kept. Placebo "
+            "columns are the mean over the seeds; a ratio is the mean placebo count over the "
+            "real count.", ""]
     body += _table(("domain", "changeable cells", "real v4", "placebo v4 (mean)", "v4 ratio",
                     "real v3", "placebo v3 (mean)", "v3 ratio", "status"), rows)
     body += ["", "## Unanimous cells (reported apart)", "",
              "Cells with identical readings cannot change under the permutation, so they are "
              "reported apart, split by whether the unanimous reading agrees with the anchor, "
              "with v4's fate for each cell (design §6.2; a unanimous cell is as undecidable "
-             "when it agrees as when it deviates). Fates are mutually exclusive: "
-             "witnessed_error is an undetermined outcome cell whose replay failed.",
+             "when it agrees as when it deviates). \"none\" on an agreeing cell is the "
+             "candidate-value convention, not evidence: an unobserved value is not a "
+             "candidate, so the cell has no defect form to test (theory note D5, Proposition "
+             "T5.5(c)). Fates are mutually exclusive: witnessed_error is an undetermined "
+             "outcome cell whose replay failed.",
              ""]
     urows = []
     for domain, kinds in unanimous.items():

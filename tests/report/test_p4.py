@@ -300,7 +300,9 @@ def test_placebo_stage_reports_domains_unanimous_cells_and_the_verdict(
                         seeds=[0, 1], params=params)
     assert out.verdict in ("PASS", "FAIL") and out.exit_code == (out.verdict != "PASS")
     for text in ("## Placebo per domain", "## Unanimous cells (reported apart)",
-                 "changeable cells", "v4 ratio", "v3 ratio", "evaluable", "not certified"):
+                 "changeable cells", "v4 ratio", "v3 ratio", "evaluable", "not certified",
+                 "each cell counted once", "runs without a tool error",
+                 "candidate-value convention"):
         assert text in out.body
     [r] = out.data["results"]
     # One held-out domain can never reach the two evaluable domains the verdict needs.
