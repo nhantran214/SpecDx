@@ -266,8 +266,9 @@ def test_run_all_checks_every_stage_name_before_running_any(tmp_path) -> None:
 
 
 def test_p4_jobs_defaults_to_the_cores_and_must_be_a_positive_integer(tmp_path) -> None:
-    r = _sourced(tmp_path, 'echo "$JOBS"', P4_JOBS="")
-    assert r.returncode == 0 and r.stdout.strip() == str(os.cpu_count())
+    # The cores this process may use; an exported OMP_NUM_THREADS does not change the count.
+    r = _sourced(tmp_path, 'echo "$JOBS"', P4_JOBS="", OMP_NUM_THREADS="1")
+    assert r.returncode == 0 and r.stdout.strip() == str(len(os.sched_getaffinity(0)))
     assert _sourced(tmp_path, 'echo "$JOBS"', P4_JOBS="3").stdout.strip() == "3"
     for bad in ("0", "-2", "many", "2.5"):
         r = _sourced(tmp_path, "true", P4_JOBS=bad)

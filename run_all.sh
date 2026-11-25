@@ -77,7 +77,8 @@ case "${P4_SMOKE:-}" in
 esac
 
 JOBS="${P4_JOBS:-}"
-[[ -n $JOBS ]] || JOBS="$(nproc)"
+# nproc alone would honour OMP_NUM_THREADS (often 1 by now), so it is cleared for the count.
+[[ -n $JOBS ]] || JOBS="$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)"
 if ! [[ $JOBS =~ ^[0-9]+$ ]] || (( 10#$JOBS < 1 )); then
   printf 'error: P4_JOBS must be a positive integer (got %q)\n' "$JOBS" >&2
   exit 2

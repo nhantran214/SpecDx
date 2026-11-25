@@ -226,7 +226,7 @@ def test_jobs_do_not_change_the_output_and_nothing_forks_a_threaded_parent(
 
     monkeypatch.setattr(os, "fork", no_fork)
     for name in g0v4.BLAS_THREADS:
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "4")  # restored after the test
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         code = g0v4.run_g0v4(TINY, tmp_path / "b", replicates=2, grid=SMALL_GRID, jobs=2)
