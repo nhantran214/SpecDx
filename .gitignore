@@ -11,3 +11,4 @@ baseline/*/*.pdf
 # Related-work survey and run results: kept on disk, not tracked
 related_work/
 results/
+docs/
