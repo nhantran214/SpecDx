@@ -2,6 +2,7 @@
 T5 lower bound on a binary cell, its behaviour in n·Δ², and its chance limit."""
 
 import importlib.util
+import itertools
 import math
 import sys
 from pathlib import Path
@@ -102,8 +103,90 @@ def test_the_bound_is_a_decreasing_function_of_n_h_and_h_is_sandwiched_by_n_delt
         assert r.n * r.delta_c ** 2 / 4 <= r.h_star + 1e-12
         eta = r.eta
         assert r.h_star <= r.n * m * r.delta_c ** 2 / (8 * eta ** 2 * (1 - eta) ** 2) + 1e-12
-    ordered = sorted(rows, key=lambda r: r.h_star)
-    assert all(a.lower >= b.lower for a, b in zip(ordered, ordered[1:], strict=False))
+    # Monotone in n·Δ_c² up to the sandwich's constants: if row i's upper exponent is below
+    # row j's lower exponent, row i's bound is strictly above row j's.
+    for ri in rows:
+        upper = ri.n * m * ri.delta_c ** 2 / (8 * ri.eta ** 2 * (1 - ri.eta) ** 2)
+        for rj in rows:
+            if upper < rj.n * rj.delta_c ** 2 / 4:
+                assert ri.lower > rj.lower
+
+
+def test_chance_bound_is_strictly_decreasing_and_matches_the_closed_form(bt) -> None:
+    hs = [0.0, 1e-6, 1e-3, 0.1, 0.5, 1.0, 3.0, 10.0, 40.0]
+    vals = [bt.chance_bound(h) for h in hs]
+    assert vals[0] == 0.5
+    assert all(a > b for a, b in zip(vals, vals[1:], strict=False))
+    for h, v in zip(hs[:6], vals[:6], strict=True):
+        assert v == pytest.approx(0.5 * (1 - math.sqrt(1 - math.exp(-2 * h))), abs=1e-12)
+
+
+def test_the_least_favourable_beta_matches_a_dense_minimisation(bt) -> None:
+    rng = np.random.default_rng(7)
+    for _ in range(12):
+        m = int(rng.integers(2, 12))
+        alpha = rng.normal(0.0, float(rng.uniform(0.2, 2.5)), m)
+        beta_h = float(rng.uniform(-3, 3))
+        _, h = bt.least_favourable(alpha, beta_h)
+        dense = np.linspace(alpha.min() - 45, alpha.max() + 45, 180_001)
+        brute = float(bt._h_one(alpha, beta_h, dense).min())
+        assert h <= brute + 1e-9
+        assert h >= brute - 1e-4  # the dense grid's own resolution
+
+
+def test_exact_tv_matches_brute_force_over_reading_sequences(bt) -> None:
+    alpha, n, beta_h, beta_s = np.array([-0.7, 1.3]), 2, 0.4, -0.2
+    x = 1 / (1 + np.exp(-(alpha - beta_h)))
+    y = 1 / (1 + np.exp(-(beta_s - alpha)))
+    total = 0.0
+    for bits in itertools.product((0, 1), repeat=alpha.size * n):
+        ph = py = 1.0
+        for i, bit in enumerate(bits):
+            m = i // n
+            ph *= x[m] if bit else 1 - x[m]
+            py *= y[m] if bit else 1 - y[m]
+        total += abs(ph - py)
+    assert bt.exact_tv(alpha, n, beta_h, beta_s) == pytest.approx(0.5 * total, abs=1e-12)
+
+
+@pytest.mark.parametrize("m", MS)
+@pytest.mark.parametrize("n", NS)
+def test_the_closed_form_spread_is_necessary(bt, m: int, n: int) -> None:
+    for p in P_BARS:
+        assert bt.necessary_spread(m, n) <= bt.smallest_spread(m, n, p) + 1e-9
+
+
+def test_the_variance_lemma_bounds_h_below_by_the_ability_variance(bt) -> None:
+    # Proposition T5.4(a′): h*(β_H) ≥ ½·η_H²(1 − η_H)²·Σ_m n_m(α_m − ᾱ)², η_H = min_m
+    # min(x_m, 1 − x_m); with the upper bound ⅛·Σ n_m(α_m − ᾱ)² it is two-sided in N·sd².
+    for m in MS:
+        for n in NS:
+            for p in P_BARS:
+                for s in SPREADS[1:]:
+                    r = bt.evaluate(m, n, p, s)
+                    var = n * m * s ** 2
+                    k = r.eta_h * (1 - r.eta_h)
+                    assert 0.5 * k ** 2 * var <= r.h_star + 1e-12
+                    assert r.h_star <= var / 8 + 1e-12
+    rng = np.random.default_rng(11)
+    for _ in range(300):
+        m = int(rng.integers(2, 30))
+        alpha = rng.normal(0.0, float(rng.uniform(0.05, 3.0)), m)
+        beta_h = float(rng.uniform(-4, 4))
+        x = 1 / (1 + np.exp(-(alpha - beta_h)))
+        eta_h = float(np.minimum(x, 1 - x).min())
+        var = float(((alpha - alpha.mean()) ** 2).sum())
+        _, h = bt.least_favourable(alpha, beta_h)
+        assert 0.5 * (eta_h * (1 - eta_h)) ** 2 * var <= h + 1e-12
+        assert h <= var / 8 + 1e-12
+
+
+def test_the_least_favourable_beta_lies_in_the_box_on_the_tabulated_grid(bt) -> None:
+    # So h*_B = h* there, and Table 1 also bounds the box-restricted local risk.
+    for m in MS:
+        for p in P_BARS:
+            for s in SPREADS:
+                assert bt.evaluate(m, 1, p, s).in_box
 
 
 def test_saturation_drives_the_bound_to_chance_at_any_spread(bt) -> None:
@@ -128,6 +211,55 @@ def test_the_monte_carlo_of_the_code_statistic_is_deterministic_and_complete(bt)
     # A strong gradient in the mis-key direction is typed as a defect every time.
     assert bt.monte_carlo(26, 8, 3.0, 0.5, "H", reps=4, seed=0)["defect"] == 1.0
     assert bt.monte_carlo(26, 8, 3.0, 0.5, "S", reps=4, seed=0)["no_defect"] == 1.0
+
+
+@pytest.mark.parametrize("m", MS)
+@pytest.mark.parametrize("p_bar", P_BARS)
+def test_the_s_side_bound(bt, m: int, p_bar: float) -> None:
+    # T5-S: chance at zero spread (S is then i.i.d. and ∅ with q = 1 − y reproduces it) ...
+    assert bt.evaluate_s(m, 1, p_bar, 0.0).lower == pytest.approx(0.5, abs=1e-9)
+    for s in SPREADS[1:]:
+        rows = [bt.evaluate_s(m, n, p_bar, s) for n in NS]
+        # ... strictly decreasing in n, with every exponent linear in n ...
+        assert all(a.lower > b.lower for a, b in zip(rows, rows[1:], strict=False))
+        one = rows[0]
+        for r in rows:
+            for key in ("h_a", "h_da", "h_empty"):
+                assert getattr(r, key) == pytest.approx(r.n * getattr(one, key), rel=1e-9)
+            # ... and every exponent is ≥ n·Δ_c²/4 for S's own contrast (Corollary T6.1).
+            alpha = bt.abilities(m, s)
+            beta_s = -math.log(p_bar / (1 - p_bar))
+            p = 1 / (1 + np.exp(-(alpha - beta_s)))
+            delta_c = float(p.max() - p.min())
+            for key in ("h_a", "h_da", "h_empty"):
+                assert getattr(r, key) >= r.n * delta_c ** 2 / 4 - 1e-12
+            assert r.lower == pytest.approx(
+                bt.chance_bound(min(r.h_a, r.h_da, r.h_empty)), abs=1e-15)
+
+
+def test_the_s_side_pair_bound_is_the_box_end_and_the_empty_bound_is_minimal(bt) -> None:
+    alpha, beta_s = bt.abilities(6, 1.0), -1.0
+    h_a, h_da, h_empty = bt.s_side_exponents(alpha, beta_s)
+    y = 1 / (1 + np.exp(-(beta_s - alpha)))
+    lo, hi = alpha.min() - bt.BOX_MARGIN, alpha.max() + bt.BOX_MARGIN
+    betas = np.linspace(lo, hi, 20_001)
+    p = 1 / (1 + np.exp(-(alpha[None, :] - betas[:, None])))
+    da = (-0.5 * np.log(p / 2) - np.log(np.sqrt(1 - y) + np.sqrt(y))[None, :]).sum(axis=1)
+    assert h_da == pytest.approx(float(da.min()), abs=1e-9)
+    qs = np.linspace(1e-6, 1 - 1e-6, 200_001)[:, None]
+    emp = -np.log(np.sqrt(qs * (1 - y)) + np.sqrt((1 - qs) * y)).sum(axis=1)
+    assert h_empty <= float(emp.min()) + 1e-9
+    theta_q = alpha[None, :] - betas[:, None]
+    to_a = bt.neg_log_bc(np.broadcast_to(beta_s - alpha, theta_q.shape), theta_q).sum(axis=1)
+    assert h_a <= float(to_a.min()) + 1e-9
+
+
+def test_the_note_tables_equal_the_script_output(bt) -> None:
+    note = (Path(__file__).parents[1] / "docs" / "theory" / "specdx-v4-bounds.md").read_text(
+        encoding="utf-8")
+    for line in (bt.render() + bt.render_mc()).splitlines():
+        if line.startswith("|"):
+            assert line in note, line
 
 
 def test_the_table_covers_the_s3_grid(bt) -> None:
