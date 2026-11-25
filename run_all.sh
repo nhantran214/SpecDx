@@ -7,11 +7,16 @@
 #                                non-zero exit, then rebuilds STATUS.md
 #   ./run_all.sh status          rebuild results/p3/STATUS.md
 #   ./run_all.sh <stage>         one stage (the list below)
+#   ./run_all.sh smoke           the four P4a stages, in order, in smoke mode (below)
 #
 # Stage              Plan  What it does
 #   local            P3a   tests, lint and a replication smoke, on this machine
 #   fetch-sopbench   P3a   download SOPBench's published trajectories (the only network use)
 #   replication      P3a   offline replication of the S3 diagnosis on SOPBench
+#   s3-g0v4          P4a   calibrate on the dev domains, then G0v4; freezes the v4 parameters
+#   s3-witness       P4a   execution witness of every task of every domain
+#   s3-v4            P4a   v4 on the held-out domains, v3 beside it, and the ablations
+#   s3-placebo       P4a   permutation placebo on the held-out domains
 #   s3-screen        P3b   S3 screen                       (pending)
 #   s3-dev           P3b   S3 development runs             (pending)
 #   s3-calibrate     P3b   S3 calibration                  (pending)
@@ -34,8 +39,16 @@
 # Exit status: 0 done; 1 a check failed; 2 a usage or environment error; 3 a screen stop;
 # 4 a test split is locked.
 #
+# Smoke mode (P4a): official P4a results come only from the 48 GB host; this machine runs
+# quick system checks. P4_SMOKE=1 or `./run_all.sh smoke` runs the P4a stages shrunk (2 G0v4
+# replicates on a one-point grid, 20 tasks per domain for the witnesses, one held-out domain,
+# 2 placebo seeds). Reports go to $P3_RESULTS/smoke/ (labelled SMOKE, with its own
+# STATUS.md); nothing is frozen and no official stage is marked done. `smoke` runs all four
+# stages even if one fails and exits with the first non-zero code.
+#
 # Environment:
 #   P3_RESULTS   where reports go (default results/p3)
+#   P4_SMOKE     1: smoke mode (the P4a stages only)
 #   P3_WORK      work directory: caches and the p3-<stage>.pid files (default work)
 # While a stage runs, $P3_WORK/p3-<stage>.pid holds its pid; it is removed when the stage
 # ends, however it ends, so STATUS.md shows "running" only for a live stage.
@@ -78,9 +91,12 @@ p3() { "$SPECDX" p3 "$1" --results "$RESULTS" --work "$WORK" "${@:2}"; }
 
 rebuild_status() { p3 status > /dev/null; }
 
+SHOWN="$RESULTS"
+[[ ${P4_SMOKE:-} == 1 ]] && SHOWN="$RESULTS/smoke"
+
 show_paths() {
-  [[ -f $RESULTS/$1.md ]] && echo "report: $RESULTS/$1.md"
-  echo "status: $RESULTS/STATUS.md"
+  [[ -f $SHOWN/$1.md ]] && echo "report: $SHOWN/$1.md"
+  echo "status: $SHOWN/STATUS.md"
   return 0
 }
 
@@ -103,8 +119,10 @@ PYEOF
 run_stage() {
   local name=$1 rc=0
   step "$name"
-  mkdir -p "$WORK" "$RESULTS"
-  PIDFILE="$WORK/p3-$name.pid"
+  local pids="$WORK"
+  [[ ${P4_SMOKE:-} == 1 ]] && pids="$WORK/smoke"
+  mkdir -p "$WORK" "$RESULTS" "$pids"
+  PIDFILE="$pids/p3-$name.pid"
   echo $$ > "$PIDFILE"
   p3 "$name" || rc=$?
   rm -f "$PIDFILE"
@@ -126,10 +144,39 @@ run_one() {
   fi
   if [[ $name == status ]]; then
     rebuild_status
-    echo "status: $RESULTS/STATUS.md"
+    echo "status: $SHOWN/STATUS.md"
     return 0
   fi
+  if [[ ${P4_SMOKE:-} == 1 && $plan != P4a ]]; then
+    die "P4_SMOKE=1 applies to the P4a stages only, not $name"
+  fi
   run_stage "$name"
+}
+
+p4a_stages() {
+  "$PY" -c '
+from specdx.report.stages import STAGES
+for s in STAGES:
+    if s.plan == "P4a" and s.implemented:
+        print(s.name)'
+}
+
+run_smoke() {
+  local name rc=0 first=0
+  export P4_SMOKE=1
+  SHOWN="$RESULTS/smoke"
+  echo "SMOKE RUN — system check only, not a result"
+  while read -r name; do
+    run_stage "$name" || rc=$?
+    if [[ $rc != 0 ]]; then
+      warn "smoke $name exited $rc"
+      [[ $first == 0 ]] && first=$rc
+      rc=0
+    fi
+  done < <(p4a_stages)
+  rebuild_status
+  echo "status: $SHOWN/STATUS.md"
+  return "$first"
 }
 
 run_all() {
@@ -159,6 +206,7 @@ case "$1" in
 esac
 check_tools
 case "$1" in
-  all) run_all ;;
+  smoke) run_smoke ;;
+  all) if [[ ${P4_SMOKE:-} == 1 ]]; then run_smoke; else run_all; fi ;;
   *) run_one "$1" ;;
 esac

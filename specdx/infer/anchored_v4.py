@@ -352,18 +352,46 @@ def profile_sets(
 
 def profile_cell(
     cell: Cell, values: tuple[str, ...], counts: Mapping[str, Mapping[str, int]],
-    alpha: Mapping[str, float], beta_g: float, params: V4Params,
+    alpha: Mapping[str, float], beta_g: float, params: V4Params, profile: bool = True,
 ) -> CellPosteriorV4:
     """The posterior over A_c from each set's profiled log posterior and v3's prior over
     sets, with the MAP set's β_c, λ, attractor and error, and §5.1's prior-free log_lr.
     counts[model][value]: the cell's readings, unweighted; values outside values are OTHER.
-    A model absent from alpha reads at μ_α."""
-    return _posterior(cell, values, counts, alpha, beta_g, params)[0]
+    A model absent from alpha reads at μ_α. profile=False is the plug-in ablation (§6.4): see
+    _plug_in."""
+    return _posterior(cell, values, counts, alpha, beta_g, params, profile)[0]
+
+
+def _plug_in(
+    values: tuple[str, ...], table: np.ndarray, a: np.ndarray, beta_g: float,
+    fits: dict[frozenset[str], SetFit], likes: dict[frozenset[str], float],
+    best: SetFit, params: V4Params,
+) -> None:
+    """The plug-in ablation (design §6.4), in place: every non-empty candidate set other than
+    the MAP set is evaluated at the MAP set's (β_c, λ, e) instead of at its own profile. A
+    set that contains the MAP attractor has no attractor (λ = 0, its prior at the mode); ∅
+    keeps its flat pool. The MAP set's own fit is its profile, unchanged."""
+    slot = {v: k for k, v in enumerate(values)}
+    e = slot[best.attractor] if best.attractor is not None else None
+    mode = _argmax_lambda(0.0, 0.0, 1, params.lambda_a - 1, params.lambda_b - 1)
+    prior_beta = (-(best.beta - beta_g) ** 2 / (2 * params.cell_sd ** 2)
+                  - 0.5 * math.log(2 * math.pi * params.cell_sd ** 2))
+    for name in list(fits):
+        if not name or fits[name] is best:
+            continue
+        s = tuple(sorted(slot[v] for v in name))
+        live = e is not None and e not in s
+        lam = best.lam if live else 0.0
+        data = _data_loglik(table, a, s, best.beta, lam, e if live else None, None)
+        density = _log_beta_density(lam if live else mode, params)
+        fits[name] = SetFit(data + prior_beta + density, best.beta, lam,
+                            best.attractor if live else None)
+        likes[name] = data
 
 
 def _posterior(
     cell: Cell, values: tuple[str, ...], counts: Mapping[str, Mapping[str, int]],
-    alpha: Mapping[str, float], beta_g: float, params: V4Params,
+    alpha: Mapping[str, float], beta_g: float, params: V4Params, profile: bool = True,
 ) -> tuple[CellPosteriorV4, float]:
     """profile_cell's posterior and the cell's log marginal, log Σ_A P(A)·exp(SetFit.loglik):
     its profiled log posterior with A summed out, which the outer fit's starts compare."""
@@ -375,14 +403,24 @@ def _posterior(
     prior = set_log_prior(n, anchored, params)  # V4Params carries v3's pi and s_* fields
     keys = [s for s in SETS if all(k < n for k in s)]
     names = [frozenset(values[k] for k in s) for s in keys]
-    logpost = np.array([prior[SETS.index(s)] + fits[name].loglik
-                        for s, name in zip(keys, names, strict=True)])
-    top = float(logpost.max())
-    with np.errstate(invalid="ignore"):
-        weights = np.exp(logpost - top)
-    marginal = top + math.log(float(weights.sum()))
-    weights /= weights.sum()
-    sets = {name: float(w) for name, w in zip(names, weights, strict=True)}
+
+    def posterior_sets() -> tuple[dict[frozenset[str], float], float]:
+        logpost = np.array([prior[SETS.index(s)] + fits[name].loglik
+                            for s, name in zip(keys, names, strict=True)])
+        top = float(logpost.max())
+        with np.errstate(invalid="ignore"):
+            weights = np.exp(logpost - top)
+        total = float(weights.sum())
+        return ({name: float(w / total) for name, w in zip(names, weights, strict=True)},
+                top + math.log(total))
+
+    sets, marginal = posterior_sets()
+    if not profile:
+        # The MAP set comes from the profiled posterior; then every set is re-evaluated at it.
+        best_name = CellPosterior(cell.id, cell.anchor, values, sets, 0.0, {}).map_set
+        _, table, a = _encode_counts(values, counts, alpha, params)
+        _plug_in(values, table, a, beta_g, fits, likes, fits[best_name], params)
+        sets, marginal = posterior_sets()
     clean = ([frozenset({values[0]})] if anchored
              else [name for name in names if len(name) == 1])
     log_lr = (max(likes[name] for name in names if name not in clean)
@@ -602,7 +640,7 @@ def _prepare(used: list[Cell], by_cell: Mapping[str, Sequence[Reading]], names: 
 
 
 def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
-            ) -> tuple[list[CellPosteriorV4], np.ndarray]:
+            profile: bool = True) -> tuple[list[CellPosteriorV4], np.ndarray]:
     """Every cell's profiled posterior and log marginal at (α, β_g), its readings
     unweighted."""
     abilities = dict(zip(data.names, alpha.tolist(), strict=True))
@@ -610,7 +648,7 @@ def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
     marginals = np.zeros(len(data.cells))
     for c, cell in enumerate(data.cells):
         post, marginals[c] = _posterior(cell, data.values[c], data.counts[c], abilities,
-                                        float(beta[data.group[c]]), params)
+                                        float(beta[data.group[c]]), params, profile)
         posts.append(post)
     return posts, marginals
 
@@ -641,13 +679,13 @@ def _score(data: _Data, marginals: np.ndarray, alpha: np.ndarray, beta: np.ndarr
 
 
 def _em(data: _Data, alpha: np.ndarray, params: V4Params, tol: float, max_iter: int,
-        ) -> tuple[np.ndarray, np.ndarray, bool, int]:
+        profile: bool = True) -> tuple[np.ndarray, np.ndarray, bool, int]:
     """EM from one start, every β_g = 0: α, β_g, whether the largest change in α and β_g fell
     below tol, and the iterations used. Every cell enters every update (ruling T2-U′:
     leaving out cells by their observed |log_lr| selects on the outcome and widened α)."""
     beta = np.zeros(int(data.group.max()) + 1)
     for iterations in range(1, max_iter + 1):
-        posts, _ = _e_step(data, alpha, beta, params)
+        posts, _ = _e_step(data, alpha, beta, params, profile)
         new_alpha, new_beta = _m_step(_pairs(data, posts, alpha, params), alpha, beta, params)
         moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
                     float(np.max(np.abs(new_beta - beta), initial=0.0)))
@@ -683,7 +721,7 @@ def _setup(
 def fit_v4(
     cells: Mapping[str, Cell], readings: Sequence[Reading], *, models: Mapping[str, str],
     params: V4Params, tol: float = EM_TOL, max_iter: int = EM_MAX_ITER,
-    composite: bool = True,
+    composite: bool = True, profile: bool = True,
 ) -> AnchoredFitV4:
     """α and β_g by v3's multi-start EM (§3.5) around v4's per-cell profiles, deterministic.
     Each iteration profiles every cell at the current (α, β_g), its readings unweighted
@@ -693,7 +731,9 @@ def fit_v4(
     STARTS; the fixed point with the best _score is kept (ties to the earlier start).
     models: model → family for the whole population; a model without readings keeps
     α = μ_α. Cells without readings are left out. composite=False weighs every reading 1
-    (the no-composite-weights ablation, §6.4)."""
+    (the no-composite-weights ablation, §6.4). profile=False is the plug-in ablation: every
+    candidate set's likelihood is taken at the MAP set's (β_c, λ, e), E-step and final
+    posteriors alike (see _plug_in)."""
     family, data, t3 = _setup(cells, readings, models, params, composite)
     names = sorted(family)
     alpha = np.full(len(names), params.mu_alpha)
@@ -706,8 +746,8 @@ def fit_v4(
         starts = [("t3", t3)] + [(f"alpha={a}", np.full(len(names), a)) for a in STARTS]
         best = -np.inf
         for label, alpha0 in starts:
-            a, b, ok, n = _em(data, alpha0, params, tol, max_iter)
-            fitted, marginals = _e_step(data, a, b, params)
+            a, b, ok, n = _em(data, alpha0, params, tol, max_iter, profile)
+            fitted, marginals = _e_step(data, a, b, params, profile)
             score = _score(data, marginals, a, b, params)
             scores[label] = StartFit(score, ok, n)
             if not posts or score > best:

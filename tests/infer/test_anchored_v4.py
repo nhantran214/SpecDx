@@ -462,3 +462,45 @@ def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
         weight = pairs.weight[mine] * pairs.prec[mine]
         expected = (weight * star[mine]).sum() / (weight.sum() + 1.0 / P4.beta_sd ** 2)
         assert beta[k] == pytest.approx(expected, abs=1e-8)
+
+
+# --- Task 10: the plug-in ablation (design §6.4): profile=False ---
+
+def test_plug_in_keeps_the_map_set_and_never_beats_the_profile() -> None:
+    values = ("d", "a", "b")
+    for counts in (MIS_KEY, SHARED):
+        prof = profile_cell(ANCHORED, values, counts, RATERS, 0.0, P4)
+        plug = profile_cell(ANCHORED, values, counts, RATERS, 0.0, P4, profile=False)
+        best = prof.map_set
+        # The MAP set's own fit is its profile; every other set is evaluated at the MAP
+        # set's (beta_c, lambda, e), a feasible point of its own profile, so never above it.
+        assert plug.set_fits[best].loglik == pytest.approx(prof.set_fits[best].loglik,
+                                                           abs=1e-9)
+        for key, fit in prof.set_fits.items():
+            assert plug.set_fits[key].loglik <= fit.loglik + 1e-9
+        assert plug.set_fits[frozenset()] == prof.set_fits[frozenset()]
+        for key, fit in plug.set_fits.items():
+            if key and key != best:
+                assert (fit.beta, fit.lam) == (prof.set_fits[best].beta,
+                                               prof.set_fits[best].lam) or fit.lam == 0.0
+    mis = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.0, P4)
+    plug = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.0, P4, profile=False)
+    assert plug.log_lr != pytest.approx(mis.log_lr, abs=1e-6)  # the ablation changes the LR
+
+
+def test_profile_true_is_the_default_and_bit_identical() -> None:
+    values = ("d", "a", "b")
+    a = profile_cell(ANCHORED, values, SHARED, RATERS, 0.0, P4)
+    b = profile_cell(ANCHORED, values, SHARED, RATERS, 0.0, P4, profile=True)
+    assert a == b
+    cells, readings, models = _small()
+    f1 = fit_v4(cells, readings, models=models, params=P4)
+    f2 = fit_v4(cells, readings, models=models, params=P4, profile=True)
+    assert f1.alpha == f2.alpha and f1.weights == f2.weights
+
+
+def test_fit_v4_with_plug_in_runs_and_recovers_the_order() -> None:
+    cells, readings, models = _shared_data()
+    fit = fit_v4(cells, readings, models=models, params=P4, profile=False)
+    assert _order(fit.theta) == ["m0", "m1", "m2", "m3"]
+    assert set(fit.cells) == set(cells)

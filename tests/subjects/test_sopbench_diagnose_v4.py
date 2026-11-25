@@ -69,3 +69,28 @@ def test_witness_error_keeps_the_cell_undetermined(monkeypatch):
     assert dx.witnessed == {"defect": 0, "shared": 0, "error": 1}
     assert dx.undetermined["outcome"] == 1
     assert calls == [0]
+
+
+def test_cell_outcomes_name_each_cells_fate(monkeypatch):
+    dx, _ = _setup(WitnessResult("error", (), "boom"), monkeypatch)
+    assert dx.cell_outcomes[OUTCOME0] == "witnessed_error"
+    dx, _ = _setup(WitnessResult("succeeds", ("a",)), monkeypatch)
+    assert dx.cell_outcomes[OUTCOME0] == "witnessed_shared"
+    dx, _ = _setup(WitnessResult("refused", ("a",)), monkeypatch)
+    assert dx.cell_outcomes[OUTCOME0] == "witnessed_defect"
+    assert set(dx.cell_outcomes.values()) <= {"none", "defect", "shared", "undetermined",
+                                              "witnessed_defect", "witnessed_shared",
+                                              "witnessed_error"}
+
+
+def test_use_witness_false_leaves_undetermined_outcome_cells_alone(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(diagnose_v4, "witness", lambda d, t: calls.append(1))
+    tasks = [S3Task(DOMAIN, i, f"goal{i}", True, f"prompt {i}") for i in range(4)]
+    runs = [_run(0, m, False) for m in RATERS] + [_run(i, m, True) for i in range(1, 4)
+                                                  for m in RATERS]
+    dx = diagnose_domain_v4(DOMAIN, cells_for(tasks, runs), {r.model: r.family for r in runs},
+                            [{}] * 4, V4Params(), use_witness=False)
+    assert calls == [] and dx.undetermined["outcome"] >= 1
+    assert dx.witnessed == {"defect": 0, "shared": 0, "error": 0}
+    assert dx.cell_outcomes[OUTCOME0] == "undetermined"

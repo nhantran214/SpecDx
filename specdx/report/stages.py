@@ -35,6 +35,10 @@ STAGES: tuple[StageDef, ...] = (
     _s("local", "Local checks and tests", "P3a", True),
     _s("fetch-sopbench", "Fetch SOPBench data", "P3a", True),
     _s("replication", "Offline replication on SOPBench", "P3a", True),
+    _s("s3-g0v4", "S3 calibration and G0v4", "P4a", True),
+    _s("s3-witness", "S3 execution witnesses", "P4a", True),
+    _s("s3-v4", "S3 v4 replication and ablations", "P4a", True),
+    _s("s3-placebo", "S3 permutation placebo", "P4a", True),
     _s("s3-screen", "S3 screen", "P3b"),
     _s("s3-dev", "S3 development runs", "P3b"),
     _s("s3-calibrate", "S3 calibration", "P3b"),
@@ -54,6 +58,8 @@ STAGES: tuple[StageDef, ...] = (
 )
 
 VERDICTS = ("PASS", "FAIL", "STOP", "DONE", "PENDING")
+SMOKE_LINE = "SMOKE RUN — system check only, not a result"
+SMOKE_TITLE = "SMOKE — not results"
 GitFn = Callable[[list[str]], str]
 
 
@@ -112,8 +118,10 @@ def write_report(
     subject: str = "",
     split: str = "",
     git: GitFn | None = None,
+    smoke: bool = False,
 ) -> Path:
-    """Write ``<name>.md``, ``<name>.json`` and ``<name>.data.json``; return the report path."""
+    """Write ``<name>.md``, ``<name>.json`` and ``<name>.data.json``; return the report path.
+    A smoke report starts with SMOKE_LINE."""
     results.mkdir(parents=True, exist_ok=True)
     sha, state = git_state(git)
     duration = _duration((ended - started).total_seconds())
@@ -129,7 +137,8 @@ def write_report(
         ("Verdict", outcome.verdict),
     ]
     title = next((s.title for s in STAGES if s.name == name), name)
-    lines = [f"# {name}: {title}", "", "| Field | Value |", "|---|---|"]
+    lines = [SMOKE_LINE, ""] if smoke else []
+    lines += [f"# {name}: {title}", "", "| Field | Value |", "|---|---|"]
     lines += [f"| {k} | {_cell(v)} |" for k, v in rows]
     lines += ["", "## Results", "", outcome.body.rstrip(), ""]
     report = results / f"{name}.md"
@@ -148,6 +157,7 @@ def write_report(
         "verdict": outcome.verdict,
         "key_number": outcome.key_number,
         "report": report.name,
+        **({"smoke": True} if smoke else {}),
     }
     (results / f"{name}.json").write_text(json.dumps(meta, indent=2) + "\n")
     if outcome.data is not None:
@@ -167,8 +177,10 @@ def run_stage(
     subject: str = "",
     split: str = "",
     git: GitFn | None = None,
+    smoke: bool = False,
 ) -> int:
-    """Run ``fn``, write the stage report and rebuild STATUS.md; return the exit code."""
+    """Run ``fn``, write the stage report and rebuild STATUS.md; return the exit code. A smoke
+    run labels the report and the dashboard (``results`` is then the smoke directory)."""
     started = _now()
     try:
         outcome = fn()
@@ -177,9 +189,9 @@ def run_stage(
         outcome = StageOutcome(2, "FAIL", "", f"```\n{tail.rstrip()}\n```")
     write_report(
         name, outcome, command=command, results=results, started=started,
-        ended=_now(), subject=subject, split=split, git=git,
+        ended=_now(), subject=subject, split=split, git=git, smoke=smoke,
     )
-    update_status(results, work if work is not None else results.parent / "work")
+    update_status(results, work if work is not None else results.parent / "work", smoke=smoke)
     return outcome.exit_code
 
 
@@ -222,11 +234,12 @@ def _pid_alive(pid_file: Path) -> bool:
     return True
 
 
-def update_status(results: Path, work: Path) -> Path:
-    """Rebuild ``<results>/STATUS.md`` from the stage metadata and pid files."""
+def update_status(results: Path, work: Path, smoke: bool = False) -> Path:
+    """Rebuild ``<results>/STATUS.md`` from the stage metadata and pid files. A smoke
+    dashboard is titled SMOKE_TITLE and is never the main one."""
     results.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# SpecDx P3 status",
+        f"# {SMOKE_TITLE}" if smoke else "# SpecDx P3 status",
         "",
         f"Built {_iso(_now())}",
         "",

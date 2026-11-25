@@ -83,7 +83,7 @@ def test_status_shows_running_for_a_live_pid_file(tmp_path):
 
 
 def test_stage_names_unique_and_default_git_runs():
-    assert len({s.name for s in STAGES}) == len(STAGES) == 19
+    assert len({s.name for s in STAGES}) == len(STAGES) == 23
     sha, state = stages.git_state()
     assert state in ("clean", "dirty") and sha
 
@@ -106,3 +106,23 @@ def test_stale_commit_names_a_done_stage_recorded_at_another_commit(tmp_path):
     (res / "local.json").write_text(json.dumps(meta | {"commit": "fff0000", "exit_code": 1}))
     assert stale_commit("local", res, git=fake_git) is None
     assert stale_commit("replication", res, git=fake_git) is None
+
+
+def test_the_p4a_stages_follow_replication_in_order_and_are_implemented():
+    names = [s.name for s in STAGES]
+    i = names.index("replication")
+    assert names[i + 1:i + 5] == ["s3-g0v4", "s3-witness", "s3-v4", "s3-placebo"]
+    assert all(s.plan == "P4a" and s.implemented for s in STAGES[i + 1:i + 5])
+
+
+def test_a_smoke_report_starts_with_the_smoke_line_and_a_smoke_dashboard(tmp_path):
+    res = tmp_path / "res" / "smoke"
+    code = run_stage("s3-witness", lambda: StageOutcome(0, "DONE", "1", "body"),
+                     command="c", results=res, work=tmp_path / "work", git=fake_git,
+                     smoke=True)
+    assert code == 0
+    assert (res / "s3-witness.md").read_text().startswith(stages.SMOKE_LINE + "\n")
+    assert json.loads((res / "s3-witness.json").read_text())["smoke"] is True
+    assert (res / "STATUS.md").read_text().startswith("# SMOKE — not results")
+    assert not (tmp_path / "res" / "STATUS.md").exists()
+    assert not already_done("s3-witness", tmp_path / "res")  # the official stage is not run

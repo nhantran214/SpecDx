@@ -136,3 +136,27 @@ def test_running_guide_describes_p3() -> None:
     text = RUNNING.read_text(encoding="utf-8")
     assert "P3: SOPBench and \u03c4\u00b2-bench" in text
     assert "results/p3/STATUS.md" in text and "PYTHONHASHSEED=0" in text
+
+
+def test_running_guide_describes_p4a_and_smoke_mode() -> None:
+    text = RUNNING.read_text(encoding="utf-8")
+    for stage in ("s3-g0v4", "s3-witness", "s3-v4", "s3-placebo"):
+        assert f"| `{stage}` |" in text
+    assert "./run_all.sh smoke" in text and "P4_SMOKE=1" in text
+    assert "SMOKE RUN — system check only, not a result" in text
+    assert "results/p3/smoke/" in text and "48 GB host" in text
+
+
+def test_run_all_usage_documents_smoke_mode(tmp_path) -> None:
+    usage = _run_all(tmp_path).stdout
+    assert "./run_all.sh smoke" in usage and "P4_SMOKE" in usage
+    assert "results/p3/smoke" in usage or "$P3_RESULTS/smoke/" in usage
+
+
+def test_run_all_smoke_refuses_a_non_p4a_stage(tmp_path) -> None:
+    env = {**os.environ, "P3_RESULTS": str(tmp_path / "results"),
+           "P3_WORK": str(tmp_path / "work"), "P4_SMOKE": "1"}
+    r = subprocess.run(["bash", str(ROOT / "run_all.sh"), "replication"], capture_output=True,
+                       text=True, env=env, cwd=ROOT)
+    assert r.returncode == 2 and "P4a stages only" in r.stderr
+    assert not (tmp_path / "results" / "smoke" / "replication.md").exists()

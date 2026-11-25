@@ -90,6 +90,9 @@ def study_guard(root: Path, gate_json: Path, prereg_json: Path,
     return None
 
 
+P4A_STAGES = ("s3-g0v4", "s3-witness", "s3-v4", "s3-placebo")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="specdx", description="SpecDx phase P1")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -180,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     for name, text in (("fetch-sopbench", "download SOPBench's published trajectories"),
                        ("replication", "offline replication of the S3 diagnosis"),
                        ("local", "local tests, lint and a replication smoke"),
+                       ("s3-g0v4", "P4a: calibrate on the dev domains, then run G0v4"),
+                       ("s3-witness", "P4a: execution witnesses for every task"),
+                       ("s3-v4", "P4a: v4 on the held-out domains, with ablations"),
+                       ("s3-placebo", "P4a: permutation placebo on the held-out domains"),
                        ("status", "rebuild STATUS.md")):
         sp = p3sub.add_parser(name, help=text)
         sp.add_argument("--results", type=Path,
@@ -188,15 +195,25 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "status":
             sp.add_argument("--done", metavar="STAGE", default=None,
                             help="exit 0 if STAGE finished with exit code 0, else 1")
-        if name != "status" and name != "local":
+        if name not in ("status", "local", "s3-witness"):
             sp.add_argument("--manifest", type=Path,
                             default=Path("experiments/p3-sopbench-trajectories.json"))
         if name == "fetch-sopbench":
             sp.add_argument("--dest", type=Path, default=None,
                             help="default: <work>/sopbench-output")
-        if name in ("replication", "local"):
+        if name in ("replication", "local", "s3-g0v4", "s3-v4", "s3-placebo"):
             sp.add_argument("--trajectories", type=Path, default=None,
                             help="default: <work>/sopbench-output")
+        if name in ("s3-g0v4", "s3-v4", "s3-placebo"):
+            sp.add_argument("--params", type=Path, default=None,
+                            help="the frozen v4 parameters (default: experiments/"
+                                 "p4-s3-v4-params.json)")
+        if name == "s3-g0v4":
+            sp.add_argument("--jobs", type=int, default=1, help="processes for the fits")
+            sp.add_argument("--replicates", type=int, default=None,
+                            help="replicates per arm (default: G0v4's 10; smoke: 2)")
+        if name == "s3-placebo":
+            sp.add_argument("--seeds", type=int, default=20, help="placebo seeds (smoke: 2)")
         if name == "replication":
             sp.add_argument("--domains", default=None, help="comma-separated; default: all")
         if name == "local":
@@ -206,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _p3(args: argparse.Namespace) -> int:
-    from specdx.report import p3
+    from specdx.report import p3, p4
     from specdx.report.stages import (
         STAGES,
         already_done,
@@ -217,6 +234,16 @@ def _p3(args: argparse.Namespace) -> int:
     )
 
     results, work = args.results, args.work
+    traj = getattr(args, "trajectories", None) or work / "sopbench-output"
+    smoke = os.environ.get("P4_SMOKE") == "1"
+    if smoke:
+        # Smoke mode (P4a): the P4a stages only, in a directory of their own that never feeds
+        # the main STATUS.md; the official stage is never marked done.
+        if args.p3_command not in P4A_STAGES and args.p3_command != "status":
+            print(f"P4_SMOKE=1 applies to the P4a stages only ({', '.join(P4A_STAGES)}), "
+                  f"not {args.p3_command}", file=sys.stderr)
+            return 2
+        results, work = results / "smoke", work / "smoke"
     if args.p3_command == "status":
         names = [args.done] if args.done is not None else [s.name for s in STAGES]
         for name in names:
@@ -224,10 +251,9 @@ def _p3(args: argparse.Namespace) -> int:
                 print(stale_warning(name, *stale, results), file=sys.stderr)
         if args.done is not None:
             return 0 if already_done(args.done, results) else 1
-        update_status(results, work)
+        update_status(results, work, smoke=smoke)
         return 0
     command = "specdx p3 " + args.p3_command
-    traj = getattr(args, "trajectories", None) or work / "sopbench-output"
     if args.p3_command == "fetch-sopbench":
         dest = args.dest or work / "sopbench-output"
 
@@ -240,10 +266,30 @@ def _p3(args: argparse.Namespace) -> int:
         def stage():
             return p3.replication_stage(manifest=args.manifest, trajectories=traj,
                                         domains=domains)
+    elif args.p3_command in P4A_STAGES:
+        stage = _p4_stage(args, p4, traj, results, smoke)
     else:
         def stage():
             return p3.local_stage(manifest=args.manifest, trajectories=traj)
-    return run_stage(args.p3_command, stage, command=command, results=results, work=work)
+    return run_stage(args.p3_command, stage, command=command, results=results, work=work,
+                     smoke=smoke)
+
+
+def _p4_stage(args: argparse.Namespace, p4, traj: Path, results: Path, smoke: bool):
+    """The stage function of a P4a stage, with its arguments bound."""
+    from specdx.sim.g0v4 import PARAMS_FILE, REPLICATES
+
+    name = args.p3_command
+    if name == "s3-witness":
+        return lambda: p4.witness_stage(smoke=smoke)
+    common = {"manifest": args.manifest, "trajectories": traj, "results": results,
+              "smoke": smoke, "params_file": args.params or PARAMS_FILE}
+    if name == "s3-g0v4":
+        return lambda: p4.g0v4_stage(**common, jobs=args.jobs,
+                                     replicates=args.replicates or REPLICATES)
+    if name == "s3-v4":
+        return lambda: p4.v4_stage(**common)
+    return lambda: p4.placebo_stage(**common, seeds=range(args.seeds))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

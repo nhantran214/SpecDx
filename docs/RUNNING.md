@@ -177,6 +177,10 @@ less results/p3/STATUS.md
 | `local` | Local checks and tests | P3a | implemented | `results/p3/local.md` |
 | `fetch-sopbench` | Fetch SOPBench data | P3a | implemented | `results/p3/fetch-sopbench.md` |
 | `replication` | Offline replication on SOPBench | P3a | implemented | `results/p3/replication.md` |
+| `s3-g0v4` | S3 calibration and G0v4 | P4a | implemented | `results/p3/s3-g0v4.md` |
+| `s3-witness` | S3 execution witnesses | P4a | implemented | `results/p3/s3-witness.md` |
+| `s3-v4` | S3 v4 replication and ablations | P4a | implemented | `results/p3/s3-v4.md` |
+| `s3-placebo` | S3 permutation placebo | P4a | implemented | `results/p3/s3-placebo.md` |
 | `s3-screen` | S3 screen | P3b | pending | `results/p3/s3-screen.md` |
 | `s3-dev` | S3 development runs | P3b | pending | `results/p3/s3-dev.md` |
 | `s3-calibrate` | S3 calibration | P3b | pending | `results/p3/s3-calibrate.md` |
@@ -197,6 +201,20 @@ less results/p3/STATUS.md
 Exit codes: 0 done; 1 a check failed; 2 a usage or environment error; 3 a screen stop; 4 a test split is locked.
 
 Only `fetch-sopbench` uses the network (the pinned SOPBench commit on raw.githubusercontent.com). Nothing in P3a calls Ollama, a hosted model, or the database, and `work/runs.jsonl` is never opened. Every S3 result is labelled `provisional: V3Params calibrated on CASE-0031, recalibrated for S3 in P3b`. Later local SOPBench runs, whose results depend on set iteration order, must be started with `PYTHONHASHSEED=0`.
+
+### P4a stages and smoke mode
+
+The four P4a stages need the published trajectories (`work/sopbench-output`, from `fetch-sopbench`); a stage without them exits 2 and never fetches. `s3-g0v4` calibrates on the three development domains, runs G0v4 (`--jobs N` for the fits) and, on PASS, freezes `experiments/p4-s3-v4-params.json`. `s3-witness` replays every task on SOPBench's strict system. `s3-v4` and `s3-placebo` use only the four held-out domains and the frozen parameters. The placebo verdict is PASS only with at least two evaluable domains (real v4 count above 0) and every evaluable v4 ratio at most 0.2. tau_u comes from the G0v4 simulation, not from theory.
+
+Official P4a results come only from the 48 GB host. On this machine run the smoke mode, a quick system check:
+
+```bash
+./run_all.sh smoke           # the four P4a stages, shrunk, in order
+P4_SMOKE=1 ./run_all.sh s3-witness   # one stage in smoke mode
+less results/p3/smoke/STATUS.md
+```
+
+Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, one held-out domain and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done.
 
 The CASE-0031 steps (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`) are no longer in `run_all.sh`. Their `specdx` commands remain, and §12 and §13 are kept as the record of how they ran.
 
