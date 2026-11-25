@@ -290,14 +290,16 @@ def _empty_fit(per_slot: np.ndarray, beta_g: float, params: V4Params) -> tuple[S
 
 def _profile(
     cell: Cell, values: tuple[str, ...], counts: Mapping[str, Mapping[str, int]],
-    alpha: Mapping[str, float], beta_g: float, params: V4Params,
+    alpha: Mapping[str, float], beta_g: float, params: V4Params, cell_beta: bool = True,
 ) -> tuple[dict[frozenset[str], SetFit], dict[frozenset[str], float], np.ndarray]:
     """Per candidate set: its SetFit (the profiled log posterior) and its prior-free profile
     log-likelihood (β_c in the box of T1-L′, λ ∈ [0, 1], e free; ∅ at the flat pool's ε,
     which is the Dirichlet's part of what ∅ means and so stays); and ∅'s ε over the slots.
     A set whose outside holds only OTHER has no attractor and λ does not enter its
     likelihood; its profile still takes λ's prior at its mode, as for any set, and reports
-    lam = 0 (the attractor's weight, with no attractor)."""
+    lam = 0 (the attractor's weight, with no attractor). cell_beta=False is the no-per-cell-β
+    ablation (§6.4): β_c ≡ β_g, so the MAP and the prior-free β_c are both β_g (the box
+    collapses to the point β_g); the Gaussian density of β_c at β_g stays as a constant."""
     _, table, a = _encode_counts(values, counts, alpha, params)
     n = len(values)
     per_slot = table.sum(axis=0)
@@ -309,8 +311,11 @@ def _profile(
     outside = total[None, :] - inside
     prec = 1.0 / params.cell_sd ** 2
     lo, hi = _box(a[total > 0])
-    beta_map = _argmax_beta(inside, total, a, beta_g, prec, lo, hi)
-    beta_box = _argmax_beta(inside, total, a, beta_g, 0.0, lo, hi)
+    if cell_beta:
+        beta_map = _argmax_beta(inside, total, a, beta_g, prec, lo, hi)
+        beta_box = _argmax_beta(inside, total, a, beta_g, 0.0, lo, hi)
+    else:
+        beta_map = beta_box = np.full(inside.shape[0], beta_g)
     data_map = _beta_part(inside, outside, a, beta_map)
     data_box = _beta_part(inside, outside, a, beta_box)
     beta_prior = (-(beta_map - beta_g) ** 2 * prec / 2
@@ -353,13 +358,14 @@ def profile_sets(
 def profile_cell(
     cell: Cell, values: tuple[str, ...], counts: Mapping[str, Mapping[str, int]],
     alpha: Mapping[str, float], beta_g: float, params: V4Params, profile: bool = True,
+    cell_beta: bool = True,
 ) -> CellPosteriorV4:
     """The posterior over A_c from each set's profiled log posterior and v3's prior over
     sets, with the MAP set's β_c, λ, attractor and error, and §5.1's prior-free log_lr.
     counts[model][value]: the cell's readings, unweighted; values outside values are OTHER.
     A model absent from alpha reads at μ_α. profile=False is the plug-in ablation (§6.4): see
-    _plug_in."""
-    return _posterior(cell, values, counts, alpha, beta_g, params, profile)[0]
+    _plug_in. cell_beta=False is the no-per-cell-β ablation: see _profile."""
+    return _posterior(cell, values, counts, alpha, beta_g, params, profile, cell_beta)[0]
 
 
 def _plug_in(
@@ -367,31 +373,38 @@ def _plug_in(
     fits: dict[frozenset[str], SetFit], likes: dict[frozenset[str], float],
     best: SetFit, params: V4Params,
 ) -> None:
-    """The plug-in ablation (design §6.4), in place: every non-empty candidate set other than
-    the MAP set is evaluated at the MAP set's (β_c, λ, e) instead of at its own profile. A
-    set that contains the MAP attractor has no attractor (λ = 0, its prior at the mode); ∅
-    keeps its flat pool. The MAP set's own fit is its profile, unchanged."""
+    """The plug-in ablation (design §6.4), in place: every non-empty candidate set, the MAP
+    set included, is evaluated at the MAP set's prior-bearing (β_c, λ) instead of at its own
+    profile, so the likelihood ratio puts the same nuisance values on both sides. Only the
+    attractor e is still maximised per set (the slot with the most error readings outside
+    the set): its valid range depends on A, so no single e serves every set. If the MAP set
+    has no attractor (λ = 0), no set has one. ∅ keeps its flat pool. `likes` becomes the data
+    log-likelihood at that point, and the posterior `fits` add the β_c density and λ's prior
+    (at its mode for a set with no attractor)."""
     slot = {v: k for k, v in enumerate(values)}
-    e = slot[best.attractor] if best.attractor is not None else None
+    per_slot = table.sum(axis=0)
     mode = _argmax_lambda(0.0, 0.0, 1, params.lambda_a - 1, params.lambda_b - 1)
     prior_beta = (-(best.beta - beta_g) ** 2 / (2 * params.cell_sd ** 2)
                   - 0.5 * math.log(2 * math.pi * params.cell_sd ** 2))
     for name in list(fits):
-        if not name or fits[name] is best:
+        if not name:
             continue
         s = tuple(sorted(slot[v] for v in name))
-        live = e is not None and e not in s
+        choices = [k for k in range(len(values)) if k not in s]
+        e = max(choices, key=lambda k: (per_slot[k], -k)) if choices else None
+        live = e is not None and best.lam > 0
         lam = best.lam if live else 0.0
         data = _data_loglik(table, a, s, best.beta, lam, e if live else None, None)
         density = _log_beta_density(lam if live else mode, params)
         fits[name] = SetFit(data + prior_beta + density, best.beta, lam,
-                            best.attractor if live else None)
+                            values[e] if live and e is not None else None)
         likes[name] = data
 
 
 def _posterior(
     cell: Cell, values: tuple[str, ...], counts: Mapping[str, Mapping[str, int]],
     alpha: Mapping[str, float], beta_g: float, params: V4Params, profile: bool = True,
+    cell_beta: bool = True,
 ) -> tuple[CellPosteriorV4, float]:
     """profile_cell's posterior and the cell's log marginal, log Σ_A P(A)·exp(SetFit.loglik):
     its profiled log posterior with A summed out, which the outer fit's starts compare."""
@@ -399,7 +412,7 @@ def _posterior(
     anchored = cell.anchor is not None
     if anchored and (not values or values[0] != cell.anchor):
         raise ValueError("an anchored cell's values must start with its anchor")
-    fits, likes, eps = _profile(cell, values, counts, alpha, beta_g, params)
+    fits, likes, eps = _profile(cell, values, counts, alpha, beta_g, params, cell_beta)
     prior = set_log_prior(n, anchored, params)  # V4Params carries v3's pi and s_* fields
     keys = [s for s in SETS if all(k < n for k in s)]
     names = [frozenset(values[k] for k in s) for s in keys]
@@ -481,29 +494,33 @@ class _Pairs:
     hi: np.ndarray
 
 
-def _profiled_beta(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray) -> np.ndarray:
-    """β*_j: each row's β_c maximising its composite term at (α, β_g) (see _m_step)."""
+def _profiled_beta(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
+                   cell_beta: bool = True) -> np.ndarray:
+    """β*_j: each row's β_c maximising its composite term at (α, β_g) (see _m_step); with
+    cell_beta=False the row's β_c is its group's β_g."""
     if not pairs.weight.size:
         return np.zeros(0)
+    if not cell_beta:
+        return beta[pairs.group]
     return _argmax_beta(pairs.inside, pairs.total, alpha, beta[pairs.group], pairs.prec,
                         pairs.lo, pairs.hi)
 
 
 def _q_objective(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
-                 params: V4Params) -> float:
+                 params: V4Params, cell_beta: bool = True) -> float:
     """The M-step's objective Q(α, β_g) (see _m_step), up to constants."""
     prior = (float(((alpha - params.mu_alpha) ** 2).sum()) / (2 * params.sigma_alpha ** 2)
              + float((beta ** 2).sum()) / (2 * params.beta_sd ** 2))
     if not pairs.weight.size:
         return -prior
-    star = _profiled_beta(pairs, alpha, beta)
+    star = _profiled_beta(pairs, alpha, beta, cell_beta)
     data = _beta_part(pairs.inside, pairs.total - pairs.inside, alpha, star)
     shrink = pairs.prec * (star - beta[pairs.group]) ** 2 / 2
     return float((pairs.weight * (data - shrink)).sum()) - prior
 
 
 def _m_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
-            params: V4Params) -> tuple[np.ndarray, np.ndarray]:
+            params: V4Params, cell_beta: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """The α and β_g update: the exact maximiser of
 
         Q(α, β_g) = Σ_j ω_j·max_{β_c ∈ box_j} h_j(α, β_c, β_g) + log N(α; μ_α, σ_α²)
@@ -529,9 +546,45 @@ def _m_step(pairs: _Pairs, alpha: np.ndarray, beta: np.ndarray,
     box (and only the diagonal when the box binds). The β_g block is diagonal, so the step is
     solved through its Schur complement, as in v3. At the maximum ∂Q/∂β_g = 0 reads β_g =
     Σ_{j∈g} ω_j·P_j·β*_j / (Σ_{j∈g} ω_j·P_j + 1/beta_sd²): the group's cell difficulties,
-    shrunk under the prior."""
+    shrunk under the prior.
+
+    cell_beta=False (the no-per-cell-β ablation) has β_c ≡ β_g, so Q has no β_c to profile
+    and no shrinkage term: h_j(α, β_g) = Σ_m [in·log σ(α_m − β_g) + (tot − in)·log σ(β_g −
+    α_m)]. With p = σ(α − β_g) and info = tot·p(1 − p): ∂Q/∂α_m = Σ_j ω_j·(in − tot·p) −
+    (α_m − μ_α)/σ_α², ∂Q/∂β_g = Σ_{j∈g} ω_j·(tot·p − in) summed over m − β_g/beta_sd²,
+    ∂²Q/∂α_m² = −Σ_j ω_j·info_jm − 1/σ_α², ∂²Q/∂α_m∂β_g = Σ_{j∈g} ω_j·info_jm, and
+    ∂²Q/∂β_g² = −Σ_{j∈g} ω_j·Σ_m info_jm − 1/beta_sd². The same Schur step applies."""
     groups = beta.size
     for _ in range(_NEWTON_MAX):
+        if not cell_beta:
+            w = pairs.weight
+            p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - beta[pairs.group][:, None])))
+            info = pairs.total * p * (1 - p)
+            miss = pairs.total * p - pairs.inside
+            g_a = (-(w[:, None] * miss).sum(axis=0)
+                   - (alpha - params.mu_alpha) / params.sigma_alpha ** 2)
+            g_b = (np.bincount(pairs.group, w * miss.sum(axis=1), groups)
+                   - beta / params.beta_sd ** 2)
+            h_aa = (-np.diag((w[:, None] * info).sum(axis=0))
+                    - np.eye(alpha.size) / params.sigma_alpha ** 2)
+            h_ba = np.zeros((groups, alpha.size))
+            np.add.at(h_ba, pairs.group, w[:, None] * info)
+            h_bb = (np.bincount(pairs.group, -w * info.sum(axis=1), groups)
+                    - 1 / params.beta_sd ** 2)
+            h_ab = h_ba.T
+            schur = h_aa - (h_ab / h_bb) @ h_ba
+            d_a = np.linalg.solve(schur, -g_a + (h_ab / h_bb) @ g_b)
+            d_b = (-g_b - h_ba @ d_a) / h_bb
+            before = _q_objective(pairs, alpha, beta, params, False)
+            t = 1.0
+            while t > 1e-8 and _q_objective(pairs, alpha + t * d_a, beta + t * d_b, params,
+                                            False) < before - 1e-12:
+                t /= 2
+            alpha, beta = alpha + t * d_a, beta + t * d_b
+            if max(float(np.max(np.abs(t * d_a), initial=0.0)),
+                   float(np.max(np.abs(t * d_b), initial=0.0))) < _NEWTON_TOL:
+                break
+            continue
         star = _profiled_beta(pairs, alpha, beta)
         w = pairs.weight
         p = 1.0 / (1.0 + np.exp(-(alpha[None, :] - star[:, None])))
@@ -640,7 +693,8 @@ def _prepare(used: list[Cell], by_cell: Mapping[str, Sequence[Reading]], names: 
 
 
 def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
-            profile: bool = True) -> tuple[list[CellPosteriorV4], np.ndarray]:
+            profile: bool = True, cell_beta: bool = True,
+            ) -> tuple[list[CellPosteriorV4], np.ndarray]:
     """Every cell's profiled posterior and log marginal at (α, β_g), its readings
     unweighted."""
     abilities = dict(zip(data.names, alpha.tolist(), strict=True))
@@ -648,7 +702,8 @@ def _e_step(data: _Data, alpha: np.ndarray, beta: np.ndarray, params: V4Params,
     marginals = np.zeros(len(data.cells))
     for c, cell in enumerate(data.cells):
         post, marginals[c] = _posterior(cell, data.values[c], data.counts[c], abilities,
-                                        float(beta[data.group[c]]), params, profile)
+                                        float(beta[data.group[c]]), params, profile,
+                                        cell_beta)
         posts.append(post)
     return posts, marginals
 
@@ -679,14 +734,16 @@ def _score(data: _Data, marginals: np.ndarray, alpha: np.ndarray, beta: np.ndarr
 
 
 def _em(data: _Data, alpha: np.ndarray, params: V4Params, tol: float, max_iter: int,
-        profile: bool = True) -> tuple[np.ndarray, np.ndarray, bool, int]:
+        profile: bool = True, cell_beta: bool = True,
+        ) -> tuple[np.ndarray, np.ndarray, bool, int]:
     """EM from one start, every β_g = 0: α, β_g, whether the largest change in α and β_g fell
     below tol, and the iterations used. Every cell enters every update (ruling T2-U′:
     leaving out cells by their observed |log_lr| selects on the outcome and widened α)."""
     beta = np.zeros(int(data.group.max()) + 1)
     for iterations in range(1, max_iter + 1):
-        posts, _ = _e_step(data, alpha, beta, params, profile)
-        new_alpha, new_beta = _m_step(_pairs(data, posts, alpha, params), alpha, beta, params)
+        posts, _ = _e_step(data, alpha, beta, params, profile, cell_beta)
+        new_alpha, new_beta = _m_step(_pairs(data, posts, alpha, params), alpha, beta, params,
+                                      cell_beta)
         moved = max(float(np.max(np.abs(new_alpha - alpha), initial=0.0)),
                     float(np.max(np.abs(new_beta - beta), initial=0.0)))
         alpha, beta = new_alpha, new_beta
@@ -722,6 +779,7 @@ def fit_v4(
     cells: Mapping[str, Cell], readings: Sequence[Reading], *, models: Mapping[str, str],
     params: V4Params, tol: float = EM_TOL, max_iter: int = EM_MAX_ITER,
     composite: bool = True, profile: bool = True,
+    cell_beta: bool = True,
 ) -> AnchoredFitV4:
     """α and β_g by v3's multi-start EM (§3.5) around v4's per-cell profiles, deterministic.
     Each iteration profiles every cell at the current (α, β_g), its readings unweighted
@@ -733,7 +791,9 @@ def fit_v4(
     α = μ_α. Cells without readings are left out. composite=False weighs every reading 1
     (the no-composite-weights ablation, §6.4). profile=False is the plug-in ablation: every
     candidate set's likelihood is taken at the MAP set's (β_c, λ, e), E-step and final
-    posteriors alike (see _plug_in)."""
+    posteriors alike (see _plug_in). cell_beta=False is the no-per-cell-β ablation: β_c ≡ β_g
+    in the profiles and in the M-step (no β_c of its own, with the β_g gradient taken
+    directly)."""
     family, data, t3 = _setup(cells, readings, models, params, composite)
     names = sorted(family)
     alpha = np.full(len(names), params.mu_alpha)
@@ -746,8 +806,8 @@ def fit_v4(
         starts = [("t3", t3)] + [(f"alpha={a}", np.full(len(names), a)) for a in STARTS]
         best = -np.inf
         for label, alpha0 in starts:
-            a, b, ok, n = _em(data, alpha0, params, tol, max_iter, profile)
-            fitted, marginals = _e_step(data, a, b, params, profile)
+            a, b, ok, n = _em(data, alpha0, params, tol, max_iter, profile, cell_beta)
+            fitted, marginals = _e_step(data, a, b, params, profile, cell_beta)
             score = _score(data, marginals, a, b, params)
             scores[label] = StartFit(score, ok, n)
             if not posts or score > best:

@@ -4,10 +4,12 @@ The development domain is university and the held-out domain is library, so the 
 small; `split` is injected. Nothing is written outside tmp_path.
 """
 
+import dataclasses
 import hashlib
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,10 +27,12 @@ from specdx.report.p4 import (
 )
 from specdx.report.stages import SMOKE_LINE, StageOutcome, already_done
 from specdx.subjects.sopbench.cells import cells_for
+from specdx.subjects.sopbench.diagnose import OFFLINE
 from specdx.subjects.sopbench.diagnose_v4 import S3DiagnosisV4
 from specdx.subjects.sopbench.load import S3Run, load_tasks
 from specdx.subjects.sopbench.placebo import PlaceboResult
 from specdx.subjects.sopbench.witness import WitnessResult
+from specdx.types import Defect
 
 SPLIT = (("university",), ("library",))
 MODELS = (("gpt-4o", "openai", False), ("claude-3-5-sonnet-20241022", "anthropic", False),
@@ -103,16 +107,30 @@ def test_g0v4_stage_calibrates_runs_and_freezes_only_on_pass(data, tmp_path) -> 
 
 
 def test_smoke_g0v4_never_freezes_and_writes_smoke_params(data, tmp_path, monkeypatch) -> None:
+    # Plumbing only: run_g0v4 is stubbed (the real search is covered by the test above).
     manifest, traj = data
+    seen = {}
+
+    def fake_run(config, out, *, replicates, grid, jobs):
+        seen.update(replicates=replicates, grid=grid)
+        result = {"chosen": {"params": dataclasses.asdict(V4Params(tau_u=2.0)),
+                             "metrics": {"hidden_f1": 0.5, "ambiguity_f1": 0.5,
+                                         "shared_fp": 0.0}},
+                  "v3": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_hidden": 0.1},
+                  "criteria": {}, "failed": ["1"]}
+        out.with_suffix(".json").write_text(json.dumps(result))
+        return 1
+
+    monkeypatch.setattr(p4, "run_g0v4", fake_run)
+    monkeypatch.setattr(p4, "render", lambda result: "a\nb\nc\nrendered")
     monkeypatch.setattr(p4, "freeze_v4", lambda *a, **k: pytest.fail("smoke must not freeze"))
     frozen = tmp_path / "frozen.json"
     out = g0v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
                      smoke=True, replicates=99, grid=None, params_file=frozen)
-    assert out.exit_code in (0, 1)
-    assert not frozen.exists()
+    assert out.exit_code == 1 and not frozen.exists()
+    assert seen["replicates"] == 2 and seen["grid"] == dict(p4.SMOKE_GRID)
     assert json.loads((tmp_path / SMOKE_PARAMS).read_text())["params"]["tau_u"] == 2.0
-    assert json.loads((tmp_path / "s3-g0v4-search.json").read_text())["replicates"] == 2
-    assert "SMOKE" in out.body
+    assert "SMOKE" in out.body and out.data["frozen"] is False
 
 
 def test_g0v4_stage_without_data_exits_2_and_does_not_fetch(tmp_path) -> None:
@@ -210,8 +228,24 @@ def test_v4_stage_needs_frozen_parameters_and_data(data, tmp_path) -> None:
     assert out.exit_code == 2
 
 
-def test_smoke_v4_uses_smoke_params_when_nothing_is_frozen(data, tmp_path) -> None:
+def _stub_diagnoses(monkeypatch, calls: list[dict]) -> None:
+    """Replace the two diagnoses with cheap fakes; record each v4 call's keyword switches."""
+    fit = SimpleNamespace(theta={"a": 0.5, "b": 0.7}, converged=True)
+    contradiction = Defect("contradiction", ("c1", "c2"), ("s",), (), 0.9, OFFLINE)
+
+    def fake_v4(domain, cd, models, raw, params, **kw):
+        calls.append(kw)
+        return S3DiagnosisV4(domain, ("a", "b"), fit, [contradiction], [],
+                             {"outcome": 1, "check": 2}, {"defect": 0, "shared": 0, "error": 0})
+
+    monkeypatch.setattr(p4, "diagnose_domain_v4", fake_v4)
+    monkeypatch.setattr(p4, "diagnose_domain", lambda d, cd, m: SimpleNamespace(
+        raters=("a", "b"), defects=[contradiction], fit=fit))
+
+
+def test_smoke_v4_uses_smoke_params_when_nothing_is_frozen(data, tmp_path, monkeypatch) -> None:
     manifest, traj = data
+    _stub_diagnoses(monkeypatch, [])
     (tmp_path / SMOKE_PARAMS).write_text(json.dumps({"params": {"tau_u": 3.0}}))
     out = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
                    smoke=True, params_file=tmp_path / "absent.json")
@@ -222,6 +256,19 @@ def test_smoke_v4_uses_smoke_params_when_nothing_is_frozen(data, tmp_path) -> No
     out = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
                    smoke=True, params_file=tmp_path / "absent.json")
     assert out.exit_code == 2
+
+
+def test_v4_stage_ablation_switches_and_key_number_count_contradictions(
+        data, params, tmp_path, monkeypatch) -> None:
+    manifest, traj = data
+    calls: list[dict] = []
+    _stub_diagnoses(monkeypatch, calls)
+    out = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                   params=params)
+    assert calls == [{}, {"cell_beta": False}, {"composite": False}, {"use_witness": False},
+                     {"profile": False}]
+    # One contradiction, three undetermined cells: the key number counts the contradiction.
+    assert out.key_number == "1 typed defects, 3 undetermined over 1 domains"
 
 
 # --- s3-placebo ---
@@ -340,3 +387,14 @@ def test_the_official_cli_stage_without_data_exits_2_and_writes_a_report(
 
 def test_the_stage_outcome_type_is_returned() -> None:
     assert isinstance(witness_stage(domains=("library",), limit=1), StageOutcome)
+
+
+def test_a_bad_p4_smoke_value_exits_2_with_a_message(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("P4_SMOKE", "yes")
+    assert _cli(tmp_path, "s3-witness") == 2
+    assert "P4_SMOKE must be unset, empty, 0 or 1" in capsys.readouterr().err
+    assert not (tmp_path / "res").exists()
+    for fine in ("", "0"):
+        monkeypatch.setenv("P4_SMOKE", fine)
+        assert _cli(tmp_path, "status") == 0
+    assert not (tmp_path / "res" / "smoke").exists()

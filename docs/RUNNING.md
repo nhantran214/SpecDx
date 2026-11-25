@@ -206,6 +206,8 @@ Only `fetch-sopbench` uses the network (the pinned SOPBench commit on raw.github
 
 The four P4a stages need the published trajectories (`work/sopbench-output`, from `fetch-sopbench`); a stage without them exits 2 and never fetches. `s3-g0v4` calibrates on the three development domains, runs G0v4 (`--jobs N` for the fits) and, on PASS, freezes `experiments/p4-s3-v4-params.json`. `s3-witness` replays every task on SOPBench's strict system. `s3-v4` and `s3-placebo` use only the four held-out domains and the frozen parameters. The placebo verdict is PASS only with at least two evaluable domains (real v4 count above 0) and every evaluable v4 ratio at most 0.2. tau_u comes from the G0v4 simulation, not from theory.
 
+**`./run_all.sh all` includes the official P4a stages** (`s3-g0v4` can run for hours and freezes the v4 parameters on PASS), so run `all` on the 48 GB host only; a G0v4 FAIL (exit 1) also stops `all` before the later stages, and `all` prints a warning to that effect.
+
 Official P4a results come only from the 48 GB host. On this machine run the smoke mode, a quick system check:
 
 ```bash
@@ -214,7 +216,7 @@ P4_SMOKE=1 ./run_all.sh s3-witness   # one stage in smoke mode
 less results/p3/smoke/STATUS.md
 ```
 
-Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, one held-out domain and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done.
+Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, one held-out domain and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done. `smoke` runs all four stages even when one fails, prints a summary (stage, exit code, verdict) and exits with the largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the smoke placebo uses one held-out domain, so it always ends FAIL (1). `P4_SMOKE` must be unset, empty, `0` or `1`; any other value exits 2. Smoke mode applies to the P4a stages only, so `P4_SMOKE=1 ./run_all.sh <other stage>` exits 2, pending stages included.
 
 The CASE-0031 steps (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`) are no longer in `run_all.sh`. Their `specdx` commands remain, and §12 and §13 are kept as the record of how they ran.
 

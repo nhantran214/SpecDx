@@ -160,3 +160,56 @@ def test_run_all_smoke_refuses_a_non_p4a_stage(tmp_path) -> None:
                        text=True, env=env, cwd=ROOT)
     assert r.returncode == 2 and "P4a stages only" in r.stderr
     assert not (tmp_path / "results" / "smoke" / "replication.md").exists()
+
+
+def test_running_guide_and_usage_warn_that_all_runs_the_official_p4a_stages(tmp_path) -> None:
+    text = RUNNING.read_text(encoding="utf-8")
+    assert "`./run_all.sh all` includes the official P4a stages" in text
+    assert "48 GB host only" in text
+    assert "OFFICIAL P4a stages" in _run_all(tmp_path).stdout
+    script = (ROOT / "run_all.sh").read_text(encoding="utf-8")
+    assert "all includes the official P4a stages" in script  # the run-time warning
+
+
+def test_run_all_smoke_on_a_pending_stage_exits_2_like_the_cli(tmp_path) -> None:
+    env = {**os.environ, "P3_RESULTS": str(tmp_path / "results"),
+           "P3_WORK": str(tmp_path / "work"), "P4_SMOKE": "1"}
+    r = subprocess.run(["bash", str(ROOT / "run_all.sh"), "s2-screen"], capture_output=True,
+                       text=True, env=env, cwd=ROOT)
+    assert r.returncode == 2 and "P4a stages only" in r.stderr
+    assert "pending" not in r.stdout
+
+
+def test_run_all_rejects_a_bad_p4_smoke_value(tmp_path) -> None:
+    env = {**os.environ, "P3_RESULTS": str(tmp_path / "results"),
+           "P3_WORK": str(tmp_path / "work"), "P4_SMOKE": "yes"}
+    r = subprocess.run(["bash", str(ROOT / "run_all.sh"), "status"], capture_output=True,
+                       text=True, env=env, cwd=ROOT)
+    assert r.returncode == 2 and "P4_SMOKE must be" in r.stderr
+
+
+def test_smoke_exit_code_is_the_maximum_so_a_crash_is_never_hidden(tmp_path) -> None:
+    def code(*codes: str) -> str:
+        r = subprocess.run(
+            ["bash", "-c", f'source "{ROOT / "run_all.sh"}"; max_code {" ".join(codes)}'],
+            capture_output=True, text=True, cwd=ROOT)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
+
+    assert code("1", "0", "2", "1") == "2"  # an expected FAIL (1) first, a crash (2) later
+    assert code("2", "1") == "2"
+    assert code("0", "0") == "0" and code("1", "0") == "1"
+
+
+def test_run_all_smoke_prints_a_summary_and_returns_the_largest_code(tmp_path) -> None:
+    env = {**os.environ, "P3_RESULTS": str(tmp_path / "results"),
+           "P3_WORK": str(tmp_path / "work")}
+    r = subprocess.run(["bash", str(ROOT / "run_all.sh"), "smoke"], capture_output=True,
+                       text=True, env=env, cwd=ROOT)
+    # No trajectories here: s3-witness passes (0); the other three stop with exit 2.
+    assert r.returncode == 2, r.stderr
+    summary = r.stdout.split("Smoke summary")[1]
+    for stage, rc, verdict in (("s3-g0v4", "2", "FAIL"), ("s3-witness", "0", "DONE"),
+                               ("s3-v4", "2", "FAIL"), ("s3-placebo", "2", "FAIL")):
+        assert re.search(rf"{stage}\s+{rc}\s+{verdict}", summary), (stage, summary)
+    assert not (tmp_path / "results" / "STATUS.md").exists()

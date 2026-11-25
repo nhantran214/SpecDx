@@ -53,17 +53,19 @@ def _task_index(cell_id: str) -> int:
 
 def diagnose_domain_v4(
     domain: str, cd: S3CellData, models: Mapping[str, str], raw_tasks: Sequence[dict],
-    params: V4Params, *, composite: bool = True, profile: bool = True, use_witness: bool = True,
+    params: V4Params, *, composite: bool = True, profile: bool = True, cell_beta: bool = True,
+    use_witness: bool = True,
 ) -> S3DiagnosisV4:
     """Fit v4, type its cells, route undetermined outcome cells to the witness, and add
     the contradictions of the determined data (P3a's hitting sets over fit.weights).
     raw_tasks: the domain's raw tasks, indexed like load_tasks. Each task is witnessed at
     most once. Determined hidden findings carry the OFFLINE note: only witnessed ones were
-    refuted. composite, profile: the fit's ablation switches (design §6.4); use_witness=False
+    refuted. composite, profile, cell_beta: the fit's ablation switches (design §6.4);
+    use_witness=False
     skips the witness (every undetermined cell stays undetermined)."""
     data = cd.data
     fit = fit_v4(data.cells, data.readings, models=models, params=params,
-                 composite=composite, profile=profile)
+                 composite=composite, profile=profile, cell_beta=cell_beta)
     by_cell = data.by_cell()
     defects: list[Defect] = []
     shared: list[CellFinding] = []

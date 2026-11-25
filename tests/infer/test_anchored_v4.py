@@ -26,6 +26,7 @@ from specdx.infer.anchored_v4 import (
     _encode_counts,
     _m_step,
     _Pairs,
+    _plug_in,
     _profile,
     _profiled_beta,
     _q_objective,
@@ -464,43 +465,147 @@ def test_the_m_step_maximises_the_profiled_composite_objective() -> None:
         assert beta[k] == pytest.approx(expected, abs=1e-8)
 
 
-# --- Task 10: the plug-in ablation (design §6.4): profile=False ---
+# --- Task 10: the ablation switches (design §6.4): profile=False and cell_beta=False ---
 
-def test_plug_in_keeps_the_map_set_and_never_beats_the_profile() -> None:
+def _plugged(counts, beta_g: float = 0.0):
+    """_profile's fits and likes, then _plug_in's, with the MAP set and the table."""
+    values = ("d", "a", "b")
+    fits, likes, _ = _profile(ANCHORED, values, counts, RATERS, beta_g, P4)
+    post = profile_cell(ANCHORED, values, counts, RATERS, beta_g, P4)
+    best = fits[post.map_set]
+    _, table, a = _encode_counts(values, counts, RATERS, P4)
+    plug_fits, plug_likes = dict(fits), dict(likes)
+    _plug_in(values, table, a, beta_g, plug_fits, plug_likes, best, P4)
+    return values, fits, likes, plug_fits, plug_likes, post.map_set, best, table, a
+
+
+def test_plug_in_evaluates_every_set_at_the_map_sets_prior_bearing_point() -> None:
+    for counts in (MIS_KEY, SHARED):
+        values, fits, likes, pfits, plikes, map_set, best, table, a = _plugged(counts)
+        slot = {v: k for k, v in enumerate(values)}
+        per_slot = table.sum(axis=0)
+        for name in likes:
+            if not name:
+                assert plikes[name] == likes[name] and pfits[name] == fits[name]  # ∅ keeps
+                continue
+            s = tuple(sorted(slot[v] for v in name))
+            choices = [k for k in range(len(values)) if k not in s]
+            e = max(choices, key=lambda k: (per_slot[k], -k)) if choices else None
+            live = e is not None and best.lam > 0
+            want = _data_loglik(table, a, s, best.beta, best.lam if live else 0.0,
+                                e if live else None, None)
+            assert plikes[name] == pytest.approx(want, abs=1e-10)
+            assert pfits[name].beta == best.beta
+        # The MAP set at the prior-bearing point is its profiled posterior, but its likes
+        # entry is now the data log-likelihood at (β_map, λ_map, e*), not the prior-free box
+        # profile.
+        assert pfits[map_set].loglik == pytest.approx(fits[map_set].loglik, abs=1e-9)
+        if map_set:
+            assert plikes[map_set] != pytest.approx(likes[map_set], abs=1e-9)
+        for key, fit in fits.items():
+            assert pfits[key].loglik <= fit.loglik + 1e-9  # a feasible point never wins
+
+
+def test_plug_in_log_lr_is_the_difference_of_the_recorded_likes() -> None:
     values = ("d", "a", "b")
     for counts in (MIS_KEY, SHARED):
-        prof = profile_cell(ANCHORED, values, counts, RATERS, 0.0, P4)
+        _, _, _, _, plikes, _, _, _, _ = _plugged(counts)
+        want = (max(v for k, v in plikes.items() if k != frozenset({"d"}))
+                - plikes[frozenset({"d"})])
         plug = profile_cell(ANCHORED, values, counts, RATERS, 0.0, P4, profile=False)
-        best = prof.map_set
-        # The MAP set's own fit is its profile; every other set is evaluated at the MAP
-        # set's (beta_c, lambda, e), a feasible point of its own profile, so never above it.
-        assert plug.set_fits[best].loglik == pytest.approx(prof.set_fits[best].loglik,
-                                                           abs=1e-9)
-        for key, fit in prof.set_fits.items():
-            assert plug.set_fits[key].loglik <= fit.loglik + 1e-9
-        assert plug.set_fits[frozenset()] == prof.set_fits[frozenset()]
-        for key, fit in plug.set_fits.items():
-            if key and key != best:
-                assert (fit.beta, fit.lam) == (prof.set_fits[best].beta,
-                                               prof.set_fits[best].lam) or fit.lam == 0.0
-    mis = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.0, P4)
-    plug = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.0, P4, profile=False)
-    assert plug.log_lr != pytest.approx(mis.log_lr, abs=1e-6)  # the ablation changes the LR
+        assert plug.log_lr == pytest.approx(want, abs=1e-10)
+        prof = profile_cell(ANCHORED, values, counts, RATERS, 0.0, P4)
+        assert plug.log_lr != pytest.approx(prof.log_lr, abs=1e-6)
 
 
-def test_profile_true_is_the_default_and_bit_identical() -> None:
+def test_cell_beta_false_pins_every_beta_c_to_beta_g_and_changes_log_lr() -> None:
     values = ("d", "a", "b")
-    a = profile_cell(ANCHORED, values, SHARED, RATERS, 0.0, P4)
-    b = profile_cell(ANCHORED, values, SHARED, RATERS, 0.0, P4, profile=True)
-    assert a == b
+    full = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.7, P4)
+    pinned = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.7, P4, cell_beta=False)
+    assert all(f.beta == 0.7 for f in pinned.set_fits.values())
+    assert pinned.log_lr != pytest.approx(full.log_lr, abs=1e-6)
+    # On a unanimous deviation the free β_c leaves it undecidable (T5); with β_c ≡ β_g the
+    # raters' abilities decide it.
+    counts = {m: {"a": 20} for m in RATERS}
+    vals = candidate_values("d", ["a"])
+    free = profile_cell(ANCHORED, vals, counts, RATERS, 0.0, P4)
+    fixed = profile_cell(ANCHORED, vals, counts, RATERS, 0.0, P4, cell_beta=False)
+    assert abs(free.log_lr) < P4.tau_u
+    assert abs(fixed.log_lr) > P4.tau_u and fixed.log_lr != pytest.approx(free.log_lr)
+
+
+def test_cell_beta_false_m_step_maximises_the_group_only_objective() -> None:
+    # With β_c ≡ β_g, Q(α, β_g) = Σ_j ω_j·h_j(α, β_g) + the log priors: the M-step reaches
+    # its maximum (zero gradient, checked by central differences), with no β_c to profile.
+    rng = np.random.default_rng(5)
+    j, m, g = 40, 3, 4
+    total = rng.integers(1, 8, (j, m)).astype(float)
+    inside = np.floor(total * rng.uniform(0, 1, (j, m)))
+    pairs = _Pairs(inside, total, rng.uniform(0.1, 1.0, j), rng.uniform(0.25, 1.0, j),
+                   np.arange(j) % g, np.full(j, -12.0), np.full(j, 12.0))
+    alpha, beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4, cell_beta=False)
+    best = _q_objective(pairs, alpha, beta, P4, cell_beta=False)
+    h = 1e-5
+    for i in range(m + g):
+        step = np.zeros(m + g)
+        step[i] = h
+        up = _q_objective(pairs, alpha + step[:m], beta + step[m:], P4, cell_beta=False)
+        down = _q_objective(pairs, alpha - step[:m], beta - step[m:], P4, cell_beta=False)
+        assert (up - down) / (2 * h) == pytest.approx(0.0, abs=1e-5)
+        assert up <= best + 1e-12 and down <= best + 1e-12
+    assert np.array_equal(_profiled_beta(pairs, alpha, beta, cell_beta=False),
+                          beta[pairs.group])
+    # It is not the free-β_c optimum.
+    free_alpha, free_beta = _m_step(pairs, np.zeros(m), np.zeros(g), P4)
+    assert not np.allclose(free_beta, beta, atol=1e-6)
+
+
+def test_cell_beta_false_changes_the_undetermined_count_on_the_fixture() -> None:
+    from specdx.infer.typing_v4 import UNDETERMINED, type_cells_v4
+
     cells, readings, models = _small()
-    f1 = fit_v4(cells, readings, models=models, params=P4)
-    f2 = fit_v4(cells, readings, models=models, params=P4, profile=True)
-    assert f1.alpha == f2.alpha and f1.weights == f2.weights
+    by_cell: dict[str, list[Reading]] = {}
+    for r in readings:
+        by_cell.setdefault(r.cell, []).append(r)
+
+    def undetermined(**kw) -> int:
+        fit = fit_v4(cells, readings, models=models, params=P4, **kw)
+        return sum(f.type == UNDETERMINED for f in type_cells_v4(cells, fit, by_cell, P4))
+
+    assert undetermined(cell_beta=False) != undetermined()
+
+
+def test_the_default_switches_reproduce_the_base_fit_exactly() -> None:
+    # Literals recorded from base commit 572b0fc (before profile/cell_beta existed).
+    cells, readings, models = _small()
+    fit = fit_v4(cells, readings, models=models, params=P4)
+    assert fit.alpha == {"m0": 2.752707049902913, "m1": 1.6980324389406978,
+                         "m2": -0.0017929231459093118}
+    assert (fit.iterations, fit.start, fit.converged) == (12, "alpha=1.0", True)
+    assert [fit.cells[c].log_lr for c in ("c000", "c001", "c002", "c003", "c004", "c005")] == [
+        -2.8882420550695644, -1.8800944278756386, -0.06571421811088385,
+        -3.8563828646025033, -2.5628422815512373, -2.0770286386396997]
+    assert sum(post.log_lr for post in fit.cells.values()) == -84.8797332049631
+    values = ("d", "a", "b")
+    mis = profile_cell(ANCHORED, values, MIS_KEY, RATERS, 0.0, P4)
+    shared = profile_cell(ANCHORED, values, SHARED, RATERS, 0.0, P4)
+    assert mis.log_lr == 54.57134381445822
+    assert shared.log_lr == -7.817768566452756
+    assert mis.set_fits[frozenset({"d"})].loglik == -122.92784577122895
+    assert shared.set_fits[frozenset({"d"})].loglik == -64.6399929872344
+    explicit = fit_v4(cells, readings, models=models, params=P4, profile=True, cell_beta=True)
+    assert explicit.alpha == fit.alpha
 
 
 def test_fit_v4_with_plug_in_runs_and_recovers_the_order() -> None:
     cells, readings, models = _shared_data()
     fit = fit_v4(cells, readings, models=models, params=P4, profile=False)
+    assert _order(fit.theta) == ["m0", "m1", "m2", "m3"]
+    assert set(fit.cells) == set(cells)
+
+
+def test_fit_v4_with_cell_beta_false_runs_and_recovers_the_order() -> None:
+    cells, readings, models = _shared_data()
+    fit = fit_v4(cells, readings, models=models, params=P4, cell_beta=False)
     assert _order(fit.theta) == ["m0", "m1", "m2", "m3"]
     assert set(fit.cells) == set(cells)

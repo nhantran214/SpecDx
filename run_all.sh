@@ -44,11 +44,15 @@
 # replicates on a one-point grid, 20 tasks per domain for the witnesses, one held-out domain,
 # 2 placebo seeds). Reports go to $P3_RESULTS/smoke/ (labelled SMOKE, with its own
 # STATUS.md); nothing is frozen and no official stage is marked done. `smoke` runs all four
-# stages even if one fails and exits with the first non-zero code.
+# stages even if one fails, prints a summary (stage, exit code, verdict) and exits with the
+# largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the
+# smoke placebo has one held-out domain and so always ends FAIL (1).
+# `all` (outside smoke mode) includes the OFFICIAL P4a stages; run it on the 48 GB host only.
 #
 # Environment:
 #   P3_RESULTS   where reports go (default results/p3)
-#   P4_SMOKE     1: smoke mode (the P4a stages only)
+#   P4_SMOKE     1: smoke mode (the P4a stages only); unset, empty or 0: off; any other
+#                value is an error (exit 2)
 #   P3_WORK      work directory: caches and the p3-<stage>.pid files (default work)
 # While a stage runs, $P3_WORK/p3-<stage>.pid holds its pid; it is removed when the stage
 # ends, however it ends, so STATUS.md shows "running" only for a live stage.
@@ -57,6 +61,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
+case "${P4_SMOKE:-}" in
+  ""|0|1) ;;
+  *) printf 'error: P4_SMOKE must be unset, empty, 0 or 1 (got %q)\n' "$P4_SMOKE" >&2; exit 2 ;;
+esac
 
 PY=.venv/bin/python
 SPECDX=.venv/bin/specdx
@@ -136,12 +145,6 @@ run_one() {
   local name=$1 info plan impl
   info=$(stage_info "$name") || die "unknown stage '$name' (run ./run_all.sh for the list)"
   read -r plan impl <<< "$info"
-  if [[ $impl == 0 ]]; then
-    echo "$name: pending — implemented in plan $plan"
-    rebuild_status
-    echo "status: $RESULTS/STATUS.md"
-    return 0
-  fi
   if [[ $name == status ]]; then
     rebuild_status
     echo "status: $SHOWN/STATUS.md"
@@ -149,6 +152,12 @@ run_one() {
   fi
   if [[ ${P4_SMOKE:-} == 1 && $plan != P4a ]]; then
     die "P4_SMOKE=1 applies to the P4a stages only, not $name"
+  fi
+  if [[ $impl == 0 ]]; then
+    echo "$name: pending — implemented in plan $plan"
+    rebuild_status
+    echo "status: $RESULTS/STATUS.md"
+    return 0
   fi
   run_stage "$name"
 }
@@ -161,26 +170,47 @@ for s in STAGES:
         print(s.name)'
 }
 
+# max_code N...  the largest of the exit codes given (0 for none)
+max_code() {
+  local m=0 c
+  for c in "$@"; do (( c > m )) && m=$c; done
+  echo "$m"
+}
+
+verdict_of() {
+  "$PY" -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("verdict") or "-")
+except Exception:
+    print("-")' "$SHOWN/$1.json"
+}
+
 run_smoke() {
-  local name rc=0 first=0
+  local name rc codes=() names=() i
   export P4_SMOKE=1
   SHOWN="$RESULTS/smoke"
   echo "SMOKE RUN — system check only, not a result"
   while read -r name; do
+    rc=0
     run_stage "$name" || rc=$?
-    if [[ $rc != 0 ]]; then
-      warn "smoke $name exited $rc"
-      [[ $first == 0 ]] && first=$rc
-      rc=0
-    fi
+    [[ $rc != 0 ]] && warn "smoke $name exited $rc"
+    names+=("$name")
+    codes+=("$rc")
   done < <(p4a_stages)
   rebuild_status
+  step "Smoke summary"
+  printf '  %-12s %-5s %s\n' stage exit verdict
+  for i in "${!names[@]}"; do
+    printf '  %-12s %-5s %s\n' "${names[$i]}" "${codes[$i]}" "$(verdict_of "${names[$i]}")"
+  done
   echo "status: $SHOWN/STATUS.md"
-  return "$first"
+  return "$(max_code "${codes[@]}")"
 }
 
 run_all() {
   local name rc=0
+  warn "all includes the official P4a stages (s3-g0v4 can run for hours and freezes the v4 parameters on PASS): run it on the 48 GB host only; use ./run_all.sh smoke here"
   while read -r name; do
     if p3 status --done "$name"; then
       ok "$name: already done, skipped"
@@ -200,13 +230,18 @@ for s in STAGES:
   echo "status: $RESULTS/STATUS.md"
 }
 
-[[ $# -ge 1 ]] || usage
-case "$1" in
-  -h|--help|help) usage ;;
-esac
-check_tools
-case "$1" in
-  smoke) run_smoke ;;
-  all) if [[ ${P4_SMOKE:-} == 1 ]]; then run_smoke; else run_all; fi ;;
-  *) run_one "$1" ;;
-esac
+main() {
+  [[ $# -ge 1 ]] || usage
+  case "$1" in
+    -h|--help|help) usage ;;
+  esac
+  check_tools
+  case "$1" in
+    smoke) run_smoke ;;
+    all) if [[ ${P4_SMOKE:-} == 1 ]]; then run_smoke; else run_all; fi ;;
+    *) run_one "$1" ;;
+  esac
+}
+
+# Sourced (by the tests), the functions are defined and nothing runs.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

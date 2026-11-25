@@ -53,9 +53,6 @@ SMOKE_GRID: dict[str, Sequence] = {
 PLACEBO_SEEDS = 20
 PLACEBO_MAX_RATIO = 0.2
 PLACEBO_MIN_EVALUABLE = 2
-# 1e-3 would also make every beta_c equal its group beta_g, but the fit then does not
-# terminate in reasonable time (the M-step line search stalls on float noise at precision 1e6).
-NO_CELL_BETA_SD = 1e-2
 TAU_U_NOTE = ("tau_u is selected by the G0v4 simulation; it is not certified by the theory "
               "(the T6 bound does not give it).")
 REFUTATION_NOTE = ("Typed hidden findings were not refuted offline; witnessed ones were "
@@ -312,7 +309,7 @@ V4_NOTE = ("undetermined outcome counts every outcome cell the data cannot decid
 
 def _variants(params: V4Params) -> list[tuple[str, V4Params, dict]]:
     return [
-        ("no per-cell β", dataclasses.replace(params, cell_sd=NO_CELL_BETA_SD), {}),
+        ("no per-cell β", params, {"cell_beta": False}),
         ("no composite weights", params, {"composite": False}),
         ("no witnesses", params, {"use_witness": False}),
         ("plug-in instead of profile", params, {"profile": False}),
@@ -377,13 +374,14 @@ def v4_stage(
                     "contradiction (unrefuted)", "θ min", "θ median", "converged"), v3_rows)
     body += ["", "## Ablations (design §6.4)", "",
              "Each row refits the held-out domain with one component removed. No per-cell β: "
-             f"cell_sd = {NO_CELL_BETA_SD}, so every β_c equals its group's β_g. The "
+             "β_c is set equal to its group's β_g in the profiles and in the fit. The "
              "attractor ablation has nothing to remove on S3: its cells are binary, so the "
              "error side has one slot and λ is not identified.", ""]
     body += _table(V4_COLUMNS, ablation_rows)
     payload = {"domains": list(held), "params": params_dict(params), "source": source,
                "v4": main_rows, "v3": v3_rows, "ablations": ablation_rows, "smoke": smoke}
-    typed = sum(r["hidden"] + r["ambiguity"] + r["weak"] for r in main_rows)
+    typed = sum(r["hidden"] + r["ambiguity"] + r["weak"] + r["contradiction (unrefuted)"]
+                for r in main_rows)
     undet = sum(r["undetermined outcome"] + r["undetermined check"] for r in main_rows)
     key = f"{typed} typed defects, {undet} undetermined over {len(held)} domains"
     return StageOutcome(0, "DONE", key, "\n".join(body), payload)

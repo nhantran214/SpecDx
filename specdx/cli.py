@@ -235,7 +235,11 @@ def _p3(args: argparse.Namespace) -> int:
 
     results, work = args.results, args.work
     traj = getattr(args, "trajectories", None) or work / "sopbench-output"
-    smoke = os.environ.get("P4_SMOKE") == "1"
+    flag = os.environ.get("P4_SMOKE", "")
+    if flag not in ("", "0", "1"):
+        print(f"P4_SMOKE must be unset, empty, 0 or 1 (got {flag!r})", file=sys.stderr)
+        return 2
+    smoke = flag == "1"
     if smoke:
         # Smoke mode (P4a): the P4a stages only, in a directory of their own that never feeds
         # the main STATUS.md; the official stage is never marked done.
