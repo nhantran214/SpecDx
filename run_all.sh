@@ -2,11 +2,14 @@
 # P3 driver (docs/RUNNING.md §11). One command per stage; every finished stage leaves a
 # Markdown report in results/p3/<stage>.md, and results/p3/STATUS.md shows all stages.
 #
-#   ./run_all.sh all             every implemented stage below, in order; skips a stage that
-#                                already finished (exit 0 on record); stops at the first
-#                                non-zero exit, then rebuilds STATUS.md
+#   ./run_all.sh all             every implemented stage below, in order (local,
+#                                fetch-sopbench, which uses the network, and replication come
+#                                first); skips a stage that already finished (exit 0 on
+#                                record); stops at the first non-zero exit, then rebuilds
+#                                STATUS.md
 #   ./run_all.sh status          rebuild results/p3/STATUS.md
-#   ./run_all.sh <stage>         one stage (the list below)
+#   ./run_all.sh <stage> ...     the stages given (the list below), in order; every name is
+#                                checked first, and the run stops at the first non-zero exit
 #   ./run_all.sh smoke           the four P4a stages, in order, in smoke mode (below)
 #
 # Stage              Plan  What it does
@@ -41,19 +44,25 @@
 #
 # Smoke mode (P4a): official P4a results come only from the 48 GB host; this machine runs
 # quick system checks. P4_SMOKE=1 or `./run_all.sh smoke` runs the P4a stages shrunk (2 G0v4
-# replicates on a one-point grid, 20 tasks per domain for the witnesses, one held-out domain,
-# 2 placebo seeds). Reports go to $P3_RESULTS/smoke/ (labelled SMOKE, with its own
+# replicates on a one-point grid, 20 tasks per domain for the witnesses, the first development
+# domain (never a held-out one) for s3-v4 and s3-placebo, 2 placebo seeds). Reports go to $P3_RESULTS/smoke/ (labelled SMOKE, with its own
 # STATUS.md); nothing is frozen and no official stage is marked done. `smoke` runs all four
 # stages even if one fails, prints a summary (stage, exit code, verdict) and exits with the
 # largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the
-# smoke placebo has one held-out domain and so always ends FAIL (1).
+# smoke placebo has one domain and so always ends FAIL (1).
 # `all` (outside smoke mode) includes the OFFICIAL P4a stages; run it on the 48 GB host only.
 #
 # Environment:
 #   P3_RESULTS   where reports go (default results/p3)
 #   P4_SMOKE     1: smoke mode (the P4a stages only); unset, empty or 0: off; any other
 #                value is an error (exit 2)
-#   P3_WORK      work directory: caches and the p3-<stage>.pid files (default work)
+#   P3_WORK      work directory: caches and the p3-<stage>.pid files (default work); G0v4
+#                keeps one file per finished fit in $P3_WORK/g0v4-cache, so a rerun of
+#                s3-g0v4 after a crash skips the fits already done
+#   P4_JOBS      processes for the parallel stage s3-g0v4, passed as --jobs (default: the
+#                number of cores, nproc); a positive integer, anything else is an error
+#                (exit 2). A parallel stage runs with OMP_NUM_THREADS, OPENBLAS_NUM_THREADS
+#                and MKL_NUM_THREADS set to 1, so N jobs do not oversubscribe the cores.
 # While a stage runs, $P3_WORK/p3-<stage>.pid holds its pid; it is removed when the stage
 # ends, however it ends, so STATUS.md shows "running" only for a live stage.
 # Later local SOPBench runs need PYTHONHASHSEED=0 (docs/RUNNING.md §11).
@@ -66,6 +75,16 @@ case "${P4_SMOKE:-}" in
   ""|0|1) ;;
   *) printf 'error: P4_SMOKE must be unset, empty, 0 or 1 (got %q)\n' "$P4_SMOKE" >&2; exit 2 ;;
 esac
+
+JOBS="${P4_JOBS:-}"
+[[ -n $JOBS ]] || JOBS="$(nproc)"
+if ! [[ $JOBS =~ ^[0-9]+$ ]] || (( 10#$JOBS < 1 )); then
+  printf 'error: P4_JOBS must be a positive integer (got %q)\n' "$JOBS" >&2
+  exit 2
+fi
+JOBS=$((10#$JOBS))
+# The stages that take --jobs; they run with one BLAS/OpenMP thread per process.
+PARALLEL_STAGES=" s3-g0v4 "
 
 PY=.venv/bin/python
 SPECDX=.venv/bin/specdx
@@ -133,7 +152,13 @@ run_stage() {
   mkdir -p "$WORK" "$RESULTS" "$pids"
   PIDFILE="$pids/p3-$name.pid"
   echo $$ > "$PIDFILE"
-  p3 "$name" || rc=$?
+  if [[ $PARALLEL_STAGES == *" $name "* ]]; then
+    # Set before the stage's Python, and so numpy, starts (rulings J-1 and F-I7).
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 p3 "$name" --jobs "$JOBS" \
+      || rc=$?
+  else
+    p3 "$name" || rc=$?
+  fi
   rm -f "$PIDFILE"
   PIDFILE=""
   rebuild_status
@@ -236,12 +261,30 @@ main() {
     -h|--help|help) usage ;;
   esac
   check_tools
-  case "$1" in
-    smoke) run_smoke ;;
-    all) if [[ ${P4_SMOKE:-} == 1 ]]; then run_smoke; else run_all; fi ;;
-    *) run_one "$1" ;;
-  esac
+  local arg rc
+  for arg in "$@"; do  # every name first, so a typo never stops a run half-way (F-I6)
+    case "$arg" in
+      smoke|all) ;;
+      *) stage_info "$arg" > /dev/null \
+           || die "unknown stage '$arg' (run ./run_all.sh for the list)" ;;
+    esac
+  done
+  for arg in "$@"; do
+    rc=0
+    case "$arg" in
+      smoke) run_smoke || rc=$? ;;
+      all) if [[ ${P4_SMOKE:-} == 1 ]]; then run_smoke || rc=$?; else run_all || rc=$?; fi ;;
+      *) run_one "$arg" || rc=$? ;;
+    esac
+    if (( rc != 0 )); then
+      (( $# > 1 )) && warn "$arg exited $rc; the stages after it are not run"
+      return "$rc"
+    fi
+  done
 }
 
-# Sourced (by the tests), the functions are defined and nothing runs.
+# Sourced (by the tests), the functions are defined and no stage runs. Sourcing still has
+# side effects in the calling shell: `set -euo pipefail`, a `cd` to the repository, the
+# P4_SMOKE and P4_JOBS checks (which exit the shell on a bad value), the EXIT, INT and TERM
+# traps, and the variables above (PY, RESULTS, WORK, JOBS, ...).
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

@@ -150,11 +150,20 @@ def test_running_guide_describes_p4a_and_smoke_mode() -> None:
 def test_running_guide_documents_the_official_p4a_run() -> None:
     text = RUNNING.read_text(encoding="utf-8")
     section = text.split("### The official P4a run on the 48 GB host", 1)[1].split("\n## ", 1)[0]
-    assert "specdx p3 s3-g0v4 --results results/p3 --work work --jobs" in section
+    # J-1 and F-I6: back to run_all.sh, with the fetch step a fresh host needs first.
+    assert "./run_all.sh fetch-sopbench" in section
+    assert "P4_JOBS=N ./run_all.sh s3-g0v4" in section and "specdx p3 s3-g0v4" not in section
     assert "results: P4a — frozen v4 parameters for S3 (G0v4)" in section
     assert "./run_all.sh s3-witness s3-v4 s3-placebo" in section
-    assert "results/p3/*.md" in section
+    assert "results/p3/*.md" in section and "work/g0v4-cache" in section
     assert "never results" in section and "280 v4 fits" in section
+    # Task 11 Minors: the cost figures and the FAIL sentence are pinned.
+    for needle in ("about 36,000 s of CPU", "about 10 CPU-hours", "about 0.6 hours at `P4_JOBS=20`",
+                   "estimated 479 s and took 466 s", "allow up to about 2 hours",
+                   "A G0v4 FAIL (exit 1) freezes nothing, and the later stages then exit 2 for "
+                   "want of parameters"):
+        assert needle in section, needle
+    assert "`local`, `fetch-sopbench` (the only stage that uses the network), `replication`" in text
 
 
 def test_run_all_usage_documents_smoke_mode(tmp_path) -> None:
@@ -223,3 +232,56 @@ def test_run_all_smoke_prints_a_summary_and_returns_the_largest_code(tmp_path) -
                                ("s3-v4", "2", "FAIL"), ("s3-placebo", "2", "FAIL")):
         assert re.search(rf"{stage}\s+{rc}\s+{verdict}", summary), (stage, summary)
     assert not (tmp_path / "results" / "STATUS.md").exists()
+
+
+# --- Rulings J-1, F-I6 and F-I7 (final fix wave): run_all.sh ---
+
+def _sourced(tmp_path, script: str, **env) -> subprocess.CompletedProcess:
+    """Source run_all.sh (which sets -euo pipefail, cds to the repository, validates
+    P4_SMOKE and P4_JOBS and installs its traps, but runs no stage) and run `script`."""
+    full = {**os.environ, "P3_RESULTS": str(tmp_path / "results"),
+            "P3_WORK": str(tmp_path / "work"), **env}
+    return subprocess.run(["bash", "-c", f'source "{ROOT / "run_all.sh"}"; {script}'],
+                          capture_output=True, text=True, cwd=ROOT, env=full)
+
+
+def test_run_all_runs_every_stage_it_is_given_in_order(tmp_path) -> None:
+    r = _run_all(tmp_path, "s2-screen", "status", "s2-dev")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert out.index("s2-screen: pending") < out.index("s2-dev: pending")
+
+
+def test_run_all_stops_at_the_first_non_zero_exit(tmp_path) -> None:
+    # s3-v4 has no parameters and no data here: exit 2, and s2-screen never runs.
+    r = _run_all(tmp_path, "s3-v4", "s2-screen")
+    assert r.returncode == 2
+    assert "s2-screen: pending" not in r.stdout
+
+
+def test_run_all_checks_every_stage_name_before_running_any(tmp_path) -> None:
+    r = _run_all(tmp_path, "s2-screen", "no-such-stage")
+    assert r.returncode == 2 and "unknown stage 'no-such-stage'" in r.stderr
+    assert "s2-screen: pending" not in r.stdout
+
+
+def test_p4_jobs_defaults_to_the_cores_and_must_be_a_positive_integer(tmp_path) -> None:
+    r = _sourced(tmp_path, 'echo "$JOBS"', P4_JOBS="")
+    assert r.returncode == 0 and r.stdout.strip() == str(os.cpu_count())
+    assert _sourced(tmp_path, 'echo "$JOBS"', P4_JOBS="3").stdout.strip() == "3"
+    for bad in ("0", "-2", "many", "2.5"):
+        r = _sourced(tmp_path, "true", P4_JOBS=bad)
+        assert r.returncode == 2 and "P4_JOBS must be" in r.stderr, bad
+
+
+def test_a_parallel_stage_gets_its_jobs_and_one_blas_thread(tmp_path) -> None:
+    # J-1 and F-I7: s3-g0v4 gets --jobs $P4_JOBS, with OMP, OpenBLAS and MKL at one thread
+    # each, set before the stage's Python (and numpy) starts; other stages get neither.
+    script = ('p3() { echo "ARGS $* T=${OMP_NUM_THREADS:-}/${OPENBLAS_NUM_THREADS:-}/'
+              '${MKL_NUM_THREADS:-}"; }; rebuild_status() { :; }; '
+              'run_stage s3-g0v4; run_stage s3-witness')
+    r = _sourced(tmp_path, script, P4_JOBS="3", OMP_NUM_THREADS="",
+                 OPENBLAS_NUM_THREADS="", MKL_NUM_THREADS="")
+    assert r.returncode == 0, r.stderr
+    lines = [ln for ln in r.stdout.splitlines() if ln.startswith("ARGS")]
+    assert lines == ["ARGS s3-g0v4 --jobs 3 T=1/1/1", "ARGS s3-witness T=//"]

@@ -166,11 +166,12 @@ P3 runs every experiment from one script, `./run_all.sh`. Each finished stage wr
 ```bash
 ./run_all.sh all             # every implemented stage in order; skips stages already done
 ./run_all.sh local           # one stage
+./run_all.sh s3-v4 s3-placebo   # several stages, in order; stops at the first non-zero exit
 ./run_all.sh status          # rebuild results/p3/STATUS.md
 less results/p3/STATUS.md
 ```
 
-`all` skips a stage whose recorded exit code is 0 (`specdx p3 status --done <stage>`), and stops at the first non-zero exit. The skip ignores the commit: when a done stage was recorded at another commit than HEAD, `specdx p3 status` (and so `run_all.sh`) prints a warning, and deleting `results/p3/<stage>.json` makes the stage run again. A stage that is not implemented yet prints `<stage>: pending — implemented in plan <Px>` and exits 0. While a stage runs, `work/p3-<stage>.pid` holds its pid and STATUS.md shows `running`; the file is removed when the stage ends, however it ends. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
+`all` runs, in order, `local`, `fetch-sopbench` (the only stage that uses the network), `replication` and then the four P4a stages. With several stage names, `run_all.sh` checks every name first and then runs them in order, stopping at the first non-zero exit. `all` skips a stage whose recorded exit code is 0 (`specdx p3 status --done <stage>`), and stops at the first non-zero exit. The skip ignores the commit: when a done stage was recorded at another commit than HEAD, `specdx p3 status` (and so `run_all.sh`) prints a warning, and deleting `results/p3/<stage>.json` makes the stage run again. A stage that is not implemented yet prints `<stage>: pending — implemented in plan <Px>` and exits 0. While a stage runs, `work/p3-<stage>.pid` holds its pid and STATUS.md shows `running`; the file is removed when the stage ends, however it ends. `P3_RESULTS` and `P3_WORK` override `results/p3` and `work`.
 
 | Stage | What it does | Plan | State | Report |
 |---|---|---|---|---|
@@ -204,7 +205,16 @@ Only `fetch-sopbench` uses the network (the pinned SOPBench commit on raw.github
 
 ### P4a stages and smoke mode
 
-The four P4a stages need the published trajectories (`work/sopbench-output`, from `fetch-sopbench`); a stage without them exits 2 and never fetches. `s3-g0v4` calibrates on the three development domains, runs G0v4 (`--jobs N` for the fits) and, on PASS, freezes `experiments/p4-s3-v4-params.json`. `s3-witness` replays every task on SOPBench's strict system. `s3-v4` and `s3-placebo` use only the four held-out domains and the frozen parameters. The placebo verdict is PASS only with at least two evaluable domains (real v4 count above 0) and every evaluable v4 ratio at most 0.2. tau_u comes from the G0v4 simulation, not from theory.
+The four P4a stages need the published trajectories (`work/sopbench-output`, from `fetch-sopbench`); a stage without them exits 2 and never fetches.
+
+- `s3-g0v4` calibrates one simulated layout per development domain (that domain's check and user-goal groups, raters and difficulty spreads) and runs G0v4.
+  - It runs `P4_JOBS` fits in parallel (default: every core), with one BLAS thread per process.
+  - Each finished fit is cached in `$P3_WORK/g0v4-cache`, so rerunning the stage after a crash skips the fits already done.
+  - On a PASS of the pre-registered run (10 replicates, the full grid, the default seeds, not smoke) it freezes `experiments/p4-s3-v4-params.json`, with the commit and the sha256 of the search JSON. A PASS of any other configuration is not frozen (exit 1). A frozen file that holds other parameters is never overwritten (exit 2).
+- `s3-witness` replays every task on SOPBench's strict system.
+- `s3-v4` and `s3-placebo` use only the four held-out domains and the frozen parameters.
+
+The placebo verdict is PASS only with at least two evaluable domains (real v4 count above 0) and every evaluable v4 ratio at most 0.2. tau_u comes from the G0v4 simulation, not from theory.
 
 **`./run_all.sh all` includes the official P4a stages** (`s3-g0v4` can run for hours and freezes the v4 parameters on PASS), so run `all` on the 48 GB host only; a G0v4 FAIL (exit 1) also stops `all` before the later stages, and `all` prints a warning to that effect.
 
@@ -216,27 +226,28 @@ P4_SMOKE=1 ./run_all.sh s3-witness   # one stage in smoke mode
 less results/p3/smoke/STATUS.md
 ```
 
-Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, one held-out domain and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done. `smoke` runs all four stages even when one fails, prints a summary (stage, exit code, verdict) and exits with the largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the smoke placebo uses one held-out domain, so it always ends FAIL (1). `P4_SMOKE` must be unset, empty, `0` or `1`; any other value exits 2. Smoke mode applies to the P4a stages only, so `P4_SMOKE=1 ./run_all.sh <other stage>` exits 2, pending stages included.
+Smoke runs 2 G0v4 replicates on a one-point grid, 20 witnessed tasks per domain, the first development domain for `s3-v4` and `s3-placebo` (never a held-out one) and 2 placebo seeds. Reports go to `results/p3/smoke/` (override with `P3_RESULTS`), start with `SMOKE RUN — system check only, not a result`, and have their own `STATUS.md` titled `SMOKE — not results`. A smoke run never freezes parameters (`s3-g0v4` writes `smoke-v4-params.json` in the smoke directory instead, which a smoke `s3-v4` or `s3-placebo` uses when nothing is frozen) and never marks an official stage done. `smoke` runs all four stages even when one fails, prints a summary (stage, exit code, verdict) and exits with the largest stage code, so a crash (2 or more) is never hidden by an expected FAIL (1): the smoke placebo uses one domain, so it always ends FAIL (1). `P4_SMOKE` must be unset, empty, `0` or `1`; any other value exits 2. Smoke mode applies to the P4a stages only, so `P4_SMOKE=1 ./run_all.sh <other stage>` exits 2, pending stages included.
 
 ### The official P4a run on the 48 GB host
 
 Official P4a results come only from the 48 GB host. The smoke output under `results/p3/smoke/` is never results: do not cite, freeze or commit it. In order:
 
 ```bash
-# 1. G0v4 on the development domains. run_all.sh has no --jobs option, so call the stage
-#    directly to parallelise the fits (N = the host's cores, 20 was used for the estimate below).
-.venv/bin/specdx p3 s3-g0v4 --results results/p3 --work work --jobs N
+# 0. A fresh host: fetch SOPBench's published trajectories (the only network use).
+./run_all.sh fetch-sopbench
+# 1. G0v4 on the development domains, P4_JOBS fits at a time (default: every core).
+P4_JOBS=N ./run_all.sh s3-g0v4
 # 2. Only on PASS: commit the frozen parameters, on that host.
 git add experiments/p4-s3-v4-params.json
 git commit -m "results: P4a — frozen v4 parameters for S3 (G0v4)"
-# 3. The remaining stages (or ./run_all.sh all, which skips s3-g0v4 once it is recorded done).
+# 3. The remaining stages, in order; the run stops at the first non-zero exit.
 ./run_all.sh s3-witness s3-v4 s3-placebo
 # 4. Send results/p3/*.md back for review.
 ```
 
-A G0v4 FAIL (exit 1) freezes nothing, and the later stages then exit 2 for want of parameters; send `results/p3/s3-g0v4.md` back instead of continuing.
+`./run_all.sh all` does steps 0, 1 and 3 in one go (it also runs `local` and `replication` first, and skips a stage already recorded done); commit the frozen file (step 2) after it. A G0v4 FAIL (exit 1) freezes nothing, and the later stages then exit 2 for want of parameters; send `results/p3/s3-g0v4.md` back instead of continuing. If `s3-g0v4` stops part-way (a crash, or Ctrl-C), run step 1 again: the fits in `work/g0v4-cache` are not redone.
 
-G0v4 cost. The official grid is 6 prior settings (3 `cell_sd` x 2 `lambda_prior`; the 27 threshold settings are scored afterwards at no fit cost) and 10 replicates per arm over 4 arms: (6 + 1 held-out) x 4 x 10 = 280 v4 fits and 40 v3 fits. The smoke on this machine measured 729 s per v4 fit and 100 s per v3 fit, so the run costs about 208,000 s of CPU, 58 hours, and about 2.9 hours at `--jobs 20` if the speed-up is perfect. This exceeds 2 hours. It is not a safe figure: the smoke estimated 623 s at `--jobs 20` and took 3,724 s (6 times more), so allow up to about 17 hours, and read the stage's own "estimated" line on stderr first (it costs about 14 minutes of sequential fits).
+G0v4 cost. The official grid is 6 prior settings (3 `cell_sd` x 2 `lambda_prior`; the 27 threshold settings are scored afterwards at no fit cost) and 10 replicates per arm over 4 arms: (6 + 1 held-out) x 4 x 10 = 280 v4 fits and 40 v3 fits. Each simulated domain is now one development domain, fitted on its own, so a fit is far cheaper than the old pooled one (729 s). The smoke run on this machine (2026-11-25, `P4_JOBS=20`, the first prior setting) measured v4 fits of 18 to 221 s and v3 fits of 20 to 43 s; the slowest were the hotel layout's homogeneous and base arms. Extrapolated with those times, the run costs about 36,000 s of CPU, about 10 CPU-hours, and about 0.6 hours at `P4_JOBS=20`. The stage prints its own estimate on stderr after its first fits (one per kind, arm and layout, which the run keeps) and records it in the report; on the smoke run, timing the base arm only (the estimator before it timed every arm), it estimated 479 s and took 466 s. Other prior settings and fits that do not converge can run longer, so allow up to about 2 hours at `P4_JOBS=20`.
 
 The CASE-0031 steps (`g2`, `preflight`, `g3`, `gate`, `baselines-dev`, `freeze-baselines`, `study`, `report`) are no longer in `run_all.sh`. Their `specdx` commands remain, and §12 and §13 are kept as the record of how they ran.
 
