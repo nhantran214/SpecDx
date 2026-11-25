@@ -100,15 +100,18 @@ def _official(tmp_path, **over) -> Path:
     result = {"verdict": "PASS", "smoke": False, "replicates": g0v4.REPLICATES,
               "grid": g0v4.full_grid(), "layouts": [layout],
               "seeds": {"selection": list(range(10)), "held_out": list(range(10, 20))},
+              "freezable": True, "layout_names": list(DEV), "commit": "abc123",
               "chosen": {"params": dataclasses.asdict(V4Params(cell_sd=2.0, tau_u=3.0))}}
     result |= over
+    for key in [k for k, v in over.items() if v is _ABSENT]:
+        del result[key]
     path = tmp_path / "search.json"
     path.write_text(json.dumps(result))
     return path
 
 
-def _sha() -> str:
-    return "abc123"
+DEV = __import__("specdx.sim.calibrate_s3", fromlist=["load_split"]).load_split()[0]
+_ABSENT = object()
 
 
 def test_freeze_writes_the_params_with_provenance(tmp_path) -> None:
@@ -116,10 +119,11 @@ def test_freeze_writes_the_params_with_provenance(tmp_path) -> None:
 
     path = tmp_path / "frozen" / "p4-s3-v4-params.json"
     search = _official(tmp_path)
-    ok, message = g0v4.freeze_result(search, path, head=_sha)
+    ok, message = g0v4.freeze_result(search, path)
     assert ok, message
     frozen = json.loads(path.read_text())
     assert frozen["params"] == dataclasses.asdict(V4Params(cell_sd=2.0, tau_u=3.0))
+    # Ruling R-4: the commit is the one recorded at search time, not HEAD at freeze time.
     assert frozen["provenance"]["commit"] == "abc123"
     assert frozen["provenance"]["search_sha256"] == hashlib.sha256(
         search.read_bytes()).hexdigest()
@@ -132,21 +136,26 @@ def test_freeze_writes_the_params_with_provenance(tmp_path) -> None:
     ({"replicates": 2}, "replicates"),
     ({"grid": g0v4._grid_json({"cell_sd": (1.0,)})}, "grid"),
     ({"seeds": {"selection": list(range(1, 11)), "held_out": list(range(11, 21))}}, "seeds"),
+    # Ruling R-3: only the s3-g0v4 stage writes freezable: true, and old JSONs lack the key.
+    ({"freezable": False}, "freezable"),
+    ({"freezable": _ABSENT}, "freezable"),
+    ({"layout_names": ["bank", "dmv", "library"]}, "development split"),
+    ({"layout_names": _ABSENT}, "development split"),
 ])
 def test_freeze_refuses_what_was_not_pre_registered(tmp_path, over, why) -> None:
     path = tmp_path / "frozen.json"
-    ok, message = g0v4.freeze_result(_official(tmp_path, **over), path, head=_sha)
+    ok, message = g0v4.freeze_result(_official(tmp_path, **over), path)
     assert not ok and why in message and not path.exists()
 
 
 def test_freeze_never_overwrites_other_parameters(tmp_path) -> None:
     path = tmp_path / "frozen.json"
-    assert g0v4.freeze_result(_official(tmp_path), path, head=_sha)[0]
+    assert g0v4.freeze_result(_official(tmp_path), path)[0]
     before = path.read_text()
-    again = g0v4.freeze_result(_official(tmp_path), path, head=lambda: "other")
+    again = g0v4.freeze_result(_official(tmp_path, commit="other"), path)
     assert again[0] and path.read_text() == before          # same parameters: left alone
     other = {"params": dataclasses.asdict(V4Params(tau_u=1.0))}
-    ok, message = g0v4.freeze_result(_official(tmp_path, chosen=other), path, head=_sha)
+    ok, message = g0v4.freeze_result(_official(tmp_path, chosen=other), path)
     assert not ok and "overwrite" in message and path.read_text() == before
 
 
@@ -346,3 +355,36 @@ def test_held_out_failure_is_warned_about(tmp_path) -> None:
         g0v4.failed(result["held_out"]["criteria"]))
     result["held_out"]["criteria"]["1"] = False
     assert "WARNING: the chosen candidate fails on the held-out" in g0v4.render(result)
+
+
+def test_the_module_run_is_never_freezable_and_records_its_commit(tmp_path) -> None:
+    # Rulings R-3 and R-4: `python -m specdx.sim.g0v4 run` writes freezable: false; every run
+    # records the commit it ran at.
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(dataclasses.asdict(TINY)))
+    out = tmp_path / "run"
+    g0v4.main(["run", "--config", str(config), "--out", str(out), "--replicates", "1"])
+    result = json.loads(out.with_suffix(".json").read_text())
+    assert result["freezable"] is False and result["commit"]
+    assert "freezable" in g0v4.freeze_result(out.with_suffix(".json"), tmp_path / "f.json")[1]
+
+
+def test_the_cache_key_changes_with_any_source(tmp_path, monkeypatch) -> None:
+    # Ruling R-2: code_version hashes every source under specdx/ (and numpy's version).
+    sources = g0v4._sources()
+    assert {p.name for p in sources} >= {"g0v4.py", "anchored_v4.py", "cli.py"}
+    assert sources == sorted(sources)
+    fake = tmp_path / "x.py"
+    fake.write_text("a = 1\n")
+    monkeypatch.setattr(g0v4, "_sources", lambda: [fake])
+    monkeypatch.setattr(g0v4, "_CODE_VERSION", None)
+    task = g0v4.FitTask("v3", 0, TINY)
+    before = g0v4.task_key(task)
+    fake.write_text("a = 2\n")
+    monkeypatch.setattr(g0v4, "_CODE_VERSION", None)
+    edited = g0v4.task_key(task)
+    assert edited != before
+    import numpy
+    monkeypatch.setattr(numpy, "__version__", "0.0.0")
+    monkeypatch.setattr(g0v4, "_CODE_VERSION", None)
+    assert g0v4.task_key(task) != edited

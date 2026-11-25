@@ -9,6 +9,16 @@ cells are binary and read four to a run (act_group 4). G0v4 fits each simulated 
 separately, as the real fits are per domain. It reads published runs only: no network, no
 model, no database.
 
+Difficulty spreads (ruling R-5). A cell's logit x_c = logit(p̂_c), p̂_c = (hits + 0.5)/(n + 1),
+spreads by binomial sampling as well as by difficulty: its sampling variance is about
+v_c = 1/(n·p̂_c·(1 − p̂_c)), with p̂_c clipped to [0.01, 0.99] there (the +0.5 smoothing
+already keeps it off 0 and 1). By the method of moments the within-group
+variance is the pooled variance of the cells about their group means minus the mean v_c, and
+the between-group variance is the variance of the group means minus the mean over groups of
+(σ_w² + v̄_g)/n_g. Both sds are floored at SPREAD_FLOOR (pure sampling noise calibrates to the
+floor) and capped at 3. Only cells with readings count, and a goal whose tasks have no
+reading (every run a tool error) is dropped (ruling R-1): the real fit never sees its cells.
+
 Accuracy is measured on the cells whose plurality reading is the anchor (as v3's calibrator
 does): a cell where most raters deviate is set aside as possibly defective, which biases the
 abilities and the cell accuracies upward. The bias is kept for parity with v3 and is the same
@@ -36,8 +46,8 @@ SPLIT_SEED = 20261120
 SPLIT_FILE = REPO_ROOT / "experiments" / "p4-s3-split.json"
 DEFECT_RATE = 0.15  # v3's planted rate, unchanged
 SPREAD_FLOOR = 0.25  # the smallest rater spread (logit sd) taken at face value
-BETA_SD_RANGE = (0.25, 3.0)  # the group spread is clipped to this range, as in v3
-BETA_WITHIN_MAX = 3.0
+P_CLIP = 0.01  # the sampling variance's p is kept in [0.01, 0.99]
+SPREAD_MAX = 3.0  # both difficulty spreads are capped here, as v3 capped its dispersion
 
 
 def split_domains(seed: int = SPLIT_SEED) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -61,32 +71,42 @@ def calibrate_s3(cds: Sequence[S3CellData], runs: Sequence[S3Run],
     return tuple(_calibrate_domain(d, cds, runs) for d in domains)
 
 
-def _spreads(logits: dict[str, list[float]]) -> tuple[float, float]:
-    """(between, within): the sd of the group means, and the pooled sd of the cells about
-    their group's mean (0 when no group has two cells)."""
-    means = [float(np.mean(v)) for v in logits.values()]
-    between = float(np.std(means)) if means else 0.0
-    dof = sum(len(v) - 1 for v in logits.values())
-    ss = sum(float(((np.array(v) - np.mean(v)) ** 2).sum()) for v in logits.values())
-    return between, math.sqrt(ss / dof) if dof > 0 else 0.0
+def _spreads(logits: dict[str, list[tuple[float, float]]]) -> tuple[float, float]:
+    """(between, within) difficulty sds from each group's (logit, sampling variance) pairs,
+    with the binomial sampling variance subtracted (module docstring), floored at
+    SPREAD_FLOOR and capped at SPREAD_MAX."""
+    groups = [np.array(v) for v in logits.values() if v]
+    dof = sum(len(g) - 1 for g in groups)
+    ss = sum(float(((g[:, 0] - g[:, 0].mean()) ** 2).sum()) for g in groups)
+    noise = float(np.mean(np.concatenate([g[:, 1] for g in groups]))) if groups else 0.0
+    within_var = max(ss / dof - noise, 0.0) if dof > 0 else 0.0
+    means = np.array([g[:, 0].mean() for g in groups])
+    of_means = float(np.mean([(within_var + g[:, 1].mean()) / len(g) for g in groups])) \
+        if groups else 0.0
+    between_var = max(float(np.var(means)) - of_means, 0.0) if groups else 0.0
+
+    def clip(var: float) -> float:
+        return float(min(max(math.sqrt(var), SPREAD_FLOOR), SPREAD_MAX))
+
+    return clip(between_var), clip(within_var)
 
 
 def _calibrate_domain(domain: str, cds: Sequence[S3CellData],
                       runs: Sequence[S3Run]) -> SimConfig:
     prefix = f"s3:{domain}:"
     hits: dict[str, list[int]] = {}
-    logits: dict[str, list[float]] = {}
+    logits: dict[str, list[tuple[float, float]]] = {}
     goals: Counter[str] = Counter()
     for cd in cds:
         by_cell = cd.data.by_cell()
         for cid, cell in cd.data.cells.items():
             if not cid.startswith(prefix):
                 continue
-            if cid.endswith(":outcome"):
-                goals[cell.group] += 1
             rs = by_cell.get(cid, [])
             if cell.anchor is None or not rs:
-                continue
+                continue  # no reading: the real fit never sees this cell (ruling R-1)
+            if cid.endswith(":outcome"):
+                goals[cell.group] += 1
             values = Counter(r.value for r in rs)
             if min(values, key=lambda v: (-values[v], v)) != cell.anchor:
                 continue  # the anchor is not the plurality: no evidence of accuracy
@@ -95,7 +115,10 @@ def _calibrate_domain(domain: str, cds: Sequence[S3CellData],
                 h[0] += r.value == cell.anchor
                 h[1] += 1
             n_hit = sum(r.value == cell.anchor for r in rs)
-            logits.setdefault(cell.group, []).append(logit((n_hit + 0.5) / (len(rs) + 1)))
+            p = (n_hit + 0.5) / (len(rs) + 1)
+            q = min(max(p, P_CLIP), 1.0 - P_CLIP)
+            logits.setdefault(cell.group, []).append(
+                (logit(p), 1.0 / (len(rs) * q * (1.0 - q))))
     if not hits or not goals:
         raise CalibrationError(f"no anchored reading in the development domain {domain}")
     models = sorted(hits)
@@ -111,12 +134,11 @@ def _calibrate_domain(domain: str, cds: Sequence[S3CellData],
     # A near-homogeneous panel is widened to the floor; otherwise the logits stand as given.
     alpha_spread = SPREAD_FLOOR / spread if 0.0 < spread < SPREAD_FLOOR else 1.0
     between, within = _spreads(logits)
-    sizes = tuple(goals[g] for g in sorted(goals))
+    sizes = tuple(goals[g] for g in sorted(goals) if goals[g] > 0)
     tasks = sum(sizes)
     return SimConfig(
         alphas=alphas, act=act, columns=4 * tasks, items=tasks, pooled_share=0.0,
         scenarios=1, variants=1, seeds=1, anchored_share=1.0, constraint_share=0.75,
-        beta_sd=float(min(max(between, BETA_SD_RANGE[0]), BETA_SD_RANGE[1])),
-        beta_within=float(min(within, BETA_WITHIN_MAX)),
+        beta_sd=between, beta_within=within,
         values=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0), defect_rate=DEFECT_RATE,
         act_group=4, alpha_spread=alpha_spread, goals=sizes)

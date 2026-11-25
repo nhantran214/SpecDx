@@ -373,21 +373,28 @@ def run_task(task: FitTask) -> dict[str, Any]:
 
 
 def _sources() -> list[Path]:
-    from specdx.infer import anchored, anchored_v4, cells, typing, typing_v4
-    from specdx.sim import baselines, generator, metrics
-    return [Path(m.__file__) for m in (anchored, anchored_v4, cells, typing, typing_v4,
-                                       baselines, generator, metrics)]
+    """Every Python source of the specdx package, sorted (ruling R-2): a fit's summary can
+    depend on any of them, this module included."""
+    root = Path(__file__).resolve().parents[1]
+    return sorted(root.rglob("*.py"))
 
 
 _CODE_VERSION: str | None = None
 
 
 def code_version() -> str:
-    """The sha256 of the code a fit's summary depends on, and of the summary format."""
+    """The sha256 of the summary format, numpy's version and every source under specdx/
+    (path and content, in sorted order)."""
     global _CODE_VERSION
     if _CODE_VERSION is None:
+        import numpy
+
         h = hashlib.sha256(SUMMARY_VERSION.encode())
+        h.update(f"numpy {numpy.__version__}".encode())
+        root = Path(__file__).resolve().parents[1]
         for path in _sources():
+            name = path.relative_to(root) if path.is_relative_to(root) else path.name
+            h.update(f"\0{name}\0".encode())
             h.update(path.read_bytes())
         _CODE_VERSION = h.hexdigest()
     return _CODE_VERSION
@@ -769,12 +776,14 @@ def params_dict(p: V4Params) -> dict[str, float]:
 def run_g0v4(config: SimConfig | Sequence[SimConfig], out: Path, *,
              replicates: int = REPLICATES, grid: Mapping[str, Sequence[Any]] | None = None,
              jobs: int = 1, cache: Path | None = None, smoke: bool = False,
-             names: Sequence[str] | None = None) -> int:
+             names: Sequence[str] | None = None, freezable: bool = False) -> int:
     """Run G0v4 on the layouts (one SimConfig or one per development domain; names: their
     domains, for the report) and write `out`.json and `out`.md. Returns 0 PASS, 1 FAIL, 2
     error. It never freezes: freeze_result is called on a PASS by the caller. jobs: processes
     for the fits, all in one pool; cache: the fit cache directory (None: no cache). The
-    output does not depend on jobs or on the cache (apart from the timing fields)."""
+    output does not depend on jobs or on the cache (apart from the timing fields).
+    freezable: only the s3-g0v4 stage passes True (ruling R-3); the JSON also records the
+    commit the search ran at (ruling R-4), which a freeze copies into its provenance."""
     try:
         started = time.monotonic()
         layouts = _layouts(config)
@@ -790,6 +799,7 @@ def run_g0v4(config: SimConfig | Sequence[SimConfig], out: Path, *,
             "seconds": time.monotonic() - started, "estimate": estimate, "jobs": jobs,
             "layouts": [dataclasses.asdict(c) for c in layouts],
             "layout_names": list(names) if names else None, "code": code_version(),
+            "freezable": bool(freezable), "commit": _git_head(),
             "chosen": {"params": params_dict(chosen.params), "objective": chosen.objective,
                        "arms": chosen.arms, "coverage": chosen.coverage,
                        "metrics": chosen.metrics, "undetermined": chosen.undetermined,
@@ -826,9 +836,19 @@ class _PoolScope:
 
 # --- freezing ---
 
-def freeze_problems(result: Mapping[str, Any]) -> list[str]:
-    """Why a search result may not be frozen (ruling F-I5); empty when it may."""
+def freeze_problems(result: Mapping[str, Any],
+                    dev: Sequence[str] | None = None) -> list[str]:
+    """Why a search result may not be frozen (rulings F-I5 and R-3); empty when it may. dev:
+    the development domains the layouts must be (default: the committed split's)."""
     problems = []
+    if result.get("freezable") is not True:
+        problems.append("it is not freezable: only the s3-g0v4 stage writes freezable runs")
+    if dev is None:
+        from specdx.sim.calibrate_s3 import load_split
+        dev = load_split()[0]
+    if result.get("layout_names") != list(dev):
+        problems.append(f"its layouts {result.get('layout_names')} are not the development "
+                        f"split {list(dev)}")
     if result.get("verdict") != PASS:
         problems.append("the verdict is not PASS")
     if result.get("smoke") is not False:
@@ -858,14 +878,15 @@ def _git_head() -> str:
 
 
 def freeze_result(result_path: Path, path: Path = PARAMS_FILE,
-                  head: Callable[[], str] = _git_head) -> tuple[bool, str]:
-    """Freeze the chosen parameters of a search JSON to `path`, with provenance (the commit,
-    from `head`, and the search JSON's sha256). Refuses (False, why) on any freeze_problems, and
+                  dev: Sequence[str] | None = None) -> tuple[bool, str]:
+    """Freeze the chosen parameters of a search JSON to `path`, with provenance: the commit
+    recorded at search time (ruling R-4; HEAD at freeze time is not read) and the search
+    JSON's sha256. Refuses (False, why) on any freeze_problems(result, dev), and
     never overwrites a frozen file that holds other parameters; one that holds the same
     parameters is left as it is."""
     raw = Path(result_path).read_bytes()
     result = json.loads(raw)
-    problems = freeze_problems(result)
+    problems = freeze_problems(result, dev)
     if problems:
         return False, "refusing to freeze: " + "; ".join(problems)
     params = params_dict(V4Params(**result["chosen"]["params"]))
@@ -876,7 +897,8 @@ def freeze_result(result_path: Path, path: Path = PARAMS_FILE,
             return False, f"refusing to overwrite {path}: it holds other parameters"
         return True, f"{path} already holds these parameters; left as it is"
     payload = {"params": params,
-               "provenance": {"commit": head(), "search": str(result_path),
+               "provenance": {"commit": result.get("commit", "unknown"),
+                              "search": str(result_path),
                               "search_sha256": hashlib.sha256(raw).hexdigest()}}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

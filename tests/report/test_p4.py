@@ -119,6 +119,7 @@ def _official_search(out: Path, tau_u: float = 3.0) -> dict:
     return {"verdict": "PASS", "smoke": False, "replicates": g0v4.REPLICATES,
             "grid": g0v4.full_grid(), "layouts": [{"seed": 0}],
             "seeds": {"selection": list(range(10)), "held_out": list(range(10, 20))},
+            "freezable": True, "layout_names": list(SPLIT[0]), "commit": "abc123",
             "chosen": {"params": dataclasses.asdict(V4Params(tau_u=tau_u)),
                        "metrics": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_fp": 0.0}},
             "v3": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_hidden": 0.1},
@@ -126,9 +127,10 @@ def _official_search(out: Path, tau_u: float = 3.0) -> dict:
 
 
 def _stub_run(monkeypatch, result: dict, code: int, seen: dict | None = None) -> None:
-    def fake_run(config, out, *, replicates, grid, jobs, cache, smoke, names):
+    def fake_run(config, out, *, replicates, grid, jobs, cache, smoke, names, freezable):
         if seen is not None:
-            seen.update(replicates=replicates, grid=grid, smoke=smoke, cache=cache)
+            seen.update(replicates=replicates, grid=grid, smoke=smoke, cache=cache,
+                        freezable=freezable)
         out.with_suffix(".json").write_text(json.dumps(result))
         return code
 
@@ -147,6 +149,7 @@ def test_an_official_pass_freezes_with_provenance_and_feeds_the_later_stages(
     assert (out.exit_code, out.verdict) == (0, "PASS") and out.data["frozen"] is True
     stored = json.loads(frozen.read_text())
     assert stored["params"]["tau_u"] == 3.0 and stored["provenance"]["search_sha256"]
+    assert stored["provenance"]["commit"] == "abc123"
     calls: list[dict] = []
     _stub_diagnoses(monkeypatch, calls)
     v4 = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
@@ -181,7 +184,7 @@ def test_smoke_g0v4_never_freezes_and_writes_smoke_params(data, tmp_path, monkey
                      smoke=True, replicates=99, grid=None, params_file=frozen)
     assert out.exit_code == code and not frozen.exists()
     assert seen["replicates"] == 2 and seen["grid"] == dict(p4.SMOKE_GRID)
-    assert seen["smoke"] is True
+    assert seen["smoke"] is True and seen["freezable"] is False
     assert json.loads((tmp_path / SMOKE_PARAMS).read_text())["params"]["tau_u"] == 2.0
     assert "SMOKE" in out.body and out.data["frozen"] is False
 

@@ -97,18 +97,19 @@ def test_calibrate_s3_gives_one_layout_per_development_domain() -> None:
 
 
 def test_calibrate_s3_splits_difficulty_between_and_within_groups() -> None:
-    # Every task of a goal reads alike: no spread within the outcome groups. Within a check
-    # group the tasks differ, so beta_within is positive.
+    # Every outcome, constraints and process cell reads alike (75 of 100); within db_match the
+    # tasks differ (90 or 60 of 100), far beyond binomial noise, so beta_within clears the
+    # floor once the sampling variance is subtracted (ruling R-5).
     tasks = [S3Task("library", i, "g", True, "P") for i in range(40)]
-    raters = [f"m{k}" for k in range(10)]
+    raters = [f"m{k:03d}" for k in range(100)]
     runs = []
     for t in tasks:
         for k, m in enumerate(raters):
-            db = k < 9 if t.index % 2 else k < 6  # two kinds of db_match task
-            runs.append(S3Run("library", t.index, m, "fam", "fc", True, db, True, k < 8,
+            db = k < 90 if t.index % 2 else k < 60
+            runs.append(S3Run("library", t.index, m, "fam", "fc", k < 75, db, k < 75, k < 75,
                               False, "P"))
     [config] = calibrate_s3([cells_for(tasks, runs)], runs, dev=("library",))
-    assert config.beta_within > 0.1
+    assert config.beta_within > SPREAD_FLOOR
     assert config.goals == (40,)
 
 
@@ -129,3 +130,33 @@ def test_a_near_homogeneous_panel_is_widened_to_the_spread_floor() -> None:
     spread = float(np.std(config.alphas))
     assert 0.0 < spread < SPREAD_FLOOR
     assert math.isclose(config.alpha_spread * spread, SPREAD_FLOOR, rel_tol=1e-9)
+
+
+def test_a_task_whose_runs_are_all_tool_errors_adds_no_goal() -> None:
+    # Ruling R-1: such a task has no reading, so the real fit never sees its cells; its goal
+    # is not counted, and a goal left with no task is dropped.
+    tasks = [S3Task("library", i, "g_a" if i < 4 else ("g_b" if i < 6 else "g_c"), True, "P")
+             for i in range(7)]
+    runs = [_run("library", t.index, m, ok=(k > 0 or t.index % 2 == 0), err=(t.index >= 5))
+            for t in tasks for k, m in enumerate(("x", "y", "z"))]
+    [config] = calibrate_s3([cells_for(tasks, runs)], runs, dev=("library",))
+    assert config.goals == (4, 1)  # g_a: 4 tasks; g_b: task 4 only; g_c: none read
+    assert (config.items, config.columns) == (5, 20)
+
+
+def test_pure_binomial_noise_calibrates_to_the_floor() -> None:
+    # Ruling R-5: every cell has the same true accuracy, so the cell logits spread only by
+    # binomial sampling; once that variance is subtracted, both spreads sit at the floor.
+    rng = np.random.default_rng(7)
+    goals = [f"g{k}" for k in range(8)]
+    tasks = [S3Task("library", i, goals[i % 8], True, "P") for i in range(400)]
+    raters = [f"m{k:02d}" for k in range(25)]
+    runs = []
+    for t in tasks:
+        for m in raters:
+            ok = [bool(rng.random() < 0.8) for _ in range(4)]
+            runs.append(S3Run("library", t.index, m, "fam", "fc", ok[0], ok[1], ok[2], ok[3],
+                              False, "P"))
+    [config] = calibrate_s3([cells_for(tasks, runs)], runs, dev=("library",))
+    assert config.beta_within == SPREAD_FLOOR
+    assert config.beta_sd == SPREAD_FLOOR

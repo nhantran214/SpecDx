@@ -180,7 +180,7 @@ def g0v4_stage(
         return _fail(f"calibration failed: {exc}")
     out = Path(results) / "s3-g0v4-search"
     code = run_g0v4(layouts, out, replicates=replicates, grid=dict(grid) if grid else None,
-                    jobs=jobs, cache=cache, smoke=smoke, names=dev)
+                    jobs=jobs, cache=cache, smoke=smoke, names=dev, freezable=not smoke)
     if code == 2:
         return _fail("G0v4 raised an error; the traceback is in the stage's stderr")
     result = json.loads(out.with_suffix(".json").read_text())
@@ -193,11 +193,11 @@ def g0v4_stage(
         frozen = f"SMOKE: parameters written to {SMOKE_PARAMS}; nothing frozen."
     elif code != 0:
         frozen = "Not frozen: the verdict is not PASS."
-    elif problems := freeze_problems(result):
+    elif problems := freeze_problems(result, dev):
         code = 1
         frozen = "Not frozen (ruling F-I5): " + "; ".join(problems) + "."
     else:
-        frozen_ok, message = freeze_result(out.with_suffix(".json"), Path(params_file))
+        frozen_ok, message = freeze_result(out.with_suffix(".json"), Path(params_file), dev)
         frozen = message[0].upper() + message[1:] + "."
         if not frozen_ok:
             code = 2
