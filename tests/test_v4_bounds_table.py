@@ -257,9 +257,14 @@ def test_the_s_side_pair_bound_is_the_box_end_and_the_empty_bound_is_minimal(bt)
 def test_the_note_tables_equal_the_script_output(bt) -> None:
     note = (Path(__file__).parents[1] / "docs" / "theory" / "specdx-v4-bounds.md").read_text(
         encoding="utf-8")
-    for line in (bt.render() + bt.render_mc()).splitlines():
+    script = (bt.render() + bt.render_mc()).splitlines()
+    for line in script:
         if line.startswith("|"):
             assert line in note, line
+    # And the other way (Task 9 Minor): every table row of §6 comes from the script.
+    section = note.split("## 6. Numerical illustration", 1)[1].split("\n## 7.", 1)[0]
+    rows = [line for line in section.splitlines() if line.startswith("|")]
+    assert rows and set(rows) <= set(script)
 
 
 def test_the_table_covers_the_s3_grid(bt) -> None:

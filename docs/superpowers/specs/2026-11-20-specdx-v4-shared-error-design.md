@@ -1,7 +1,7 @@
 # SpecDx v4 design: shared agent errors, the statistics–logic division, and the frontier arm
 
 **Date:** 2026-11-20
-**Status:** draft for the author's approval (revision 2, after the builder check)
+**Status:** draft for the author's approval (revision 2, after the builder check); amended 2026-11-25 under ruling TH-1 to match the proved statements of `docs/theory/specdx-v4-bounds.md` (§4, §3.2, §5.1, §5.3, §6.4; see §12, with the disclosures of §12.2)
 
 **Amends:**
 - the v3 design: §3 (the anchored cell model), §4 (theory) and §5 (typing);
@@ -87,7 +87,11 @@ v4's contributions are threefold:
 - **When A_c = ∅,** the readings keep v3's flat-pool ε_c ~ Dirichlet(κ·u_c) with κ = 10, and there is no attractor.
   - This keeps T2′: silence stays identifiable against a flat pool by a single model.
   - It also stops ∅ with an attractor from mimicking {x}.
-- **On binary cells** (all of S3) the attractor is vacuous, and v4 reduces to per-cell difficulty plus the anchored set-valued model. This is disclosed as such.
+- **On binary cells** (all of S3; amended 2026-11-25, ruling F-I1 under TH-1) the attractor is forced, not free, and v4 reduces to per-cell difficulty plus the anchored set-valued model.
+  - The error side of {d} (or {a}) has two slots, the other value and OTHER, so the attractor e is the other value. With no OTHER reading, λ's likelihood profile sits at 1 (theory note Lemma 1.1).
+  - The attractor is not inert: removing it shifts log_lr by (n_a − n_d)·log 2. That shift is a count of readings, not a model comparison.
+  - λ's posterior on such a cell is a count rule. Under Beta(1, 3) it is λ_{d} = (n_dev − 2)/(n_dev + 2), which reaches 0.5 exactly when n_dev ≥ 6. It therefore carries no shared-error evidence.
+  - **So statistical shared error is never emitted on a cell with at most two candidate values.** On S3, shared error is claimed only through execution witnesses (§5.2), consistent with the statistics–logic division (decision 2). λ stays in the likelihood.
 
 ### 3.3 Composite weights apply to shared parameters only
 - An **act group** is the set of cells that one interpreter action determines together:
@@ -108,39 +112,76 @@ These are unchanged from v3: α_m ~ N(μ_α, σ_α²), additive for S2 pairs.
 
 ## 4. Theory (amends v3 §4)
 
+*Amended 2026-11-25 (ruling TH-1).* This section now states what the theory note `docs/theory/specdx-v4-bounds.md` proves. Where the earlier draft differed, the departure is named D1–D5 as in the note's §7. The paper's wording follows the note.
+
 ### Assumptions
-- **(A3′)** replaces (A3). For A ≠ ∅, errors lie in the flat-plus-attractor family, shared by all models at the cell, with λ unrestricted. For A = ∅, the flat pool applies.
-- **(A4)** and **(A5)** are kept.
+- **(A3′)** replaces (A3).
+  - For A ≠ ∅, errors lie in the flat-plus-attractor family, the same for every model at the cell, with λ ∈ [0, 1] unrestricted.
+  - For A = ∅, every model reads from the same flat pool ε.
+  - *Wording change (Task 9).* The nuisances range over their prior supports: β_c over the reals, λ over [0, 1], e over V∖A∖{OTHER}, and ε over the **open** simplex. The code profiles β_c over the population-relative box of ruling T1-L′.
+- **(A4)** is kept, made per cell: p_m = σ(α_m − β_c). **(A5)** is kept.
 - (A1) and (A2) are as in v3.
+- **Knowledge assumptions.** T5, T5-S and T6 take α as known.
+  - The lower bounds stay valid when α is unknown.
+  - T6 covers the α the code is given; the error of the fitted α is not covered (open point O1).
 
 ### Lemma (T2 per cell)
-T2 holds per cell under (A3′): A_c = {y : D_c(y) > 0}. This is v3's T2, unchanged in substance. It is stated per cell because v4 makes difficulty per cell.
+T2 holds per cell under (A3′): A_c = {y : D_c(y) > 0}. This is v3's T2, unchanged in substance, and no novelty is claimed for it. It is stated per cell because v4 makes difficulty per cell.
 
-### T5: lower bound
-- **Setting.** Consider the two hypotheses at a cell:
+### T5: lower bound (the mis-key side)
+- **Setting.** Consider two hypotheses at a cell:
   - **H** (mis-key): A = {a}, at per-cell accuracy p_H;
   - **S** (shared error): A = {d}, λ = 1, e = a, at accuracy p_S.
-- **Statement.** For every test based on M models' readings, with n readings each and with α known, the error is at least ½·(1 − TV). TV is bounded by a function of n·Σ_m (p_{m,H} − (1 − p_{m,S}))².
-- **When the bound bites.** Choose p_S per cell to minimise the bound. The minimum is 0 exactly when the population's accuracies at the cell can be matched by a common shift. That happens when the ability spread at the cell is small relative to 1/√n.
-- **In words.** Unanimous or saturated deviation, or a population with small spread, makes H and S statistically indistinguishable *for any method*.
-- **Proof route.** Le Cam's two-point method with a Pinsker or Hellinger bound on products of categorical distributions.
 
-### T6: upper bound
-- The profile-likelihood rule (§3.5), or v3's two-model contrast rule, decides with error ≤ C·exp(−c·n·Δ_c²).
-- Here Δ_c is the largest accuracy contrast at the cell, from v3's T4(a), stated per cell.
-- T5 and T6 together give the rate. This gives the undetermined rule (§5.1) its principled threshold.
+  They differ only in the sign of the ability slope of the reading a.
+- **Statement (D1).** For every test based on the readings, with α known, the error is at least ½·(1 − TV).
+  - The earlier sentence "TV is bounded by a function of n·Σ_m (p_{m,H} − (1 − p_{m,S}))²" is false as a uniform statement. The note gives a counterexample near saturation (Remark T5.6).
+  - What is proved instead is the weighted form TV ≤ √(½·Σ_m n_m Δ_m²/(y_m(1 − y_m))) and the exact Hellinger exponent h (Proposition T5.1).
+  - A sandwich (Proposition T5.4) makes the dependence on n·Δ_c² exact up to constants when the accuracies are bounded away from 0 and 1.
+- **When the bound bites (D2).**
+  - The minimum over p_S is 0 **exactly** when the abilities at the cell have no spread (Theorem T5.2(i)).
+  - The infimum over both nuisances is always 0, through saturation. So the global risk is ½, and the bounds are stated for **local** risks R_{β_H} (T5.2(ii), (iv)).
+  - The local exponent's scale is N·sd(α)², proved two-sided: ½·η_H²(1 − η_H)²·N·sd_n(α)² ≤ h* ≤ ⅛·N·sd_n(α)² (Proposition T5.4(a′), Corollary T5.3).
+  - So the near-chance regime is sd(α)·√(n·M) small, up to factors set by the accuracy level. It is not "spread small relative to 1/√n".
+- **In words (D5).** Unanimous or saturated deviation, unanimous or saturated **agreement**, and a population with small spread all make H and S statistically indistinguishable *for any method*.
+  - The code types an all-agree cell "no defect" once N is large enough (N ≥ 2, 5 or 12 at τ_u = 1, 2 or 3; Proposition T5.5(c)). That is the candidate-value convention: an unobserved value is not a candidate. It is not evidence.
+  - Below that N, an all-agree cell is undetermined.
+- **Proof route.** Le Cam's two-point method, with the Hellinger affinity and Pinsker's inequality, on products of Bernoulli laws (binary cells).
+
+### T5-S: lower bound (the shared-error side)
+- Every rule's local risk at a shared-error cell is bounded below against each defect form the code's statistic tests: {a}, {d, a} and ∅ (Theorem T5-S).
+- The shared-error side is harder than the mis-key side, so more true shared errors than true mis-keys are expected to be undetermined.
+
+### T6: upper bound (D3)
+- **What is proved.** For **binary** cells, which covers all of S3, the code's profile-likelihood rule decides with error at most C·exp(−n_min·Δ_c²/4) (Theorem T6(c), Corollary T6.1).
+  - c = ¼.
+  - C = (2G_B + G_∅)·e^{(τ+½)/2} is polynomial in N, not an absolute constant.
+  - An extra term covers the all-d corner.
+- Δ_c is the largest accuracy contrast at the cell, from v3's T4(a), stated per cell.
+- **Cells with |V| ≥ 3** (S2): only the contrast rules are proved (v3's T4(a) per cell, T6(b)). The profile rule there is open point O3.
+- **Matching.** T5, T5-S and T6(c) match term by term on both sides: the same exponents, up to a factor 2, with polynomial prefactors (theory note §4.4).
+
+### τ_U (D4)
+- τ_U is **not** derived from T6. The earlier draft said "τ_U is set so that T6's error at the cell's estimated Δ_c is at most 0.05". That is neither what the code does nor something T6's constants can deliver: certifying 0.05 that way would need τ ≈ 10 nats.
+- τ_U is one constant, selected at G0v4 by simulation from {1, 2, 3} nats and judged by criterion 1 with a Wilson upper bound (§6.1).
+- **Its error control rests on the simulation, not on the theory**, and the paper says so.
 
 ### What the theory says to the paper
 - Readings decide only where the population's ability gradient at the cell is large enough. The number of readings needed scales as 1/Δ_c².
 - Elsewhere, behaviour-only methods (all of the paper's baselines) cannot decide either. SpecDx then uses execution, or says "undetermined".
-- Population diversity (H5) becomes a quantitative condition.
+- Population diversity (H5) becomes a quantitative, per-cell condition. For example, no rule reaches local risk 0.05 at a mis-key cell unless sd(α) ≥ 2.58/√(n·M) over the models that read it.
+- **Do not claim:**
+  - novelty for identifiability (v3's T2);
+  - that τ_U is derived from T6 (D4);
+  - any non-trivial bound on the global risk, which is ½.
 
 ## 5. Typing (amends v3 §5)
 
 ### 5.1 Undetermined
-- **Definition.** A cell is statistically undetermined when the profile-likelihood ratio between the best defect form and the best no-defect explanation is below τ_U.
+- **Definition.** A cell is statistically undetermined when the profile-likelihood ratio between the best defect form and the best no-defect explanation is below τ_U in absolute value.
   - The no-defect explanation includes the shared-error explanation.
-  - τ_U is set so that T6's error at the cell's estimated Δ_c is at most 0.05.
+  - The ratio is prior-free (ruling T1-L), and β_c is profiled over the population-relative box of ruling T1-L′.
+  - *Amended 2026-11-25 (TH-1, D4).* τ_U is one constant, selected at G0v4 by simulation (§6.1) from {1, 2, 3} nats. It is not certified by T6 (§4).
 - **Routing.** Undetermined cells are passed to §5.2, and are never typed by statistics.
 
 ### 5.2 Execution witnesses: the logic half
@@ -162,6 +203,7 @@ For a statistically undetermined anchored cell, SpecDx asks the subject's own ex
 ### 5.3 Hidden, ambiguity and weak
 - These are v3's definitions on cells that statistics decided. The thresholds are re-chosen at G0v4.
 - Shared-error cells decided statistically (A = {d}, λ_c ≥ τ_λ) and those witnessed in §5.2 go to an informational table, "where agents commonly fail". They are not defects.
+  - *Amended 2026-11-25 (F-I1).* Statistical shared error is emitted only on cells with three or more candidate values (§3.2). On S3's binary cells, shared errors are the witnessed ones only.
 
 ## 6. Validation
 
@@ -210,7 +252,7 @@ Unanimous cells are unaffected by permutation. They are reported separately, wit
 | Ablation | Where it is evaluated |
 |---|---|
 | Without per-cell β | S2, S3 |
-| Without attractor | S2 and simulation only; vacuous on S3, as disclosed |
+| Without attractor | S2 and simulation only. Not run on S3: on binary cells the attractor is forced, and removing it only shifts log_lr by (n_a − n_d)·log 2, a count (§3.2; amended 2026-11-25, F-I1) |
 | Without composite weights | S2, S3 |
 | Without witnesses | S2, S3 |
 | Plug-in instead of profile | S2, S3 |
@@ -292,3 +334,23 @@ These phases replace P3b–P3d.
 | 10 | G0v4 calibrated per subject on its development split; S3 split by domain, 3 development and 4 held out | Claude | The old calibration is on the dropped subject; avoids circularity with the placebo |
 | 11 | Placebo permutes whole act vectors, refits α, and counts only cells permutation can change | Claude | Targets the gradient mechanism without the unanimous-cell artefact |
 | 12 | The S2 Verified frontier population mixes Gemini with local models | Claude | The ≥2-family rule |
+
+## 12. Amendment of 2026-11-25 (ruling TH-1) and disclosures
+
+### 12.1 What the amendment changes
+- **§4** follows the theory note: D1 (T5's form), D2 (when T5 bites, and its scale), D3 (T6 on binary cells, polynomial constant), D4 (τ_U from the simulation, not from T6), D5 (unanimous agreement), and the (A3′) wording.
+- **§3.2 and §5.3** (ruling F-I1): on binary cells the attractor is forced and λ is a count rule, so no statistical shared error is emitted there; on S3 shared error comes from witnesses only.
+- **§5.1** (D4): τ_U's definition and where it comes from.
+- **§6.4** (F-I1): the attractor ablation's S3 entry.
+- **Pre-freeze corrections, not deviations.** Before any official run and before the G0v4 parameters are frozen, the final fix wave applied these rulings:
+  - F-C1: the G0v4 simulator copies each development domain's S3 group layout and fits each simulated domain on its own;
+  - F-I2a and F-I2b: the selection objective counts an undetermined planted cell as a miss, and criterion 2.ambiguity is reported as non-binding when v3's ambiguity F1 is below 0.05;
+  - W-1: only an undetermined outcome cell whose plurality deviates from the anchor goes to the witness;
+  - P-C: the placebo counts distinct cells and permutes among the runs without a tool error.
+
+### 12.2 Disclosures
+- **Held-out data seen before the official run.** Two looks at held-out S3 domains happened during development:
+  - the smoke run on bank: its v4 counts and its placebo ratio (0.192);
+  - the Task 7 witness spot check on the first 30 tasks of bank and library.
+- **Which rulings came before those looks.** W-1 (Task 9) and P-C (Task 8) were ruled before the smoke run. F-C1, F-I1 and F-I2 come from code and simulator review, not from bank numbers.
+- **Smoke runs no longer touch held-out data.** From the final fix wave on, smoke s3-v4 and s3-placebo run on the first development domain only (ruling F-I3).

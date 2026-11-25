@@ -47,7 +47,10 @@ We are not aware of this two-point construction in the literature on crowd label
 **Where this note departs from design §4.** The departures are listed in §7. In short:
 - two sentences of the design's T5 are false as written (D1, D2);
 - T6 is proven for the code's statistic only on binary cells, with a constant that is polynomial in N rather than absolute (D3);
-- the τ_U calibration the design describes is not what the code does (D4).
+- the τ_U calibration the design describes is not what the code does (D4);
+- unanimous agreement is as undecidable as unanimous deviation (D5), and (A3′) is worded over the nuisances' prior supports (D6).
+
+Design §4 was amended on 2026-11-25 (ruling TH-1) to state D1–D6 as this note proves them.
 
 ---
 
@@ -86,6 +89,7 @@ The cell index is suppressed throughout.
 - **(A3′) Shared errors.**
   - For A ≠ ∅, the error law is flat-plus-attractor, the same for every model at the cell, with λ ∈ [0, 1] unrestricted.
   - For A = ∅, every model reads from the same ε.
+  - The nuisances range over their prior supports: λ ∈ [0, 1], e ∈ V∖A∖{OTHER}, β_c real, and ε in the open simplex (departure D6).
 - **(A4) Monotone accuracy, per cell.** p_m = σ(α_m − β_c).
 - **(A5) Silence.** When A = ∅, every model reads from ε, so no model is faithful.
 
@@ -120,7 +124,7 @@ If a is never observed, then V = (d,), and the candidate sets are only {d} and �
 - **Case 4.** This is `_empty_fit` with per_slot = (N_d, N_a, 0) and k = 3.
 - **The last sentence.** `candidate_values(d, observed)` lists d and then only observed values. ∎
 
-So on S3 the attractor is vacuous, as design §3.2 discloses. H and S are the two logistic families:
+So on S3 the attractor is forced, not free: e is the other value, and λ profiles to 1. It is not inert, though. Without it, every reading outside A would cost an extra log 2 (the flat error over two slots), so removing it shifts log_lr by (n_a − n_d)·log 2, a count of readings. λ's posterior is a count rule too: under Beta(1, 3) the {d} set's λ is (n_a − 2)/(n_a + 2). Design §3.2, amended under ruling F-I1, therefore emits no statistical shared error on binary cells. H and S are the two logistic families:
 - P(a) = σ(α_m − β) for {a};
 - P(a) = σ(β − α_m) for {d}.
 
@@ -408,13 +412,13 @@ The first step uses −log u ≥ 1 − u; the last uses m̄(1 − m̄) ≤ ¼. W
 - Define g(α) := σ(α − β_H) − σ(β_S − α), so that Δ_m = g(α_m).
 - g′(α) = σ′(α − β_H) + σ′(β_S − α) ≥ σ′(α − β_H).
 - For α ∈ [α_min, α_max], σ(α − β_H) lies between x_min and x_max, hence in [η_H, 1 − η_H].
-- u(1 − u) is smallest at the ends of [η_H, 1 − η_H], so g′ ≥ k := η_H(1 − η_H) there.
-- By the mean value theorem, |g(α_m) − g(α_{m′})| ≥ k·|α_m − α_{m′}| for any two models.
+- u(1 − u) is smallest at the ends of [η_H, 1 − η_H], so g′ ≥ c_η := η_H(1 − η_H) there.
+- By the mean value theorem, |g(α_m) − g(α_{m′})| ≥ c_η·|α_m − α_{m′}| for any two models.
 - Let ḡ := Σ n_m g(α_m)/N. A sum of squares about 0 is at least the sum about the mean, so Σ n_m g(α_m)² ≥ Σ n_m (g(α_m) − ḡ)².
 - The weighted-variance identity gives Σ n_m (g(α_m) − ḡ)² = (1/(2N))·Σ_{m,m′} n_m n_{m′}·(g(α_m) − g(α_{m′}))².
-- Bounding each pair difference below by k|α_m − α_{m′}| and applying the identity in reverse:
-  Σ n_m (g(α_m) − ḡ)² ≥ k²·(1/(2N))·Σ_{m,m′} n_m n_{m′}(α_m − α_{m′})² = k²·Σ n_m (α_m − ᾱ_n)².
-- So h ≥ ½·Σ n_m Δ_m² ≥ ½·k²·Σ n_m (α_m − ᾱ_n)².
+- Bounding each pair difference below by c_η|α_m − α_{m′}| and applying the identity in reverse:
+  Σ n_m (g(α_m) − ḡ)² ≥ c_η²·(1/(2N))·Σ_{m,m′} n_m n_{m′}(α_m − α_{m′})² = c_η²·Σ n_m (α_m − ᾱ_n)².
+- So h ≥ ½·Σ n_m Δ_m² ≥ ½·c_η²·Σ n_m (α_m − ᾱ_n)².
 
 **(b)**
 - At the pivot γ = ᾱ_n, h* ≤ ½·σ′_max·Σ n_m δ_m² ≤ ⅛·N·ω². This uses |δ_m| ≤ ω, which holds because ᾱ_n ∈ [α_min, α_max].
@@ -568,10 +572,10 @@ Separately, v3's four-form rule Â = {y : D̂(y) > Δ_c/4}, on two models, errs 
 2. **Under H**, a is the faithful value and errors never equal a. So E F_m = x_m and E T = G_H. Take t = G_H.
 3. **Under S**, E F_m = (1 − p_{m,S})·r_S. Since Σ_m w_m = 0, E T = r_S·(Σ_m w_m − Σ_m w_m p_{m,S}) = −r_S·G_S. Take t = r_S·G_S on the upper tail.
 4. **Positivity.** Σ_m (α_m − ᾱ)·x_m = (1/(2M))·Σ_{m,m′} (α_m − α_{m′})(x_m − x_{m′}). Every summand is ≥ 0, since x increases in α, and some summand is > 0 when the spread is positive. The same argument applies to G_S.
-5. **M = 2.** w = ±(α_1 − α_2)/2, so G = ½(α_1 − α_2)·Δ_c and v_w = ½(α_1 − α_2)²/n. Hence 2G²/v_w = n·Δ_c², times r_S² on the S side. ∎
+5. **M = 2.** w = ±(α_1 − α_2)/2, so G_H (under H) and G_S (under S) both equal ½(α_1 − α_2)·Δ_c, and v_w = ½(α_1 − α_2)²/n. Hence 2G_H²/v_w = n·Δ_c², and 2r_S²G_S²/v_w = n·r_S²·Δ_c² on the S side. ∎
 
 **Remarks.**
-- **The sign rule T needs no nuisance.** It uses only α, not β, λ or e, so its bound holds uniformly over the nuisances; only the value of G depends on them.
+- **The sign rule T needs no nuisance.** It uses only α, not β, λ or e, so its bound holds uniformly over the nuisances; only the values of G_H and G_S depend on them.
 - **v3's four-form rule is not nuisance-free.** Its threshold Δ_c/4 depends on β_c.
 - **T is the per-cell form of the classical negative-discrimination check.**
 - **Hoeffding's inequality ignores the variance, so near saturation T is loose.**
@@ -670,6 +674,8 @@ Then for every τ > N·log(1 + e^{−b}):
   - Hence Σ n_m·(1 − BC_m) ≥ n_min·Δ_c²/4, and −log BC ≥ 1 − BC. ∎
 
 ### 4.4 T5, T5-S and T6 together: matching, term by term
+
+**What "matching" means here.** On each side, the lower bound for every rule and the upper bound for the code's rule are governed by the same exponent: h*_B(β_H) on the mis-key side, h*_S on the shared-error side. The upper bound's exponent is the lower bound's divided by at most 2, and its prefactor is polynomial in N, times e^{τ/2}. "Matching" claims no more than that: the constants are not equal, the code is not shown to be minimax-optimal, and nothing is said between the two bounds.
 
 **Mis-key side.**
 - T5 (box-local) says: every rule has R^B_{β_H} ≥ ¼·e^{−2h*_B(β_H)}.
@@ -958,6 +964,11 @@ S3 has one reading per run and cell, with about 26 models per domain and n ≈ 1
 - **What is proven instead:**
   - By T5 the agreement end (β_H → +∞) is equally undecidable.
   - The code types it "no defect" by the candidate-value convention once N is large enough (Proposition T5.5(c)). Below that N it is undetermined.
+
+**D6 ((A3′), the nuisances' range).**
+- **The design's wording:** "errors lie in the flat-plus-attractor family … with λ unrestricted; for A = ∅, the flat pool applies".
+- **What the note uses (§1.2):** the nuisances range over their prior supports. λ ∈ [0, 1], e ∈ V∖A∖{OTHER}, β_c real (profiled over the box B of ruling T1-L′), and the pool ε over the **open** simplex, where its Dirichlet prior has a density.
+- The amended design §4 states (A3′) in this form (ruling TH-1).
 
 **Open points:**
 - **O1.** T6 assumes α is exact, but the code plugs in the EM estimate. No bound covers the error from α.
