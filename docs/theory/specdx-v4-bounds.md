@@ -737,7 +737,10 @@ Specifically:
 - **Which cells go to the witness.** On S3, an undetermined outcome cell is sent to the witness only when its plurality reading differs from the anchor. Otherwise it stays undetermined.
   - A matching replay then marks an actual shared deviation as a witnessed shared error.
   - Small all-agree cells, which Proposition T5.5(c) leaves undetermined, are never mislabelled as witnessed shared errors.
-  - This guard is ruling W-1. It is applied in the final fix wave, before any official run. The code at 2bd4fe9 still sends every undetermined outcome cell to the witness.
+  - This guard is ruling W-1. The final fix wave applied it before any official run (`_deviates` in `specdx/subjects/sopbench/diagnose_v4.py`); a tie between the anchor and another value is not a deviation. The code at 2bd4fe9 sent every undetermined outcome cell to the witness.
+- **When the user lacks a parameter (ruling F-W).** The replay calls a prerequisite only with parameters from the task's `user_known`. A leaf whose parameter is missing there, such as login credentials, fails without a call, so the target is refused.
+  - This is SOPBench's own semantics: no credentials, no action.
+  - Six tasks are affected: dmv 26 and 54, library 5 and 62, healthcare 19 and online_market 2. On all six the label agrees with the refusal.
 
 ### 5.3 Population diversity (H5), quantitatively
 
@@ -958,7 +961,7 @@ S3 has one reading per run and cell, with about 26 models per domain and n ≈ 1
 
 **Open points:**
 - **O1.** T6 assumes α is exact, but the code plugs in the EM estimate. No bound covers the error from α.
-- **O2 (resolved by ruling W-1).** Small all-agree cells are undetermined, and the code at 2bd4fe9 would send them to the witness and could book them as witnessed shared errors. Ruling W-1 sends an undetermined outcome cell to the witness only when its plurality reading differs from the anchor. It is applied in the final fix wave, before any official run.
+- **O2 (resolved by ruling W-1).** Small all-agree cells are undetermined, and the code at 2bd4fe9 would send them to the witness and could book them as witnessed shared errors. Ruling W-1 sends an undetermined outcome cell to the witness only when its plurality reading differs from the anchor. The final fix wave applied it before any official run (§5.2).
 - **O3.** T6(c) for cells with |V| ≥ 3 values (S2).
 - **O4.** The union bound in Lemma 4.1 costs log G_B ≈ log(N·W) nats. A chaining or Laplace argument should reduce this to O(½·log N), but that is not proven here.
 

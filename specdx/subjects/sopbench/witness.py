@@ -5,6 +5,18 @@ task label, the label contradicts its own executable constraints (a specificatio
 if they agree, the agents' shared deviation is a shared agent error. Task data is replayed as
 is, never repaired: the bank credit_cards list-vs-dict defect is what the witness must show.
 Outcomes do not depend on hash() (ruling G4), so PYTHONHASHSEED is not enforced.
+
+The replay walks the task's directed action graph from the target's prerequisites: an "and"
+node needs every child (one retry pass re-runs the children that failed, for prerequisites
+whose order matters), an "or" node needs one, and a leaf outside the domain's constraint links
+is not checked. A leaf whose parameters the user does not know (a key missing from
+user_known, such as login credentials) fails without a call, so the target is refused
+(ruling F-W): that is SOPBench's own semantics (no credentials, no action), and on the six
+tasks it affects (dmv 26 and 54, library 5 and 62, healthcare 19, online_market 2) the labels
+agree.
+
+SOPBench's code is the top-level package `env`, put on sys.path by _env; another `env`
+already imported is refused rather than used in its place.
 """
 
 from __future__ import annotations
@@ -27,7 +39,7 @@ class WitnessResult:
 
 def load_raw_tasks(domain: str, root: Path = SOPBENCH_DIR) -> list[dict]:
     """Raw task dicts in load_tasks order, with user_goal set from the group key."""
-    raw = json.loads((root / "data" / f"{domain}_tasks.json").read_text())
+    raw = json.loads((root / "data" / f"{domain}_tasks.json").read_text(encoding="utf-8"))
     tasks: list[dict] = []
     for goal, group in raw.items():
         for t in group:
@@ -69,7 +81,8 @@ def _replay(
         results = [sat(c) for c in children]
         if all(results):
             return True
-        return all([sat(c) for c in children])  # one more pass
+        # One more pass, over the children that failed: one that held is not called again.
+        return all([ok or sat(c) for c, ok in zip(children, results, strict=True)])
 
     def sat(i: int) -> bool:
         node = nodes[i]
@@ -96,6 +109,16 @@ def _replay(
 
 def _env():
     root = str(SOPBENCH_DIR)
+    loaded = sys.modules.get("env")
+    if loaded is not None:
+        # SOPBench's env is a namespace package: its location is __path__, not __file__.
+        found = list(getattr(loaded, "__path__", None) or [])
+        found = found or [getattr(loaded, "__file__", None) or "unknown"]
+        where = [Path(p).resolve() for p in found]
+        if not any(Path(root).resolve() in w.parents for w in where):
+            raise ImportError(f"a package named env is already imported from "
+                              f"{', '.join(map(str, where))}; SOPBench's env under {root} "
+                              "cannot be loaded beside it")
     if root not in sys.path:
         sys.path.insert(0, root)
     from env.task import get_default_dep_full

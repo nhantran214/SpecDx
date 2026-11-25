@@ -1,23 +1,28 @@
 """v4 diagnosis of one SOPBench domain, with execution witnesses (P4a design §5.2).
 
 The v4 fit and typing run over the S3 cells. An outcome cell the data cannot decide
-(undetermined) is routed to the task's execution witness: SOPBench's strict replay of the
-task's own constraints. A replay that contradicts the anchor is a self-inconsistent hidden
-defect; one that agrees with it makes the agents' deviation a shared error. A replay that
-errors, and every undetermined check cell, stay undetermined.
+(undetermined) whose plurality reading differs from the anchor is routed to the task's
+execution witness (ruling W-1): SOPBench's strict replay of the task's own constraints. A
+replay that contradicts the anchor is a self-inconsistent hidden defect; one that agrees with
+it makes the agents' shared deviation a witnessed shared error. An undetermined outcome cell
+whose plurality is the anchor has no shared deviation to witness and stays undetermined, as do
+a cell whose replay errors and every undetermined check cell. Every undetermined cell also
+gets its would-be type (ruling F-I4).
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from specdx.infer.anchored_v4 import AnchoredFitV4, V4Params, fit_v4
+from specdx.infer.cells import Reading
 from specdx.infer.typing import CellFinding
-from specdx.infer.typing_v4 import SHARED, UNDETERMINED, type_cells_v4
+from specdx.infer.typing_v4 import SHARED, UNDETERMINED, type_cells_v4, would_be_type
 from specdx.subjects.sopbench.cells import S3CellData
 from specdx.subjects.sopbench.diagnose import OFFLINE, contradictions
-from specdx.subjects.sopbench.witness import WitnessResult, witness
+from specdx.subjects.sopbench.witness import witness
 from specdx.types import Defect
 
 WITNESSED = "witnessed"
@@ -34,7 +39,9 @@ class S3DiagnosisV4:
     + witnessed error. shared holds typed shared findings and witnessed ones, told apart by
     values == (WITNESSED,). cell_outcomes: each cell with readings -> its fate: "defect",
     "shared", "undetermined", "witnessed_defect", "witnessed_shared", "witnessed_error" or
-    "none" (a witness error is not also "undetermined" here)."""
+    "none" (a witness error is not also "undetermined" here). would_be: each cell typed
+    undetermined by the statistics (witnessed later or not) -> its would-be type, one of
+    typing_v4.WOULD_BE (ruling F-I4)."""
 
     domain: str
     raters: tuple[str, ...]
@@ -44,11 +51,35 @@ class S3DiagnosisV4:
     undetermined: dict[str, int]
     witnessed: dict[str, int]
     cell_outcomes: dict[str, str] = field(default_factory=dict)
+    would_be: dict[str, str] = field(default_factory=dict)
 
 
 def _task_index(cell_id: str) -> int:
     """The task index of s3:<domain>:<task>:<part>."""
     return int(cell_id.rsplit(":", 2)[1])
+
+
+def _deviates(mine: Sequence[Reading], anchor: str | None) -> bool:
+    """Ruling W-1: the cell's plurality reading differs from the anchor (a tie with the anchor
+    is not a deviation)."""
+    counts = Counter(r.value for r in mine)
+    return bool(counts) and counts.get(anchor, 0) < max(counts.values())
+
+
+def _check_alignment(cells: Mapping, raw_tasks: Sequence[dict]) -> None:
+    """The raw tasks are indexed like the cells: every outcome cell's task exists, and where
+    a raw task names its user goal, it is the cell's (group outcome:<goal>)."""
+    for cid, cell in cells.items():
+        if not cid.endswith(":outcome"):
+            continue
+        index = _task_index(cid)
+        if index >= len(raw_tasks):
+            raise ValueError(f"raw tasks: {len(raw_tasks)} given, but {cid} needs task "
+                             f"{index}")
+        goal = raw_tasks[index].get("user_goal")
+        if goal is not None and cell.group != f"outcome:{goal}":
+            raise ValueError(f"raw tasks are not aligned with the cells: task {index} has "
+                             f"goal {goal!r}, {cid} is in group {cell.group!r}")
 
 
 def diagnose_domain_v4(
@@ -61,9 +92,10 @@ def diagnose_domain_v4(
     raw_tasks: the domain's raw tasks, indexed like load_tasks. Each task is witnessed at
     most once. Determined hidden findings carry the OFFLINE note: only witnessed ones were
     refuted. composite, profile, cell_beta: the fit's ablation switches (design §6.4);
-    use_witness=False
-    skips the witness (every undetermined cell stays undetermined)."""
+    use_witness=False skips the witness (every undetermined cell stays undetermined). Raises
+    ValueError when raw_tasks is not aligned with the cells."""
     data = cd.data
+    _check_alignment(data.cells, raw_tasks)
     fit = fit_v4(data.cells, data.readings, models=models, params=params,
                  composite=composite, profile=profile, cell_beta=cell_beta)
     by_cell = data.by_cell()
@@ -71,12 +103,14 @@ def diagnose_domain_v4(
     shared: list[CellFinding] = []
     undetermined = {"outcome": 0, "check": 0}
     witnessed = {"defect": 0, "shared": 0, "error": 0}
-    cache: dict[int, WitnessResult] = {}
     outcomes = {c: "none" for c in by_cell}
+    would_be: dict[str, str] = {}
     for f in type_cells_v4(data.cells, fit, by_cell, params):
         mine = by_cell.get(f.cell, [])
         scenarios = tuple(sorted({r.scenario for r in mine}))
         cell = data.cells[f.cell]
+        if f.type == UNDETERMINED:
+            would_be[f.cell] = would_be_type(cell, fit.cells[f.cell], mine, params)
         if f.type == SHARED:
             shared.append(f)
             if outcomes[f.cell] != "defect":
@@ -88,14 +122,12 @@ def diagnose_domain_v4(
         elif not f.cell.endswith(":outcome"):
             undetermined["check"] += 1
             outcomes[f.cell] = "undetermined"
-        elif not use_witness:
+        elif not use_witness or not _deviates(mine, cell.anchor):
             undetermined["outcome"] += 1
             outcomes[f.cell] = "undetermined"
         else:
-            index = _task_index(f.cell)
-            if index not in cache:
-                cache[index] = witness(domain, raw_tasks[index])
-            result = cache[index]
+            # One outcome cell per task, so each task is witnessed at most once.
+            result = witness(domain, raw_tasks[_task_index(f.cell)])
             if result.outcome == "error":
                 witnessed["error"] += 1
                 undetermined["outcome"] += 1
@@ -116,4 +148,4 @@ def diagnose_domain_v4(
     defects.sort(key=lambda d: (-d.score, d.key))
     raters = tuple(sorted({r.model for r in data.readings}))
     return S3DiagnosisV4(domain, raters, fit, defects, shared, undetermined, witnessed,
-                          outcomes)
+                          outcomes, would_be)
