@@ -863,6 +863,9 @@ def freeze_problems(result: Mapping[str, Any],
             "held_out": list(range(DEFAULT_SEED + REPLICATES, DEFAULT_SEED + 2 * REPLICATES))}
     if result.get("seeds") != want or any(c.get("seed") != DEFAULT_SEED for c in layouts):
         problems.append("the seeds are not the default ones")
+    if str(result.get("commit", "")).endswith("-dirty"):
+        problems.append("the search ran on a dirty tree (modified tracked files); commit and "
+                        "re-run")
     return problems
 
 
@@ -870,7 +873,10 @@ def _git_head() -> str:
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
                              cwd=PARAMS_FILE.parents[1], check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+        # Only modified tracked files make a tree dirty (ruling R-7): untracked work/ or
+        # results/ files on the 48 GB host must not block the freeze.
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                               capture_output=True,
                                text=True, cwd=PARAMS_FILE.parents[1], check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
@@ -930,7 +936,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         code = run_g0v4(load_layouts(args.config), args.out, replicates=args.replicates,
                         jobs=args.jobs, cache=args.cache)
         if code == 0:
-            print("PASS: freeze with `python -m specdx.sim.g0v4 freeze`", file=sys.stderr)
+            print("PASS (not freezable: only `./run_all.sh s3-g0v4` writes a freezable run)",
+                  file=sys.stderr)
         return code
     ok, message = freeze_result(args.result, args.path)
     print(message, file=sys.stderr)

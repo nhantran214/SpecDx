@@ -141,6 +141,8 @@ def test_freeze_writes_the_params_with_provenance(tmp_path) -> None:
     ({"freezable": _ABSENT}, "freezable"),
     ({"layout_names": ["bank", "dmv", "library"]}, "development split"),
     ({"layout_names": _ABSENT}, "development split"),
+    # Ruling R-7: a search run from a tree with modified tracked files is never frozen.
+    ({"commit": "abc123-dirty"}, "dirty"),
 ])
 def test_freeze_refuses_what_was_not_pre_registered(tmp_path, over, why) -> None:
     path = tmp_path / "frozen.json"

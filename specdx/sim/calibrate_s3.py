@@ -83,7 +83,8 @@ def _spreads(logits: dict[str, list[tuple[float, float]]]) -> tuple[float, float
     means = np.array([g[:, 0].mean() for g in groups])
     of_means = float(np.mean([(within_var + g[:, 1].mean()) / len(g) for g in groups])) \
         if groups else 0.0
-    between_var = max(float(np.var(means)) - of_means, 0.0) if groups else 0.0
+    # Unbiased (ddof=1) variance of the group means; one group carries no between spread.
+    between_var = max(float(np.var(means, ddof=1)) - of_means, 0.0) if len(groups) > 1 else 0.0
 
     def clip(var: float) -> float:
         return float(min(max(math.sqrt(var), SPREAD_FLOOR), SPREAD_MAX))
