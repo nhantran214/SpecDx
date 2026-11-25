@@ -153,3 +153,82 @@ def test_rule_ii_on_a_real_posterior_whose_map_is_a_defect_form() -> None:
     post, readings = _real(counts, {"m0": 1.9371, "m1": 3.5357}, -1.9284)
     assert post.log_lr <= -P4.tau_u and post.map_set == {"d", "a"}
     assert not _kinds(_type_real(post, readings)) & set(DEFECT_TYPES_V4)
+
+
+# --- Final fix wave: F-I1 (binary cells), F-I4 (would-be types), Task 3 Minors ---
+
+def _s3_check_cell(n_raters: int = 26, failing: int = 8):
+    """An S3-shaped binary check cell: 26 raters with α spread over [−1, 3], one reading
+    each; the `failing` weakest read violated, the rest satisfied (the anchor)."""
+    from specdx.infer.cells import SATISFIED, VIOLATED
+
+    cell = Cell("s3:x:0:db_match", "constraint", SATISFIED, "k", "db_match", "db_match", ())
+    abilities = {f"m{i:02d}": -1.0 + 4.0 * i / (n_raters - 1) for i in range(n_raters)}
+    counts = {m: {VIOLATED if i < failing else SATISFIED: 1}
+              for i, m in enumerate(abilities)}
+    values = candidate_values(SATISFIED, [v for row in counts.values() for v in row])
+    return cell, abilities, counts, values
+
+
+def test_a_binary_gradient_cell_is_never_typed_shared() -> None:
+    # Ruling F-I1: on a binary cell λ's posterior is (n_dev − 2)/(n_dev + 2) under Beta(1, 3),
+    # a count rule, so it carries no shared-error evidence: no statistical SHARED there.
+    cell, abilities, counts, values = _s3_check_cell()
+    post = profile_cell(cell, values, counts, abilities, 0.0, P4)
+    assert len(values) == 2 and post.log_lr <= -P4.tau_u
+    assert post.set_fits[F({cell.anchor})].lam >= P4.tau_lambda  # the count rule fires
+    readings = _readings(cell, counts)
+    fit = AnchoredFitV4(abilities, {}, {}, {cell.id: post}, {}, True, 1, P4)
+    found = type_cells_v4({cell.id: cell}, fit, {cell.id: readings}, P4)
+    assert SHARED not in _kinds(found)
+    assert not _kinds(found) & set(DEFECT_TYPES_V4)  # rule (ii): no defect either
+
+
+def test_shared_findings_name_the_runs_that_read_the_attractor() -> None:
+    # Task 3 Minor 3: a statistical shared error carries its witnesses, the run keys of the
+    # readings on the attractor.
+    post = profile_cell(ANCHORED, VALUES, SHARED_COUNTS, RATERS, 0.0, P4)
+    readings = _readings(ANCHORED, SHARED_COUNTS)
+    [found] = _type(ANCHORED, post, SHARED_COUNTS)
+    assert found.type == SHARED
+    assert found.witnesses == tuple(sorted(r.run_key for r in readings if r.value == "a"))
+
+
+def test_would_be_type_names_what_an_undetermined_cell_would_have_been() -> None:
+    # Ruling F-I4 (design §5.2): an undetermined cell is counted by the type its own posterior
+    # gives as if it were determined.
+    from specdx.infer.typing_v4 import WOULD_BE, would_be_type
+
+    assert WOULD_BE == ("hidden", "ambiguity", "weak", "shared", "none")
+    mis = profile_cell(ANCHORED, VALUES, MIS, RATERS, 0.0, P4)
+    quiet = dataclasses.replace(mis, log_lr=0.1)
+    readings = _readings(ANCHORED, MIS)
+    assert _kinds(type_cells_v4({"c": ANCHORED}, _fit(quiet), {"c": readings}, P4)) == {
+        UNDETERMINED}
+    assert would_be_type(ANCHORED, quiet, readings, P4) == "hidden"
+    shared = dataclasses.replace(profile_cell(ANCHORED, VALUES, SHARED_COUNTS, RATERS, 0.0, P4),
+                                 log_lr=-0.1)
+    assert would_be_type(ANCHORED, shared, _readings(ANCHORED, SHARED_COUNTS), P4) == "shared"
+    unanimous = {m: {"d": 20} for m in RATERS}
+    agree = profile_cell(ANCHORED, ("d",), unanimous, RATERS, 0.0, P4)
+    assert would_be_type(ANCHORED, agree, _readings(ANCHORED, unanimous), P4) == "none"
+    # A binary cell is never a would-be shared error either (F-I1).
+    cell, abilities, counts, values = _s3_check_cell()
+    post = profile_cell(cell, values, counts, abilities, 0.0, P4)
+    assert would_be_type(cell, post, _readings(cell, counts), P4) == "none"
+
+
+def test_weak_on_a_real_determined_unanchored_posterior() -> None:
+    # Task 3 Minor 5: weak from a real posterior, not only a hand-built one.
+    raters = {"m1": 3.0, "m2": 2.5, "m3": 2.0}
+    counts = {"m1": {"x": 19, "y": 1}, "m2": {"x": 19, "y": 1}, "m3": {"x": 18, "y": 2}}
+    post = profile_cell(FREE, ("x", "y"), counts, raters, 0.0, P4)
+    readings = _readings(FREE, counts, clean=True)
+    assert post.map_set == {"x"}
+    decided = dataclasses.replace(post, log_lr=P4.tau_u + 1)
+    found = type_cells_v4({"u": FREE}, _fit(decided), {"u": readings}, P4)
+    assert _kinds(found) == {"weak"}
+    assert found[0].witnesses == tuple(sorted(r.run_key for r in readings if r.value == "y"))
+    quiet = dataclasses.replace(post, log_lr=0.0)
+    assert _kinds(type_cells_v4({"u": FREE}, _fit(quiet), {"u": readings}, P4)) == {
+        UNDETERMINED}
