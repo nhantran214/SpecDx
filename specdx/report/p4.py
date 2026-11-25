@@ -19,6 +19,7 @@ from pathlib import Path
 
 from specdx.infer.anchored import V3Params
 from specdx.infer.anchored_v4 import V4Params
+from specdx.infer.typing_v4 import WOULD_BE
 from specdx.report.p3 import _kind, _load_domain, _table
 from specdx.report.stages import StageOutcome
 from specdx.sim.calibrate import CalibrationError
@@ -109,8 +110,10 @@ def _fmt(x: float) -> str:
     return "n/a" if math.isnan(x) else f"{x:.3f}"
 
 
-def _theta(fit) -> tuple[str, str]:
-    thetas = sorted(fit.theta.values())
+def _theta(fit, raters: Sequence[str]) -> tuple[str, str]:
+    """The lowest and median θ over the raters with readings in the domain (a model with no
+    reading there sits at μ_α and says nothing)."""
+    thetas = sorted(fit.theta[m] for m in raters if m in fit.theta)
     if not thetas:
         return "-", "-"
     return f"{thetas[0]:.3f}", f"{statistics.median(thetas):.3f}"
@@ -128,6 +131,19 @@ def _resolve_params(params_file: Path, results: Path, smoke: bool,
             raw = json.loads(path.read_text())
             return V4Params(**raw.get("params", raw)), f"{label}: `{path}`"
     return None
+
+
+def _domains(split: tuple | None, smoke: bool) -> tuple[str, ...]:
+    """The held-out domains, or, in smoke mode, the first development domain only: smoke
+    output must never touch a held-out domain before the official run (ruling F-I3)."""
+    dev, held = (split or load_split())
+    return (tuple(dev)[0],) if smoke else tuple(held)
+
+
+def _which(held: Sequence[str], smoke: bool) -> str:
+    if smoke:
+        return f"SMOKE domain (development, never held out): {', '.join(held)}"
+    return f"Held-out domains: {', '.join(held)}"
 
 
 def _no_params(params_file: Path, smoke: bool) -> StageOutcome:
@@ -295,7 +311,7 @@ def _v4_row(label: str, dx: S3DiagnosisV4) -> dict:
     + witnessed shared: a witness error is already an undetermined outcome cell, and a
     witnessed shared cell is not also a typed shared one."""
     typed, u, w = _typed(dx), dx.undetermined, dx.witnessed
-    lo, med = _theta(dx.fit)
+    lo, med = _theta(dx.fit, dx.raters)
     witnessed_shared = sum(f.values == (WITNESSED,) for f in dx.shared)
     return {
         "domain": label, "raters": len(dx.raters), "hidden": typed["hidden"],
@@ -314,12 +330,30 @@ def _row_cells(row: dict) -> list:
     return [row[c] for c in V4_COLUMNS]
 
 
+WOULD_BE_NOTE = ("A cell that stays undetermined (undetermined, or a witness error) is "
+                 "counted by the type its own posterior would give it if it were determined "
+                 "(design §5.2; ruling F-I4): hidden, ambiguity, weak, shared or none. A "
+                 "would-be type is not a finding.")
+UNDETERMINED_FATES = ("undetermined", "witnessed_error")
+
+
+def would_be_counts(dx: S3DiagnosisV4, cells: set[str] | None = None) -> Counter:
+    """The cells that end undetermined (of `cells`, when given), by would-be type."""
+    out: Counter = Counter({k: 0 for k in WOULD_BE})
+    for cell, fate in dx.cell_outcomes.items():
+        if fate in UNDETERMINED_FATES and (cells is None or cell in cells):
+            out[dx.would_be.get(cell, "none")] += 1
+    return out
+
+
 V4_NOTE = ("undetermined outcome counts every outcome cell the data cannot decide, including "
            "those whose witness errored (witnessed error); cells accounted = undetermined "
            "outcome + undetermined check + witnessed defect + witnessed shared, so a witness "
-           "error is not counted twice. Shared errors: typed ones come from the fit "
-           "(MAP set {d}, lambda at least tau_lambda); witnessed ones are cells whose replay "
-           "agreed with the label.")
+           "error is not counted twice. Shared errors: typed ones come from the fit (MAP set "
+           "{d}, lambda at least tau_lambda) on cells with three or more candidate values "
+           "only, so never on S3's binary cells (ruling F-I1: there λ's posterior is a count "
+           "rule); on S3 shared errors are the witnessed ones, cells whose replay agreed "
+           "with the label.")
 
 
 def _variants(params: V4Params) -> list[tuple[str, V4Params, dict]]:
@@ -337,11 +371,9 @@ def v4_stage(
     params: V4Params | None = None,
 ) -> StageOutcome:
     """v4 on the held-out domains with the frozen parameters, beside v3 on the same data and
-    the ablations of design §6.4. Smoke: one domain, and the smoke parameters if nothing is
-    frozen."""
-    held = tuple((split or load_split())[1])
-    if smoke:
-        held = held[:1]
+    the ablations of design §6.4. Smoke: the first development domain, never a held-out one
+    (ruling F-I3), and the smoke parameters if nothing is frozen."""
+    held = _domains(split, smoke)
     source = "given"
     if params is None:
         found = _resolve_params(params_file, results, smoke)
@@ -354,6 +386,7 @@ def v4_stage(
     main_rows: list[dict] = []
     v3_rows: list[list] = []
     ablation_rows: list[list] = []
+    would_rows: list[list] = []
     for domain in held:
         tasks, runs = data[domain]
         cd = _cells(domain, tasks, runs)
@@ -362,6 +395,8 @@ def v4_stage(
         full = diagnose_domain_v4(domain, cd, models, raw, params)
         base = _v4_row(domain, full)
         main_rows.append(base)
+        would = would_be_counts(full)
+        would_rows.append([domain, sum(would.values()), *(would[k] for k in WOULD_BE)])
         ablation_rows.append(_row_cells({**base, "domain": f"full v4 / {domain}"}))
         for label, p, kw in _variants(params):
             dx = diagnose_domain_v4(domain, cd, models, raw, p, **kw)
@@ -369,7 +404,7 @@ def v4_stage(
                                              "domain": f"{label} / {domain}"}))
         v3 = diagnose_domain(domain, cd, models)
         kinds = Counter(_kind(d) for d in v3.defects)
-        lo, med = _theta(v3.fit)
+        lo, med = _theta(v3.fit, v3.raters)
         v3_rows.append([domain, len(v3.raters), kinds["hidden"], kinds["ambiguity"],
                         kinds["weak"], kinds["contradiction (unrefuted)"], lo, med,
                         "yes" if v3.fit.converged else "no"])
@@ -377,24 +412,33 @@ def v4_stage(
                               kinds["ambiguity"], kinds["weak"],
                               kinds["contradiction (unrefuted)"], *["n/a"] * 8, lo, med,
                               "yes" if v3.fit.converged else "no"])
-        ablation_rows.append([f"no attractor / {domain}", "vacuous on S3 (binary cells)",
+        ablation_rows.append([f"no attractor / {domain}", "not run on S3 (binary cells)",
                               *["-"] * (len(V4_COLUMNS) - 2)])
     total = [sum(r[c] for r in main_rows) for c in V4_COLUMNS[2:14]]
-    body = [f"Held-out domains: {', '.join(held)}. Parameters: {source}.", "", TAU_U_NOTE,
+    body = [f"{_which(held, smoke)}. Parameters: {source}.", "", TAU_U_NOTE,
             REFUTATION_NOTE, "", "## v4 per domain", ""]
     body += _table(V4_COLUMNS, [*(_row_cells(r) for r in main_rows),
                                 ["total", "", *total, "", "", ""]])
-    body += ["", V4_NOTE, "", "## v3 on the same data", ""]
+    body += ["", V4_NOTE, "", "## Undetermined cells by would-be type", "",
+             WOULD_BE_NOTE, ""]
+    body += _table(("domain", "undetermined", *WOULD_BE), would_rows)
+    body += ["", "## v3 on the same data", ""]
     body += _table(("domain", "raters", "hidden", "ambiguity", "weak",
                     "contradiction (unrefuted)", "θ min", "θ median", "converged"), v3_rows)
     body += ["", "## Ablations (design §6.4)", "",
-             "Each row refits the held-out domain with one component removed. No per-cell β: "
-             "β_c is set equal to its group's β_g in the profiles and in the fit. The "
-             "attractor ablation has nothing to remove on S3: its cells are binary, so the "
-             "error side has one slot and λ is not identified.", ""]
+             "Each row refits the domain with one component removed. No per-cell β: β_c is "
+             "set equal to its group's β_g in the profiles and in the fit; log_lr then "
+             "depends on β_g again (the T1-L′ box no longer frees it), so any extra "
+             "determined cells are not a free gain. The attractor ablation is not run on S3 "
+             "(design §6.4): on a binary cell the error side of {d} has two slots, the other "
+             "value and OTHER, so the attractor is forced to the other value and λ's profile "
+             "sits at 1 when no OTHER is read. Removing it is not inert, but it is no model "
+             "comparison either: it shifts log_lr by (n_a − n_d)·log 2, a count of the "
+             "readings (theory note Lemma 1.1).", ""]
     body += _table(V4_COLUMNS, ablation_rows)
     payload = {"domains": list(held), "params": params_dict(params), "source": source,
-               "v4": main_rows, "v3": v3_rows, "ablations": ablation_rows, "smoke": smoke}
+               "v4": main_rows, "v3": v3_rows, "ablations": ablation_rows,
+               "would_be": would_rows, "smoke": smoke}
     typed = sum(r["hidden"] + r["ambiguity"] + r["weak"] + r["contradiction (unrefuted)"]
                 for r in main_rows)
     undet = sum(r["undetermined outcome"] + r["undetermined check"] for r in main_rows)
@@ -434,16 +478,31 @@ def unanimous_fates(cd, dx: S3DiagnosisV4) -> dict[str, Counter]:
     return out
 
 
+def unanimous_would_be(cd, dx: S3DiagnosisV4) -> dict[str, Counter]:
+    """unanimous_fates' split (agreeing, deviating), counting the cells that end undetermined
+    by their would-be type (ruling F-I4)."""
+    changeable = changeable_cells(cd)
+    value: dict[str, str] = {}
+    for r in cd.data.readings:
+        value[r.cell] = r.value
+    split: dict[str, set[str]] = {"agreeing": set(), "deviating": set()}
+    for cell, v in value.items():
+        if cell not in changeable:
+            split["agreeing" if v == cd.data.cells[cell].anchor else "deviating"].add(cell)
+    return {kind: would_be_counts(dx, cells) for kind, cells in split.items()}
+
+
 def placebo_stage(
     *, manifest: Path, trajectories: Path, results: Path, split: tuple | None = None,
     tasks_root: Path = SOPBENCH_DIR, seeds: Sequence[int] = range(PLACEBO_SEEDS),
     smoke: bool = False, params_file: Path = PARAMS_FILE, params: V4Params | None = None,
 ) -> StageOutcome:
-    """The permutation placebo on the held-out domains (smoke: one domain, 2 seeds), with the
-    verdict of ruling P-N and the unanimous cells reported apart (design §6.2)."""
-    held = tuple((split or load_split())[1])
+    """The permutation placebo on the held-out domains (smoke: the first development domain,
+    never a held-out one (ruling F-I3), and 2 seeds), with the verdict of ruling P-N and the
+    unanimous cells reported apart (design §6.2)."""
+    held = _domains(split, smoke)
     if smoke:
-        held, seeds = held[:1], range(SMOKE_SEEDS)
+        seeds = range(SMOKE_SEEDS)
     source = "given"
     if params is None:
         found = _resolve_params(params_file, results, smoke)
@@ -455,6 +514,7 @@ def placebo_stage(
         return error
     outcomes: list[PlaceboResult] = []
     unanimous: dict[str, dict[str, Counter]] = {}
+    unanimous_would: dict[str, dict[str, Counter]] = {}
     for domain in held:
         tasks, runs = data[domain]
         models = _models(runs)
@@ -464,6 +524,7 @@ def placebo_stage(
         outcomes.append(placebo(domain, tasks, runs, models, params, V3Params(), list(seeds),
                                 real_fit=dx.fit))
         unanimous[domain] = unanimous_fates(cd, dx)
+        unanimous_would[domain] = unanimous_would_be(cd, dx)
     verdict, evaluable, over = placebo_verdict(outcomes)
     rows = []
     for r in outcomes:
@@ -474,7 +535,7 @@ def placebo_stage(
                      _fmt(r.ratio_v4), r.real_v3,
                      _fmt(statistics.fmean(r.placebo_v3)) if r.placebo_v3 else "n/a",
                      _fmt(r.ratio_v3), status])
-    body = [f"Held-out domains: {', '.join(held)}; seeds: {len(list(seeds))}. Parameters: "
+    body = [f"{_which(held, smoke)}; seeds: {len(list(seeds))}. Parameters: "
             f"{source}.", "", TAU_U_NOTE, "",
             f"Verdict: {verdict}. PASS needs at least {PLACEBO_MIN_EVALUABLE} evaluable "
             f"domains and every evaluable v4 ratio at most {PLACEBO_MAX_RATIO}. A domain "
@@ -504,14 +565,21 @@ def placebo_stage(
     urows = []
     for domain, kinds in unanimous.items():
         for kind in ("deviating", "agreeing"):
-            c = kinds[kind]
-            urows.append([domain, kind, sum(c.values()), *(c[f] for f in UNANIMOUS_FATES)])
-    body += _table(("domain", "unanimous", "cells", *UNANIMOUS_FATES), urows)
+            c, w = kinds[kind], unanimous_would[domain][kind]
+            urows.append([domain, kind, sum(c.values()), *(c[f] for f in UNANIMOUS_FATES),
+                          *(w[k] for k in WOULD_BE)])
+    body += _table(("domain", "unanimous", "cells", *UNANIMOUS_FATES,
+                    *(f"undetermined, would-be {k}" for k in WOULD_BE)), urows)
+    body += ["", "The would-be columns split the cells that end undetermined (undetermined "
+             "or witnessed_error) by the type their own posterior would give them if they "
+             "were determined (ruling F-I4); a would-be type is not a finding."]
     payload = {
         "verdict": verdict, "evaluable": evaluable, "over": over, "domains": list(held),
         "params": params_dict(params), "smoke": smoke,
         "results": [dataclasses.asdict(r) for r in outcomes],
-        "unanimous": {d: {k: dict(c) for k, c in v.items()} for d, v in unanimous.items()}}
+        "unanimous": {d: {k: dict(c) for k, c in v.items()} for d, v in unanimous.items()},
+        "unanimous_would_be": {d: {k: dict(c) for k, c in v.items()}
+                               for d, v in unanimous_would.items()}}
     key = (f"{len(evaluable)} of {len(held)} domains evaluable, "
            f"{len(over)} over {PLACEBO_MAX_RATIO}")
     return StageOutcome(0 if verdict == "PASS" else 1, verdict, key, "\n".join(body), payload)

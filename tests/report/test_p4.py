@@ -257,8 +257,13 @@ def test_v4_stage_reports_the_domain_table_v3_and_the_ablations(data, params, tm
     for label in ("full v4 / library", "no per-cell β / library",
                   "no composite weights / library", "no witnesses / library",
                   "plug-in instead of profile / library", "full v3 / library",
-                  "no attractor / library", "vacuous on S3 (binary cells)"):
+                  "no attractor / library", "not run on S3 (binary cells)",
+                  "(n_a − n_d)·log 2", "depends on β_g again",
+                  "## Undetermined cells by would-be type"):
         assert label in out.body
+    assert "not identified" not in out.body and "vacuous" not in out.body
+    [would] = out.data["would_be"]
+    assert would[0] == "library" and would[1] == sum(would[2:])
     assert "not certified by the theory" in out.body
     [row] = out.data["v4"]
     # Task 7's counting: a witness error is already an undetermined outcome cell.
@@ -309,6 +314,31 @@ def test_smoke_v4_uses_smoke_params_when_nothing_is_frozen(data, tmp_path, monke
     out = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
                    smoke=True, params_file=tmp_path / "absent.json")
     assert out.exit_code == 2
+
+
+def test_smoke_v4_and_placebo_use_a_development_domain(data, tmp_path, monkeypatch) -> None:
+    # Ruling F-I3: smoke never touches a held-out domain.
+    manifest, traj = data
+    seen: list[str] = []
+    _stub_diagnoses(monkeypatch, [])
+    real = p4.diagnose_domain_v4
+    monkeypatch.setattr(p4, "diagnose_domain_v4",
+                        lambda domain, *a, **k: seen.append(domain) or real(domain, *a, **k))
+    monkeypatch.setattr(p4, "placebo", lambda domain, *a, **k: seen.append(domain)
+                        or _result(domain, 0, [0]))
+    out = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                   smoke=True, params=V4Params())
+    assert out.data["domains"] == ["university"] and "never held out" in out.body
+    out = placebo_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                        smoke=True, params=V4Params())
+    assert out.data["domains"] == ["university"] and "never held out" in out.body
+    assert set(seen) == {"university"}
+
+
+def test_theta_counts_only_the_raters_with_readings() -> None:
+    fit = SimpleNamespace(theta={"a": 0.2, "b": 0.6, "c": 0.9, "absent": 0.73})
+    assert p4._theta(fit, ("a", "b", "c")) == ("0.200", "0.600")
+    assert p4._theta(fit, ()) == ("-", "-")
 
 
 def test_v4_stage_ablation_switches_and_key_number_count_contradictions(
@@ -365,8 +395,10 @@ def test_placebo_stage_reports_domains_unanimous_cells_and_the_verdict(
         assert "not evaluable (real v4 = 0)" in out.body
     deviating = out.data["unanimous"]["library"]
     assert set(deviating) == {"agreeing", "deviating"}
-    for header in ("witnessed_defect", "witnessed_shared", "witnessed_error", "undetermined"):
+    for header in ("witnessed_defect", "witnessed_shared", "witnessed_error", "undetermined",
+                   "undetermined, would-be hidden", "undetermined, would-be none"):
         assert header in out.body
+    assert set(out.data["unanimous_would_be"]["library"]) == {"agreeing", "deviating"}
 
 
 def test_unanimous_fates_split_agreeing_and_deviating_cells() -> None:
