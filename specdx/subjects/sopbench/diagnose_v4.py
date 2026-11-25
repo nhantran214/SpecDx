@@ -37,9 +37,10 @@ class S3DiagnosisV4:
     counted in witnessed["error"] and also in undetermined["outcome"] (it stays undetermined),
     so the cells accounted for are undetermined + witnessed defect + witnessed shared, never
     + witnessed error. shared holds typed shared findings and witnessed ones, told apart by
-    values == (WITNESSED,). cell_outcomes: each cell with readings -> its fate: "defect",
+    values == (WITNESSED,). cell_outcomes: every cell of the domain -> its fate: "defect",
     "shared", "undetermined", "witnessed_defect", "witnessed_shared", "witnessed_error" or
-    "none" (a witness error is not also "undetermined" here). would_be: each cell typed
+    "none" (a witness error is not also "undetermined" here). A cell without readings (every
+    run of its task a tool error) is not fitted and appears as "none". would_be: each cell typed
     undetermined by the statistics (witnessed later or not) -> its would-be type, one of
     typing_v4.WOULD_BE (ruling F-I4)."""
 

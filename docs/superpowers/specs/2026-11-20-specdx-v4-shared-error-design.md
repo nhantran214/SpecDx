@@ -185,6 +185,8 @@ T2 holds per cell under (A3′): A_c = {y : D_c(y) > 0}. This is v3's T2, unchan
 - **Routing.** Undetermined cells are passed to §5.2, and are never typed by statistics.
 
 ### 5.2 Execution witnesses: the logic half
+*Amended 2026-11-25:* only an undetermined outcome cell whose plurality deviates from the anchor goes to the witness (W-1); see §12.1.
+
 For a statistically undetermined anchored cell, SpecDx asks the subject's own executable checker whether the anchor's behaviour is consistent.
 
 **S3 (SOPBench):**
@@ -218,6 +220,14 @@ For a statistically undetermined anchored cell, SpecDx asks the subject's own ex
 
 For S3, the development split is the published runs of a seeded draw of 3 of the 7 domains. The other 4 domains are held out for the placebo and the replication. S2 is calibrated in P4c, on its development tasks.
 
+*Amended 2026-11-25:* the S3 simulator copies each development domain's group layout and fits each simulated domain on its own (F-C1), and the selection counts an undetermined planted cell as a miss (F-I2); see §12.1.
+
+**Difficulty spreads (ruling R-5).** A cell's logit accuracy x_c = logit((hits + 0.5)/(n + 1)) spreads by binomial sampling as well as by difficulty, with sampling variance about v_c = 1/(n·p·(1 − p)) (p clipped to [0.01, 0.99]). By the method of moments:
+- the within-group variance is the pooled variance of the cells about their group means, minus the mean v_c;
+- the between-group variance is the variance of the group means, minus the mean over groups of (σ_w² + v̄_g)/n_g.
+
+Both sds are floored at 0.25 (SPREAD_FLOOR), so pure sampling noise calibrates to the floor, and capped at 3. Otherwise the simulated within-group spread would be inflated relative to the real structure that cell_sd is matched against. Only cells with readings count, and a user goal whose tasks have no reading (every run a tool error) is not in the layout (ruling R-1).
+
 Each subject's parameters are frozen separately.
 
 **Arms.** The simulation has four arms:
@@ -232,6 +242,7 @@ Each subject's parameters are frozen separately.
 3. On the homogeneous and saturated arms, at least 80% of planted defects and shared errors are undetermined. This is T5's prediction.
 
 ### 6.2 Placebo control on real runs (CPU, the 4 held-out S3 domains)
+*Amended 2026-11-25:* the placebo counts distinct cells and permutes only among a task's runs without a tool error (P-C); see §12.1.
 
 **Procedure.**
 - Within each task, permute the raters' whole act vectors (all four cells together) across raters, with 20 seeds per domain.
@@ -347,6 +358,8 @@ These phases replace P3b–P3d.
   - F-I2a and F-I2b: the selection objective counts an undetermined planted cell as a miss, and criterion 2.ambiguity is reported as non-binding when v3's ambiguity F1 is below 0.05;
   - W-1: only an undetermined outcome cell whose plurality deviates from the anchor goes to the witness;
   - P-C: the placebo counts distinct cells and permutes among the runs without a tool error.
+  - R-1 and R-5: the S3 calibration leaves out goals with no read task and subtracts the binomial sampling variance from both difficulty spreads (§6.1);
+  - R-3 and R-4: only the s3-g0v4 stage's own search, on the development split, can be frozen, and the frozen file records the commit the search ran at.
 
 ### 12.2 Disclosures
 - **Held-out data seen before the official run.** Two looks at held-out S3 domains happened during development:

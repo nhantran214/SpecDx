@@ -210,7 +210,7 @@ The four P4a stages need the published trajectories (`work/sopbench-output`, fro
 - `s3-g0v4` calibrates one simulated layout per development domain (that domain's check and user-goal groups, raters and difficulty spreads) and runs G0v4.
   - It runs `P4_JOBS` fits in parallel (default: every core), with one BLAS thread per process.
   - Each finished fit is cached in `$P3_WORK/g0v4-cache`, so rerunning the stage after a crash skips the fits already done.
-  - On a PASS of the pre-registered run (10 replicates, the full grid, the default seeds, not smoke) it freezes `experiments/p4-s3-v4-params.json`, with the commit and the sha256 of the search JSON. A PASS of any other configuration is not frozen (exit 1). A frozen file that holds other parameters is never overwritten (exit 2).
+  - On a PASS of the pre-registered run (10 replicates, the full grid, the default seeds, the development split, not smoke) it freezes `experiments/p4-s3-v4-params.json`, with the commit the search ran at and the sha256 of the search JSON. Only this stage's search can be frozen: a `python -m specdx.sim.g0v4 run` result is marked not freezable. A PASS of any other configuration is not frozen (exit 1). A frozen file that holds other parameters is never overwritten (exit 2).
 - `s3-witness` replays every task on SOPBench's strict system.
 - `s3-v4` and `s3-placebo` use only the four held-out domains and the frozen parameters.
 
