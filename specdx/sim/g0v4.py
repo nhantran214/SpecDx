@@ -37,8 +37,8 @@ Running (ruling F-I8). Every fit runs in one process pool (forkserver, with the 
 pinned to 1 before numpy loads in a worker; ruling F-I7) and leaves a small typed summary in
 a cache directory when one is given, keyed by the sha256 of the fit's configuration and of the
 code that produces it, so a rerun after a crash skips what is done. The output does not depend
-on the number of jobs or on the cache. The cost estimate times the first fit of each layout
-and simulates the pool's two barriers.
+on the number of jobs or on the cache. The cost estimate times the first fit of each kind,
+arm and layout (fits that the run keeps) and simulates the pool's two barriers.
 
 Freezing (ruling F-I5). The search JSON records the replicates, the grid, the seeds and
 whether the run was a smoke run. freeze_result refuses unless the verdict is PASS, the run is
@@ -563,39 +563,44 @@ def _makespan(durations: Iterable[float], jobs: int) -> float:
 def estimate_cost(calibration: Sequence[tuple[FitTask, Mapping[str, Any]]], wall: float,
                   rest: Sequence[FitTask], held: Sequence[FitTask], jobs: int,
                   cached: int) -> dict[str, Any]:
-    """Extrapolate the run from the calibration fits (the first v4 and v3 fit of each layout
-    in use, run first and kept): their wall time, then the pool's two barriers, the rest of
-    the selection fits and the held-out fits of the chosen prior, each simulated in
-    submission order over `jobs` workers (fewer tasks than jobs leave workers idle). A layout
-    without its own timing takes the slowest one's."""
-    v4: dict[int, float] = {}
-    v3: dict[int, float] = {}
+    """Extrapolate the run from the calibration fits (the first fit of each kind, arm and
+    layout in use, run first and kept: fit times differ by arm as much as by layout): their
+    wall time, then the pool's two barriers, the rest of the selection fits and the held-out
+    fits of the chosen prior, each simulated in submission order over `jobs` workers (fewer
+    tasks than jobs leave workers idle). A fit without a timing of its own takes the slowest
+    of its kind. Fits that do not converge, or other prior settings, can still run longer."""
+    times: dict[str, float] = {}
     for task, result in calibration:
-        (v4 if task.kind == "v4" else v3)[task.layout] = float(result["seconds"])
+        times[_timing_key(task)] = float(result["seconds"])
 
     def cost(task: FitTask) -> float:
-        times = v4 if task.kind == "v4" else v3
-        return times.get(task.layout, max(times.values(), default=0.0))
+        slowest = max((v for k, v in times.items() if k.startswith(task.kind + "/")),
+                      default=0.0)
+        return times.get(_timing_key(task), slowest)
 
     phase1 = _makespan((cost(t) for t in rest), jobs)
     phase2 = _makespan((cost(t) for t in held), jobs)
     n4 = sum(t.kind == "v4" for t in (*rest, *held)) + sum(t.kind == "v4" for t, _ in calibration)
     n3 = sum(t.kind == "v3" for t in rest) + sum(t.kind == "v3" for t, _ in calibration)
-    return {"v4_fit_s": {str(k): v for k, v in sorted(v4.items())},
-            "v3_fit_s": {str(k): v for k, v in sorted(v3.items())},
+    return {"v4_fit_s": {k[3:]: v for k, v in sorted(times.items()) if k.startswith("v4/")},
+            "v3_fit_s": {k[3:]: v for k, v in sorted(times.items()) if k.startswith("v3/")},
             "calibration_s": wall, "selection_s": phase1, "held_out_s": phase2,
             "v4_fits": n4, "v3_fits": n3, "cached": cached, "jobs": jobs,
             "total_s": wall + phase1 + phase2}
 
 
+def _timing_key(task: FitTask) -> str:
+    return f"{task.kind}/{task.config.arm}/layout {task.layout}"
+
+
 def _calibration_split(tasks: Sequence[FitTask], used: int) -> tuple[list[int], list[int]]:
-    """The indices of the calibration tasks (the first v4 and v3 base-arm fit of each layout
-    in use) and of the rest, both in input order."""
+    """The indices of the calibration tasks (the first fit of each kind, arm and layout in
+    use) and of the rest, both in input order."""
     first: set[int] = set()
-    seen: set[tuple[str, int]] = set()
+    seen: set[str] = set()
     for i, t in enumerate(tasks):
-        key = (t.kind, t.layout)
-        if t.config.arm == "base" and key not in seen and t.layout < used:
+        key = _timing_key(t)
+        if key not in seen and t.layout < used:
             seen.add(key)
             first.add(i)
     return sorted(first), [i for i in range(len(tasks)) if i not in first]
@@ -697,7 +702,7 @@ def _criteria_lines(metrics: Mapping[str, Any], v3: Mapping[str, Any],
 
 
 def _fmt_seconds(est: Mapping[str, Any], key: str) -> str:
-    return ", ".join(f"layout {k}: {v:.1f} s" for k, v in est[key].items()) or "none"
+    return ", ".join(f"{k}: {v:.1f} s" for k, v in est[key].items()) or "none"
 
 
 def render(result: Mapping[str, Any]) -> str:
