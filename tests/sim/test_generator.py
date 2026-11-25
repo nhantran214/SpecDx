@@ -135,6 +135,19 @@ def test_shared_arm_plants_hard_cells_with_one_attractor() -> None:
     assert shares
     assert min(shares) > 0.4  # λ ≥ 0.5 pulls the errors to one value, plus noise
     assert sum(shares) / len(shares) >= 0.5
+    # Task 4 Minor (a sharper λ proxy): with k values the attractor's share of the errors is
+    # ((1 − λ)/k + λ)/((1 − λ)(k − 1)/k + λ), at least (k + 1)/(2k − 1) for λ ≥ 0.5, and far
+    # above the flat share 1/(k − 1).
+    gaps = []
+    for cid, rs in by_cell(spec).items():
+        k = len({v for v in ("d", *(f"v{i}" for i in range(6)))
+                 if v in {r.value for r in rs} or v == "d"})
+        errs = Counter(r.value for r in rs if r.value != spec.cells[cid].anchor)
+        if sum(errs.values()) >= 20 and k >= 3:
+            share = max(errs.values()) / sum(errs.values())
+            assert share > 1 / (k - 1)
+            gaps.append(share - (k + 1) / (2 * k - 1))
+    assert gaps and sum(gaps) / len(gaps) >= -0.05
     for cid, rs in by_cell(spec).items():
         errs = Counter(r.value for r in rs if r.value != spec.cells[cid].anchor)
         assert spec.cells[cid].anchor not in errs  # the attractor is never d
@@ -192,6 +205,73 @@ def test_act_group_run_key_and_scenario_form_groups_of_k() -> None:
         scenarios=2, variants=2, seeds=2, act_group=4, seed=5))
     sizes = Counter((r.run_key, r.scenario) for r in spec.readings)
     assert set(sizes.values()) == {4}
+
+
+def test_a_chunk_smaller_than_the_act_group_is_its_own_group() -> None:
+    # Task 4 Minor: an item with 6 cells and act_group 4 reads in chunks of 4 and then 2.
+    spec = generate(SimConfig(
+        alphas=(1.0, 0.0), act=(1.0, 1.0), columns=6, items=1, pooled_share=0.0,
+        scenarios=1, variants=2, seeds=2, act_group=4, seed=5))
+    sizes = Counter((r.run_key, r.scenario) for r in spec.readings)
+    assert sorted(set(sizes.values())) == [2, 4]
+    assert Counter(sizes.values()) == {4: 8, 2: 8}
+
+
+S3_LAYOUT = SimConfig(alphas=(2.0, 1.0, 0.0, -1.0, 0.5), act=(1.0,) * 5, goals=(3, 2),
+                      columns=20, items=5, pooled_share=0.0, scenarios=1, variants=1, seeds=1,
+                      values=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0), act_group=4, beta_within=0.0,
+                      seed=3)
+
+
+def test_the_s3_layout_groups_cells_like_sopbench() -> None:
+    # Ruling F-C1: four cells per task (outcome and the three checks), the checks in one
+    # difficulty group each, the outcomes grouped by user goal with the given sizes.
+    from specdx.infer.cells import SATISFIED, VIOLATED
+
+    spec = generate(S3_LAYOUT)
+    groups = Counter(c.group for c in spec.cells.values())
+    assert groups == {"outcome:g00": 3, "outcome:g01": 2, "db_match": 5, "constraints": 5,
+                      "process": 5}
+    for cid, cell in spec.cells.items():
+        if cell.group.startswith("outcome:"):
+            assert cell.kind == "value" and cell.anchor == "d" and cid.endswith(":outcome")
+        else:
+            assert cell.kind == "constraint" and cell.anchor == SATISFIED
+        assert {r.value for r in spec.readings if r.cell == cid} <= (
+            {"d", "v0"} if cell.kind == "value" else {SATISFIED, VIOLATED})
+    # Each rater reads each cell once, and a run's act group is one task's four cells.
+    reads = Counter((r.cell, r.model) for r in spec.readings)
+    assert set(reads.values()) == {1} and len(reads) == 20 * 5
+    tasks = {}
+    for r in spec.readings:
+        tasks.setdefault((r.run_key, r.scenario), set()).add(r.cell.split(":")[0])
+    assert all(len(t) == 1 for t in tasks.values())
+    assert set(Counter((r.run_key, r.scenario) for r in spec.readings).values()) == {4}
+
+
+def test_the_s3_layout_shares_difficulty_within_a_group() -> None:
+    spec = generate(S3_LAYOUT)
+    by_group: dict[str, set[float]] = {}
+    for cid, beta in spec.betas.items():
+        by_group.setdefault(spec.cells[cid].group, set()).add(round(beta, 12))
+    assert all(len(b) == 1 for b in by_group.values())
+    assert len({next(iter(b)) for b in by_group.values()}) == len(by_group)
+    spread = generate(replace(S3_LAYOUT, beta_within=0.7))
+    groups: dict[str, list[float]] = {}
+    for cid, beta in spread.betas.items():
+        groups.setdefault(spread.cells[cid].group, []).append(beta)
+    assert all(len(set(b)) == len(b) for b in groups.values())
+    assert generate(S3_LAYOUT).readings == spec.readings  # deterministic
+
+
+def test_the_s3_layout_plants_its_arms() -> None:
+    big = replace(S3_LAYOUT, goals=(40, 30), defect_rate=0.3, seed=4)
+    spec = generate(big)
+    assert any(t.hidden for t in spec.truth.values())
+    shared = generate(replace(big, arm="shared", shared_share=0.5))
+    assert any(t.shared for t in shared.truth.values())
+    homogeneous = generate(replace(big, arm="homogeneous"))
+    assert len(set(homogeneous.alphas.values())) == 1
 
 
 def test_v3_arms_are_bit_identical_to_the_pre_p4_generator() -> None:

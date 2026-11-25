@@ -91,6 +91,14 @@ def study_guard(root: Path, gate_json: Path, prereg_json: Path,
 
 
 P4A_STAGES = ("s3-g0v4", "s3-witness", "s3-v4", "s3-placebo")
+BLAS_THREADS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def pin_blas_threads() -> None:
+    """One BLAS/OpenMP thread per process for a parallel stage (rulings J-1 and F-I7), set
+    before numpy is first imported, so N jobs do not oversubscribe the cores."""
+    for name in BLAS_THREADS:
+        os.environ[name] = "1"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,6 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _p3(args: argparse.Namespace) -> int:
+    if getattr(args, "jobs", 1) > 1:
+        pin_blas_threads()  # before the imports below load numpy
     from specdx.report import p3, p4
     from specdx.report.stages import (
         STAGES,
@@ -281,7 +291,7 @@ def _p3(args: argparse.Namespace) -> int:
 
 def _p4_stage(args: argparse.Namespace, p4, traj: Path, results: Path, smoke: bool):
     """The stage function of a P4a stage, with its arguments bound."""
-    from specdx.sim.g0v4 import PARAMS_FILE, REPLICATES
+    from specdx.sim.g0v4 import CACHE_DIR, PARAMS_FILE, REPLICATES
 
     name = args.p3_command
     if name == "s3-witness":
@@ -289,8 +299,11 @@ def _p4_stage(args: argparse.Namespace, p4, traj: Path, results: Path, smoke: bo
     common = {"manifest": args.manifest, "trajectories": traj, "results": results,
               "smoke": smoke, "params_file": args.params or PARAMS_FILE}
     if name == "s3-g0v4":
+        # Ruling F-I8: the fit cache lives under the work directory ($P3_WORK/g0v4-cache, or
+        # its smoke directory), so a rerun after a crash skips the fits already done.
         return lambda: p4.g0v4_stage(**common, jobs=args.jobs,
-                                     replicates=args.replicates or REPLICATES)
+                                     replicates=args.replicates or REPLICATES,
+                                     cache=args.work / ("smoke" if smoke else "") / CACHE_DIR)
     if name == "s3-v4":
         return lambda: p4.v4_stage(**common)
     return lambda: p4.placebo_stage(**common, seeds=range(args.seeds))

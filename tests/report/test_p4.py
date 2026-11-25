@@ -90,45 +90,98 @@ def params() -> V4Params:
 
 # --- s3-g0v4 ---
 
-def test_g0v4_stage_calibrates_runs_and_freezes_only_on_pass(data, tmp_path) -> None:
+def test_g0v4_stage_calibrates_runs_and_never_freezes_a_non_pre_registered_run(
+        data, tmp_path) -> None:
+    # One replicate on a one-point grid is not the pre-registered run (ruling F-I5): whatever
+    # the verdict, nothing is frozen and the stage exits 1.
     manifest, traj = data
     frozen = tmp_path / "frozen.json"
     out = g0v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
-                     replicates=1, grid=GRID, params_file=frozen)
-    assert out.exit_code in (0, 1) and out.verdict == ("PASS" if out.exit_code == 0 else "FAIL")
+                     replicates=1, grid=GRID, params_file=frozen, cache=tmp_path / "cache")
+    assert out.exit_code == 1 and not frozen.exists() and out.data["frozen"] is False
     for section in ("## Calibration", "## Selected parameters", "## v3 beside v4",
-                    "## G0v4 in full", "not certified by the theory"):
+                    "## G0v4 in full", "not certified by the theory", "Not frozen"):
         assert section in out.body
-    assert "| hidden F1 |" in out.body and "act_group" in out.body
-    assert frozen.exists() == (out.exit_code == 0)
+    assert "| hidden F1 |" in out.body and "| goals |" in out.body
+    assert "act_group" in out.body and "layout r mod 1" in out.body
     assert not (tmp_path / SMOKE_PARAMS).exists()
-    assert (tmp_path / "s3-g0v4-search.json").exists()
+    search = json.loads((tmp_path / "s3-g0v4-search.json").read_text())
+    assert search["smoke"] is False and search["layout_names"] == ["university"]
+    assert search["layouts"][0]["goals"]                       # the S3 layout (F-C1)
+    assert any((tmp_path / "cache").glob("*.json"))            # the fit cache (F-I8)
     assert out.data["params"]["tau_u"] == 2.0
 
 
-def test_smoke_g0v4_never_freezes_and_writes_smoke_params(data, tmp_path, monkeypatch) -> None:
-    # Plumbing only: run_g0v4 is stubbed (the real search is covered by the test above).
-    manifest, traj = data
-    seen = {}
+def _official_search(out: Path, tau_u: float = 3.0) -> dict:
+    """What run_g0v4 writes for a PASS of the pre-registered run."""
+    from specdx.sim import g0v4
 
-    def fake_run(config, out, *, replicates, grid, jobs):
-        seen.update(replicates=replicates, grid=grid)
-        result = {"chosen": {"params": dataclasses.asdict(V4Params(tau_u=2.0)),
-                             "metrics": {"hidden_f1": 0.5, "ambiguity_f1": 0.5,
-                                         "shared_fp": 0.0}},
-                  "v3": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_hidden": 0.1},
-                  "criteria": {}, "failed": ["1"]}
+    return {"verdict": "PASS", "smoke": False, "replicates": g0v4.REPLICATES,
+            "grid": g0v4.full_grid(), "layouts": [{"seed": 0}],
+            "seeds": {"selection": list(range(10)), "held_out": list(range(10, 20))},
+            "chosen": {"params": dataclasses.asdict(V4Params(tau_u=tau_u)),
+                       "metrics": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_fp": 0.0}},
+            "v3": {"hidden_f1": 0.5, "ambiguity_f1": 0.5, "shared_hidden": 0.1},
+            "criteria": {}, "failed": []}
+
+
+def _stub_run(monkeypatch, result: dict, code: int, seen: dict | None = None) -> None:
+    def fake_run(config, out, *, replicates, grid, jobs, cache, smoke, names):
+        if seen is not None:
+            seen.update(replicates=replicates, grid=grid, smoke=smoke, cache=cache)
         out.with_suffix(".json").write_text(json.dumps(result))
-        return 1
+        return code
 
     monkeypatch.setattr(p4, "run_g0v4", fake_run)
     monkeypatch.setattr(p4, "render", lambda result: "a\nb\nc\nrendered")
-    monkeypatch.setattr(p4, "freeze_v4", lambda *a, **k: pytest.fail("smoke must not freeze"))
+
+
+def test_an_official_pass_freezes_with_provenance_and_feeds_the_later_stages(
+        data, tmp_path, monkeypatch) -> None:
+    # Test gap (final review): the round trip from the freeze to s3-v4 and s3-placebo.
+    manifest, traj = data
+    frozen = tmp_path / "frozen.json"
+    _stub_run(monkeypatch, _official_search(tmp_path, tau_u=3.0), 0)
+    out = g0v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                     params_file=frozen)
+    assert (out.exit_code, out.verdict) == (0, "PASS") and out.data["frozen"] is True
+    stored = json.loads(frozen.read_text())
+    assert stored["params"]["tau_u"] == 3.0 and stored["provenance"]["search_sha256"]
+    calls: list[dict] = []
+    _stub_diagnoses(monkeypatch, calls)
+    v4 = v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                  params_file=frozen)
+    assert v4.exit_code == 0 and v4.data["params"]["tau_u"] == 3.0
+    assert f"frozen: `{frozen}`" in v4.body
+    monkeypatch.setattr(p4, "placebo", lambda domain, *a, **k: _result(domain, 4, [0, 0]))
+    pl = placebo_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                       seeds=[0, 1], params_file=frozen)
+    assert pl.data["params"]["tau_u"] == 3.0
+    # A second PASS with other parameters never overwrites the frozen file: exit 2.
+    _stub_run(monkeypatch, _official_search(tmp_path, tau_u=1.0), 0)
+    again = g0v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
+                       params_file=frozen)
+    assert again.exit_code == 2 and "overwrite" in again.body
+    assert json.loads(frozen.read_text()) == stored
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_smoke_g0v4_never_freezes_and_writes_smoke_params(data, tmp_path, monkeypatch,
+                                                         code) -> None:
+    # Plumbing only: run_g0v4 is stubbed (the real search is covered above). A smoke PASS
+    # (test gap of the final review) freezes nothing either, even with a PASS JSON.
+    manifest, traj = data
+    seen: dict = {}
+    result = _official_search(tmp_path, tau_u=2.0) | {
+        "verdict": "PASS" if code == 0 else "FAIL", "failed": [] if code == 0 else ["1"]}
+    _stub_run(monkeypatch, result, code, seen)
+    monkeypatch.setattr(p4, "freeze_result", lambda *a, **k: pytest.fail("smoke froze"))
     frozen = tmp_path / "frozen.json"
     out = g0v4_stage(manifest=manifest, trajectories=traj, results=tmp_path, split=SPLIT,
                      smoke=True, replicates=99, grid=None, params_file=frozen)
-    assert out.exit_code == 1 and not frozen.exists()
+    assert out.exit_code == code and not frozen.exists()
     assert seen["replicates"] == 2 and seen["grid"] == dict(p4.SMOKE_GRID)
+    assert seen["smoke"] is True
     assert json.loads((tmp_path / SMOKE_PARAMS).read_text())["params"]["tau_u"] == 2.0
     assert "SMOKE" in out.body and out.data["frozen"] is False
 

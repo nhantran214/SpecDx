@@ -8,6 +8,12 @@ not of a scenario, and one difficulty β_g, as difficulty is grouped by column (
 Columns are spread over items; a behaviour acts at an item with its model's act rate and
 then reads every cell of the item in its scenario. Readings follow the §3.2 model with
 known parameters, except in the two misspecification arms and the within-group arm.
+
+The S3 layout (SimConfig.goals, P4a ruling F-C1) copies a SOPBench domain instead: each task
+is an item of four anchored binary cells, its outcome and the three checks (db_match,
+constraints, process), read together by one run. The checks form one difficulty group each and
+the outcomes one group per user goal, with the given number of tasks per goal; each cell's
+difficulty spreads about its group's by beta_within, as on the real domain.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import numpy as np
 from specdx.infer.cells import SATISFIED, VIOLATED, Cell, Reading
 
 ARMS: tuple[str, ...] = ("base", "a3", "a5", "shared", "homogeneous", "saturated")
+S3_PARTS: tuple[str, ...] = ("outcome", "db_match", "constraints", "process")
 
 
 @dataclass(frozen=True)
@@ -58,10 +65,13 @@ class SimConfig:
     # v4 arms. shared_share (arm "shared" only): the share of non-defect anchored columns that
     # are hard, with one attractor. act_group: cells read by one run in groups of this size
     # share one faithful-or-error draw. alpha_spread: the abilities spread about their mean
-    # by this factor (1.0: as given).
+    # by this factor (1.0: as given). goals: the S3 layout (module docstring), the number of
+    # tasks per user goal; empty: the column layout above (columns, items, constraint_share,
+    # anchored_share and pooled_share are then unused).
     shared_share: float = 0.3
     act_group: int = 1
     alpha_spread: float = 1.0
+    goals: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,27 +153,43 @@ def generate(config: SimConfig) -> SimSpec:
     vocabs: dict[str, tuple[str, ...]] = {}
     fixed: dict[str, str] = {}  # saturated arm: the one value every model reads
     layout: dict[tuple[int, int], list[str]] = {}  # (item, scenario) → cells read there
-    for col in range(config.columns):
-        constraint = rng.random() < config.constraint_share
-        anchored = constraint or rng.random() < config.anchored_share
-        pooled = rng.random() < config.pooled_share
+    s3 = _s3_columns(config.goals)
+    s3_beta = {g: float(rng.normal(0.0, config.beta_sd))
+               for g in dict.fromkeys(group for _, _, group in s3)}
+    items = len(s3) // len(S3_PARTS) if s3 else config.items
+    for col in range(len(s3) if s3 else config.columns):
+        if s3:
+            task, part, group = s3[col]
+            constraint, anchored, pooled = part != "outcome", True, False
+        else:
+            constraint = rng.random() < config.constraint_share
+            anchored = constraint or rng.random() < config.anchored_share
+            pooled = rng.random() < config.pooled_share
         vocab = _vocabulary(rng, config, constraint, anchored)
         form, admitted = _plant(rng, config, vocab, anchored)
         tendency = rng.dirichlet(np.full(len(vocab), config.error_conc))
-        group_beta = float(rng.normal(0.0, config.beta_sd))
+        group_beta = s3_beta[group] if s3 else float(rng.normal(0.0, config.beta_sd))
         hard = None
         if (config.arm in ("shared", "saturated") and anchored and form == "none"
                 and rng.random() < config.shared_share):
             attractor = vocab[1 + int(rng.integers(len(vocab) - 1))]
             # Saturated: λ = 1, and every model reads the attractor.
             hard = (attractor, 1.0 if config.arm == "saturated" else float(rng.uniform(0.5, 1.0)))
-        item = col % config.items
-        group = f"col{col:03d}"
+        if s3:
+            item = task
+        else:
+            item = col % config.items
+            group = f"col{col:03d}"
         for s in ([-1] if pooled else range(config.scenarios)):
-            cid = f"{group}|{'pooled' if pooled else f's{s}'}"
+            if s3:
+                cid = f"t{task:04d}:{part}" + (f"|s{s}" if config.scenarios > 1 else "")
+                location = cid
+            else:
+                cid, location = f"{group}|{'pooled' if pooled else f's{s}'}", group
             cells[cid] = Cell(cid, "constraint" if constraint else "value",
                               vocab[0] if anchored else None,
-                              f"clause:{cid}" if anchored else None, group, group, (f"i{item}",))
+                              f"clause:{cid}" if anchored else None, location, group,
+                              (f"i{item}",))
             truth[cid] = Truth(form, admitted, anchored and admitted != (vocab[0],),
                                len(admitted) == 2, not anchored and len(admitted) == 1,
                                hard is not None)
@@ -194,7 +220,7 @@ def generate(config: SimConfig) -> SimSpec:
             for v in range(config.variants):
                 for k in range(config.seeds):
                     key = f"{m}|s{scenario}|v{v}|k{k}"
-                    for item in range(config.items):
+                    for item in range(items):
                         if rng.random() >= act:
                             continue
                         mine: list[tuple[str, str]] = []
@@ -224,6 +250,21 @@ def generate(config: SimConfig) -> SimSpec:
                                                  clean, v) for cid, value in part]
     readings.sort(key=lambda r: (r.cell, r.run_key))
     return SimSpec(config, cells, readings, truth, models, alphas, betas)
+
+
+def _s3_columns(goals: tuple[int, ...]) -> list[tuple[int, str, str]]:
+    """The S3 layout's columns in order, as (task, part, difficulty group): each task's four
+    parts, the tasks goal by goal; empty without goals."""
+    out: list[tuple[int, str, str]] = []
+    task = 0
+    for g, size in enumerate(goals):
+        if size < 1:
+            raise ValueError("every goal needs at least one task")
+        for _ in range(size):
+            out += [(task, part, f"outcome:g{g:02d}" if part == "outcome" else part)
+                    for part in S3_PARTS]
+            task += 1
+    return out
 
 
 def _read(rng: np.random.Generator, admitted: tuple[str, ...], vocab: tuple[str, ...],

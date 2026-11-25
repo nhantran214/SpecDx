@@ -140,9 +140,13 @@ class Calibration:
         return json.dumps(raw, ensure_ascii=False, indent=2)
 
 
-def _logit(p: float) -> float:
+def logit(p: float) -> float:
+    """log(p / (1 − p)), with p clipped to [0.001, 0.999]."""
     p = min(max(p, 1e-3), 1 - 1e-3)
     return math.log(p / (1 - p))
+
+
+_logit = logit
 
 
 def load_cache(path: Path) -> dict[str, Behaviour]:

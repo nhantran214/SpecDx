@@ -30,7 +30,8 @@ from specdx.sim.g0v4 import (
     REPLICATES,
     TAU_A,
     TAU_H,
-    freeze_v4,
+    freeze_problems,
+    freeze_result,
     params_dict,
     render,
     run_g0v4,
@@ -140,11 +141,15 @@ def g0v4_stage(
     *, manifest: Path, trajectories: Path, results: Path, split: tuple | None = None,
     tasks_root: Path = SOPBENCH_DIR, replicates: int = REPLICATES,
     grid: Mapping[str, Sequence] | None = None, jobs: int = 1, smoke: bool = False,
-    params_file: Path = PARAMS_FILE,
+    params_file: Path = PARAMS_FILE, cache: Path | None = None,
 ) -> StageOutcome:
-    """Calibrate on the development domains, run G0v4 and, on PASS in an official run, freeze
-    the chosen parameters. Smoke: 2 replicates, the first value of each grid axis (and
-    tau_u = 2), and the parameters go to ``smoke-v4-params.json`` in `results`; never frozen."""
+    """Calibrate one S3 layout per development domain (ruling F-C1), run G0v4 and, on PASS in
+    an official run, freeze the chosen parameters (ruling F-I5). Smoke: 2 replicates, the
+    first value of each grid axis (and tau_u = 2), and the parameters go to
+    ``smoke-v4-params.json`` in `results`; never frozen. cache: G0v4's fit cache (ruling
+    F-I8). Exit 0 only on a PASS that is frozen (or already frozen with the same parameters):
+    a PASS of a run that is not the pre-registered one (other replicates, grid or seeds) is
+    not frozen and exits 1; a frozen file that holds other parameters exits 2."""
     dev = tuple((split or load_split())[0])
     if smoke:
         replicates, grid = SMOKE_REPLICATES, dict(SMOKE_GRID)
@@ -154,35 +159,44 @@ def g0v4_stage(
     cds = [_cells(d, *data[d]) for d in dev]
     runs = [r for d in dev for r in data[d][1]]
     try:
-        config = calibrate_s3(cds, runs, dev)
+        layouts = calibrate_s3(cds, runs, dev)
     except CalibrationError as exc:
         return _fail(f"calibration failed: {exc}")
     out = Path(results) / "s3-g0v4-search"
-    code = run_g0v4(config, out, replicates=replicates, grid=dict(grid) if grid else None,
-                    jobs=jobs)
+    code = run_g0v4(layouts, out, replicates=replicates, grid=dict(grid) if grid else None,
+                    jobs=jobs, cache=cache, smoke=smoke, names=dev)
     if code == 2:
         return _fail("G0v4 raised an error; the traceback is in the stage's stderr")
     result = json.loads(out.with_suffix(".json").read_text())
     chosen = V4Params(**result["chosen"]["params"])
     verdict = "PASS" if code == 0 else "FAIL"
+    frozen_ok = False
     if smoke:
         (Path(results) / SMOKE_PARAMS).write_text(
             json.dumps({"params": params_dict(chosen)}, indent=2) + "\n")
         frozen = f"SMOKE: parameters written to {SMOKE_PARAMS}; nothing frozen."
-    elif code == 0:
-        freeze_v4(chosen, Path(params_file))
-        frozen = f"Frozen to `{params_file}`."
-    else:
+    elif code != 0:
         frozen = "Not frozen: the verdict is not PASS."
+    elif problems := freeze_problems(result):
+        code = 1
+        frozen = "Not frozen (ruling F-I5): " + "; ".join(problems) + "."
+    else:
+        frozen_ok, message = freeze_result(out.with_suffix(".json"), Path(params_file))
+        frozen = message[0].upper() + message[1:] + "."
+        if not frozen_ok:
+            code = 2
     metrics, v3 = result["chosen"]["metrics"], result["v3"]
     body = ["## Calibration (development domains)", "",
             f"Development domains: {', '.join(dev)}; held out: "
-            f"{', '.join((split or load_split())[1])}.", ""]
+            f"{', '.join((split or load_split())[1])}. Each development domain is one "
+            "simulated layout (its check groups, one outcome group per user goal, its raters "
+            "and difficulty spreads); replicate r uses layout r mod "
+            f"{len(layouts)}, and every simulated domain is fitted on its own.", ""]
     body += _table(("domain", "tasks", "runs"),
                    [[d, len(data[d][0]), len(data[d][1])] for d in dev])
-    cal = dataclasses.asdict(config)
-    body += ["", "| field | value |", "|---|---|"]
-    body += [f"| {k} | {_fmt_cal(v)} |" for k, v in cal.items()]
+    cal = [dataclasses.asdict(c) for c in layouts]
+    body += ["", "| field | " + " | ".join(dev) + " |", "|---|" + "---|" * len(dev)]
+    body += [f"| {k} | " + " | ".join(_fmt_cal(c[k]) for c in cal) + " |" for k in cal[0]]
     body += ["", "## Selected parameters", "", "| parameter | value |", "|---|---|"]
     body += [f"| {k} | {v} |" for k, v in params_dict(chosen).items()]
     body += ["", TAU_U_NOTE, "", frozen, "", "## v3 beside v4 (selection replicates)", ""]
@@ -195,10 +209,11 @@ def g0v4_stage(
     body += ["", "## G0v4 in full", "", shown.replace("\n## ", "\n### ")]
     data_out = {"verdict": verdict, "dev": list(dev), "config": cal,
                 "params": params_dict(chosen), "criteria": result["criteria"],
-                "failed": result["failed"], "metrics": metrics, "v3": v3,
-                "frozen": bool(code == 0 and not smoke), "smoke": smoke}
-    return StageOutcome(code, verdict, f"G0v4 {verdict}, tau_u={chosen.tau_u}",
-                        "\n".join(body), data_out)
+                "failed": result["failed"], "non_binding": result.get("non_binding", []),
+                "metrics": metrics, "v3": v3, "frozen": frozen_ok, "smoke": smoke}
+    key = f"G0v4 {verdict}, tau_u={chosen.tau_u}" + ("" if smoke or frozen_ok
+                                                      or verdict != "PASS" else ", not frozen")
+    return StageOutcome(code, verdict, key, "\n".join(body), data_out)
 
 
 def _fmt_cal(v: object) -> str:
