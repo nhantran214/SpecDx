@@ -1,0 +1,24 @@
+{
+  "params": {
+    "pi": 0.2,
+    "s_mis": 0.4,
+    "s_amb": 0.3,
+    "s_empty": 0.3,
+    "beta_sd": 1.0,
+    "cell_sd": 1.0,
+    "mu_alpha": 1.0,
+    "sigma_alpha": 1.0,
+    "lambda_a": 1.0,
+    "lambda_b": 3.0,
+    "tau_h": 0.5,
+    "tau_a": 0.3,
+    "tau_w": 0.9,
+    "tau_u": 1.0,
+    "tau_lambda": 0.5
+  },
+  "provenance": {
+    "commit": "8161c692bc2269a91b78abcb62f2f0ca1c8f805e",
+    "search": "results/p3/s3-g0v4-search.json",
+    "search_sha256": "4522611be279bfb43d65b963d58f78e661159ad89665ddd4c7e22adadd174c89"
+  }
+}
