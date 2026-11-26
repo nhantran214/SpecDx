@@ -8,7 +8,9 @@ work/
 # Third-party baseline clones and paper PDFs (reference copies; not redistributed)
 baseline/*/code*/
 baseline/*/*.pdf
-# Related-work survey and run results: kept on disk, not tracked
+# Survey, design notes, manuscript, and run results: kept on disk, not tracked
 related_work/
 results/
 docs/
+paper/
+.gitignore   
